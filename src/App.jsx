@@ -28,7 +28,7 @@ const LOGO = "/cando-logo.png";
 // Production setup: keep this URL in .env / Vercel Environment Variables.
 // Local .env example: VITE_GOOGLE_API_URL=https://script.google.com/a/macros/goday.ca/s/DEPLOYMENT_ID/exec
 const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
-
+console.log("VERCEL ENV URL:", import.meta.env.VITE_GOOGLE_API_URL);
 // LOGIN + ROLE ACCESS
 // Production path: this uses the Employees database to identify the user and role.
 // For full enterprise security later, connect this to Google SSO or Supabase Auth.
