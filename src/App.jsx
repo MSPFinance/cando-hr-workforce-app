@@ -830,6 +830,9 @@ export default function App() {
   const [loginEmail, setLoginEmail] = useState(DEFAULT_LOGIN_EMAIL);
   const [loginPassword, setLoginPassword] = useState("");
   const [authError, setAuthError] = useState("");
+  const [bulkImportPreview, setBulkImportPreview] = useState([]);
+  const [bulkImportErrors, setBulkImportErrors] = useState([]);
+  const [archiveStatus, setArchiveStatus] = useState({ loading: false, message: "Archive engine ready. Run monthly or as needed.", lastResult: null });
   const [passwordResetUser, setPasswordResetUser] = useState(null);
   const [newPasswordValue, setNewPasswordValue] = useState("");
   const [confirmPasswordValue, setConfirmPasswordValue] = useState("");
@@ -1221,6 +1224,20 @@ export default function App() {
     };
   }
 
+  async function runArchiveNow() {
+    if (isAgentOnly || processing.active) return;
+    setArchiveStatus({ loading: true, message: "Running archive engine...", lastResult: null });
+    await runWithProcessing("Archiving records older than 90 days to Google Drive...", async () => {
+      const result = await googleJsonp({ action: "runArchive", activeDays: String(ARCHIVE_AFTER_DAYS) });
+      setArchiveStatus({
+        loading: false,
+        message: result?.success ? "Archive completed successfully." : result?.message || "Archive completed with warnings.",
+        lastResult: result,
+      });
+      if (!result?.success) throw new Error(result?.message || "Archive failed.");
+    }, "Archive completed", "Older records were exported to Google Drive and logged in Archive_Log.");
+  }
+
   function addLob() {
     const value = newLob.trim();
     if (!value) return;
@@ -1545,52 +1562,147 @@ User can now log into the Agent Portal.`
     }, `Time ${approved}`, `The time entry was marked as ${approved} and the audit trail was updated.`);
   }
 
+  function parseCsvLine(line) {
+    const result = [];
+    let current = "";
+    let insideQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      const next = line[i + 1];
+
+      if (char === '"' && next === '"') {
+        current += '"';
+        i++;
+      } else if (char === '"') {
+        insideQuotes = !insideQuotes;
+      } else if (char === "," && !insideQuotes) {
+        result.push(current.trim());
+        current = "";
+      } else {
+        current += char;
+      }
+    }
+
+    result.push(current.trim());
+    return result;
+  }
+
+  function normalizeImportedEmployee(row, index) {
+    const tempPassword = row.Temp_Password || "Cando123!";
+    return {
+      id: row.Employee_ID || cleanId("EMP"),
+      full_name: row.Full_Name || row.full_name || "",
+      email: row.Auth_Email || row.Email || row.email || "",
+      country: row.Country || "Costa Rica",
+      department: row.Department || "Operations",
+      lob: row.LOB || "GoDay",
+      role: row.Role || "Agent",
+      access_level: row.Access_Level || "Employee",
+      supervisor: row.Supervisor || "",
+      manager: row.Manager || "",
+      hire_date: row.Hire_Date || "",
+      birthday: row.Birthday || "",
+      employment_status: row.Employment_Status || "Active",
+      employment_type: row.Employment_Type || "Full-Time",
+      shift_start: row.Shift_Start || "08:00",
+      shift_end: row.Shift_End || "17:00",
+      break_start: row.Break_1_Start || "10:00",
+      break_end: row.Break_1_End || "10:15",
+      lunch_start: row.Lunch_Start || "12:00",
+      lunch_end: row.Lunch_End || "13:00",
+      second_break_start: row.Break_2_Start || "15:00",
+      second_break_end: row.Break_2_End || "15:15",
+      lunch_minutes: Number(row.Lunch_Minutes || 60),
+      break_minutes: Number(row.Break_Minutes || 30),
+      pto_balance: Number(row.PTO_Balance || 0),
+      sick_balance: Number(row.Sick_Balance || 0),
+      vto_balance: Number(row.VTO_Balance || 0),
+      account_status: row.Account_Status || "Active",
+      force_password_reset: String(row.Force_Password_Reset || "Yes").toLowerCase() === "yes",
+      temp_password: tempPassword,
+      notes: row.Notes || "",
+      import_row: index + 2,
+    };
+  }
+
+  function validateImportedEmployees(imported) {
+    const errors = [];
+    const seenEmails = new Set();
+    const existingEmails = new Set(employees.map((e) => normalizeEmail(e.email)));
+
+    imported.forEach((employee) => {
+      if (!employee.full_name) errors.push(`Row ${employee.import_row}: Full_Name is required.`);
+      if (!employee.email) errors.push(`Row ${employee.import_row}: Auth_Email is required.`);
+      if (employee.email && !employee.email.includes("@")) errors.push(`Row ${employee.import_row}: Auth_Email must be a valid email.`);
+      if (employee.email && seenEmails.has(normalizeEmail(employee.email))) errors.push(`Row ${employee.import_row}: duplicate email in upload: ${employee.email}.`);
+      if (employee.email && existingEmails.has(normalizeEmail(employee.email))) errors.push(`Row ${employee.import_row}: email already exists in database: ${employee.email}.`);
+      if (!employee.lob) errors.push(`Row ${employee.import_row}: LOB is required.`);
+      if (!employee.department) errors.push(`Row ${employee.import_row}: Department is required.`);
+      if (!employee.role) errors.push(`Row ${employee.import_row}: Role is required.`);
+      if (!employee.access_level) errors.push(`Row ${employee.import_row}: Access_Level is required.`);
+      if (!employee.temp_password) errors.push(`Row ${employee.import_row}: Temp_Password is required.`);
+      seenEmails.add(normalizeEmail(employee.email));
+    });
+
+    return errors;
+  }
+
   function importEmployees(event) {
     if (isAgentOnly) return;
     const file = event.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = async (e) => {
-      const text = String(e.target?.result || "");
-      const [headerLine, ...rows] = text.split(/\r?\n/).filter(Boolean);
-      const headers = headerLine.split(",").map((h) => h.trim());
+    reader.onload = (e) => {
+      const text = String(e.target?.result || "").replace(/^﻿/, "");
+      const lines = text.split(/\r?\n/).filter((line) => line.trim());
+?
+/).filter((line) => line.trim());
+      const [headerLine, ...rows] = lines;
+      const headers = parseCsvLine(headerLine).map((h) => h.trim());
       const imported = rows.map((row, index) => {
-        const values = row.split(",").map((v) => v.trim());
-        const r = Object.fromEntries(headers.map((h, i) => [h, values[i] || ""]));
-        return {
-          id: r.Employee_ID || `IMP-${Date.now()}-${index}`,
-          full_name: r.Full_Name || r.full_name || "Unnamed Employee",
-          email: r.Email || r.email || "",
-          country: r.Country || "Costa Rica",
-          department: r.Department || "Operations",
-          lob: r.LOB || r.lob || "GoDay",
-          role: r.Role || "Agent",
-          access_level: r.Access_Level || "Employee",
-          supervisor: r.Supervisor || "",
-          manager: r.Manager || "",
-          hire_date: r.Hire_Date || "",
-          birthday: r.Birthday || "",
-          employment_status: r.Employment_Status || "Active",
-          employment_type: r.Employment_Type || "Full-Time",
-          shift_start: r.Scheduled_Shift_Start || "08:00",
-          shift_end: r.Scheduled_Shift_End || "17:00",
-          break_start: r.Break_Start || "10:00",
-          break_end: r.Break_End || "10:15",
-          lunch_start: r.Lunch_Start || "12:00",
-          lunch_end: r.Lunch_End || "13:00",
-          second_break_start: r.Second_Break_Start || "15:00",
-          second_break_end: r.Second_Break_End || "15:15",
-          lunch_minutes: Number(r.Lunch_Minutes || 60),
-          break_minutes: Number(r.Break_Minutes || 30),
-          pto_balance: Number(r.PTO_Balance || 0),
-          sick_balance: Number(r.Sick_Balance || 0),
-          vto_balance: Number(r.VTO_Balance || 0),
-        };
+        const values = parseCsvLine(row);
+        const record = Object.fromEntries(headers.map((h, i) => [h, values[i] || ""]));
+        return normalizeImportedEmployee(record, index);
       });
-      if (supabase && imported.length) await supabase.from("employees").upsert(imported);
-      setEmployees([...imported, ...employees]);
+
+      const errors = validateImportedEmployees(imported);
+      setBulkImportPreview(imported);
+      setBulkImportErrors(errors);
+
+      if (errors.length) {
+        showNotice("Bulk import needs review", `${errors.length} validation issue(s) found. Please review before saving.`);
+      } else {
+        showNotice("Bulk import ready", `${imported.length} employee record(s) are ready to save.`);
+      }
     };
     reader.readAsText(file);
+    event.target.value = "";
+  }
+
+  async function confirmBulkImport() {
+    if (isAgentOnly || processing.active || !bulkImportPreview.length) return;
+    const errors = validateImportedEmployees(bulkImportPreview);
+    setBulkImportErrors(errors);
+    if (errors.length) {
+      showNotice("Cannot import yet", "Please fix the validation issues before saving employees.");
+      return;
+    }
+
+    return runWithProcessing(`Saving ${bulkImportPreview.length} employees to the database...`, async () => {
+      for (const employee of bulkImportPreview) {
+        await googleAddRow("employees", mapEmployeeToSheet(employee));
+      }
+
+      setEmployees([...bulkImportPreview, ...employees]);
+      setBulkImportPreview([]);
+      setBulkImportErrors([]);
+    }, "Bulk import saved", `${bulkImportPreview.length} employee profile(s) were created successfully.`);
+  }
+
+  function clearBulkImport() {
+    setBulkImportPreview([]);
+    setBulkImportErrors([]);
   }
 
   function exportTimeCsv() {
@@ -1704,22 +1816,29 @@ User can now log into the Agent Portal.`
 
   async function login() {
     const employee = employees.find((e) => normalizeEmail(e.email) === normalizeEmail(loginEmail));
-    const expectedPassword = employee?.temp_password || DEFAULT_LOGIN_PASSWORD;
+   if (!employee) {
+  setAuthError(
+    "No active employee profile was found for this email. Please contact HR or your manager."
+  );
+  return;
+}
 
-    if (!employee) {
-      setAuthError("No active employee profile was found for this email. Please contact HR or your manager.");
-      return;
-    }
+const savedPassword =
+  employee.temp_password ||
+  employee.Temp_Password ||
+  employee.password ||
+  employee.Password ||
+  DEFAULT_LOGIN_PASSWORD;
 
-    if (String(employee.account_status || employee.employment_status || "Active").toLowerCase() !== "active") {
-      setAuthError("This account is not active. Please contact HR or your manager.");
-      return;
-    }
-
-    if (String(loginPassword || "") !== String(expectedPassword || "")) {
-      setAuthError("Invalid password. Please try again or request a reset from HR/Admin.");
-      return;
-    }
+if (
+  String(loginPassword || "").trim() !==
+  String(savedPassword || "").trim()
+) {
+  setAuthError(
+    "Invalid password. Please try again or request a reset from HR/Admin."
+  );
+  return;
+}
 
     if (employee.force_password_reset) {
       setPasswordResetUser(employee);
@@ -1807,6 +1926,7 @@ User can now log into the Agent Portal.`
         ["manager", CheckCircle],
         ["payroll", FileCheck],
         ["reporting", BarChart3],
+        ["archive", Database],
         ["rules", Settings],
       ];
 
@@ -1867,7 +1987,7 @@ User can now log into the Agent Portal.`
       </aside>
 
       <main>
-        <div className="developerWatermark">Developed by M.P. · CandoContact HR Workforce System</div>
+        <div className="developerWatermark">Developed by MSP · CandoContact HR Workforce System</div>
         {overrideModal.show && (
           <OverrideModal
             warning={overrideModal.warning}
@@ -2025,6 +2145,28 @@ User can now log into the Agent Portal.`
                 <button className="primary wide" disabled={processing.active} onClick={saveEmployee}>Save employee</button>
               </FormGrid>
             </Card>
+            <Card title="Bulk employee import with schedules">
+              <p className="helperText">Upload the HR CSV template to create multiple users at once. This includes role access, LOB, department, balances, shift start/end, breaks, lunch, temporary password, and forced password reset.</p>
+              <div className="bulkActions">
+                <label className="btn"><Upload size={16} /> Upload HR CSV<input type="file" accept=".csv" onChange={importEmployees} /></label>
+                <button disabled={!bulkImportPreview.length || processing.active || bulkImportErrors.length > 0} className="primary" onClick={confirmBulkImport}>Save Preview to Database</button>
+                <button disabled={!bulkImportPreview.length || processing.active} onClick={clearBulkImport}>Clear Preview</button>
+              </div>
+              {bulkImportErrors.length > 0 && (
+                <div className="errorPanel">
+                  <strong>Validation issues</strong>
+                  {bulkImportErrors.slice(0, 8).map((error, index) => <span key={index}>{error}</span>)}
+                  {bulkImportErrors.length > 8 && <span>+ {bulkImportErrors.length - 8} more issue(s).</span>}
+                </div>
+              )}
+              {bulkImportPreview.length > 0 && (
+                <Table
+                  headers={["Employee", "Email", "LOB", "Department", "Role", "Access", "Shift", "Temp Password"]}
+                  rows={bulkImportPreview.slice(0, 25).map((e) => [e.full_name, e.email, e.lob, e.department, e.role, e.access_level, formatTimeRange(e.shift_start, e.shift_end), e.temp_password])}
+                />
+              )}
+              {bulkImportPreview.length > 25 && <p className="helperText">Showing first 25 of {bulkImportPreview.length} imported employees.</p>}
+            </Card>
           </section>
         )}
 
@@ -2130,6 +2272,46 @@ User can now log into the Agent Portal.`
                 <div className="reportNote">Use this view to compare scheduled expectations against actual logged time by LOB, department, and agent. This helps review breaks, lunch, bathroom time, meetings, training, system issues, OT, and productivity.</div>
               </Card>
             </section>
+          </section>
+        )}
+
+        {!isAgentOnly && tab === "archive" && (
+          <section className="reportingPage">
+            <div className="reportHeader">
+              <div>
+                <h2>Archive Center</h2>
+                <p>Protect live database performance by archiving records older than {ARCHIVE_AFTER_DAYS} days to Google Drive. Active dashboards continue using recent live data.</p>
+              </div>
+              <div className="reportControls">
+                <button className="primary" disabled={processing.active || archiveStatus.loading} onClick={runArchiveNow}>Run Archive Now</button>
+              </div>
+            </div>
+            <section className="grid two">
+              <Card title="Archive Health">
+                <div className="reportMiniGrid">
+                  <Info label="Active Window" value={`${ACTIVE_DATA_DAYS} days`} />
+                  <Info label="Archive After" value={`${ARCHIVE_AFTER_DAYS} days`} />
+                  <Info label="Time Rows Loaded" value={stats.activeTimeRows} />
+                  <Info label="Request Rows Loaded" value={stats.activeRequestRows} />
+                  <Info label="Data Health" value={stats.dataHealth} />
+                  <Info label="Archive Status" value={archiveStatus.loading ? "Running" : "Ready"} />
+                </div>
+                <div className="reportNote">{archiveStatus.message}</div>
+              </Card>
+              <Card title="Google Drive Archive Location">
+                <p className="helperText">Archive files are saved in the Google Drive account that owns the Apps Script deployment. Look for this folder path:</p>
+                <div className="archivePath">My Drive / CandoContact HR Archives / Year / Month</div>
+                <p className="helperText">Example: My Drive / CandoContact HR Archives / 2026 / 05-May / Time_Logs_2026-05.csv</p>
+              </Card>
+            </section>
+            {archiveStatus.lastResult?.files?.length > 0 && (
+              <Card title="Last Archive Files">
+                <Table
+                  headers={["Tab", "Rows", "File", "Drive URL"]}
+                  rows={archiveStatus.lastResult.files.map((file) => [file.tab, file.rowsArchived, file.fileName, file.fileUrl ? <a href={file.fileUrl} target="_blank" rel="noreferrer">Open file</a> : "N/A"])}
+                />
+              </Card>
+            )}
           </section>
         )}
 
@@ -2502,6 +2684,9 @@ td input, td select { min-width: 110px; }
 .rulesPage { margin-top: 18px; }
 .helperText { margin: 0 0 12px; color: var(--muted); line-height: 1.45; max-width: 100%; overflow-wrap: anywhere; }
 .inlineForm { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
+.bulkActions { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+.errorPanel { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; border-radius: 16px; padding: 12px; margin: 12px 0; display: grid; gap: 6px; font-size: 13px; }
+.errorPanel strong { color: #7f1d1d; }
 .chipList { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .chip { display: inline-flex; align-items: center; gap: 8px; background: #ecfdf5; color: #047857; border-radius: 999px; padding: 7px 10px; font-size: 12px; font-weight: 800; }
 .chip button { width: 22px; height: 22px; border-radius: 999px; padding: 0; justify-content: center; color: #047857; }
@@ -2524,6 +2709,7 @@ td input, td select { min-width: 110px; }
 .reportCardHead strong { display: block; font-size: 22px; margin-top: 3px; }
 .reportMiniGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 8px; }
 .reportNote, .productivityHelp { margin-top: 16px; background: #f5fbf8; border: 1px solid var(--border); border-radius: 16px; padding: 14px; color: var(--muted); line-height: 1.5; }
+.archivePath { background: #0d2018; color: #bfe0d2; border-radius: 16px; padding: 14px; font-weight: 800; overflow-wrap: anywhere; margin: 12px 0; }
 .productivityHelp { margin: 0 0 16px; }
 .productivityHelp strong { display: block; color: var(--dark); margin-bottom: 6px; }
 .productivityHelp p { margin: 0; }
