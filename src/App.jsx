@@ -1654,10 +1654,10 @@ User can now log into the Agent Portal.`
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (e) => {
-      const text = String(e.target?.result || "").replace(/^﻿/, "");
-      const lines = text.split(/\r?\n/).filter((line) => line.trim());
-?
-/).filter((line) => line.trim());
+    const text = String(e.target?.result || "").replace(/^\uFEFF/, "");
+const lines = text
+  .split(String.fromCharCode(10))
+  .filter((line) => line.trim());
       const [headerLine, ...rows] = lines;
       const headers = parseCsvLine(headerLine).map((h) => h.trim());
       const imported = rows.map((row, index) => {
