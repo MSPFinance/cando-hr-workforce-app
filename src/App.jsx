@@ -24,11 +24,18 @@ const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPAB
 const today = new Date().toISOString().slice(0, 10);
 const LOGO = "/cando-logo.png";
 
+// PERFORMANCE / GROWTH SETTINGS FOR 150–300 USERS
+// Keep the app live and fast by loading recent operational records only.
+// Historical records should be archived in Google Drive and not loaded into dashboards by default.
+const ACTIVE_DATA_DAYS = 90;
+const DASHBOARD_DEFAULT_DAYS = 60;
+const ARCHIVE_AFTER_DAYS = 90;
+
 // GOOGLE SHEETS LIVE DATABASE API
 // Production setup: keep this URL in .env / Vercel Environment Variables.
 // Local .env example: VITE_GOOGLE_API_URL=https://script.google.com/a/macros/goday.ca/s/DEPLOYMENT_ID/exec
 const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
-console.log("VERCEL ENV URL:", import.meta.env.VITE_GOOGLE_API_URL);
+
 // LOGIN + ROLE ACCESS
 // Production path: this uses the Employees database to identify the user and role.
 // For full enterprise security later, connect this to Google SSO or Supabase Auth.
@@ -359,6 +366,24 @@ function calculateRequestHours(request) {
   return requestDaysInclusive(request.start_date, request.end_date) * 8;
 }
 
+function dateDaysAgo(days) {
+  const date = new Date();
+  date.setDate(date.getDate() - Number(days || 0));
+  return date.toISOString().slice(0, 10);
+}
+
+function isWithinActiveWindow(value, days = ACTIVE_DATA_DAYS) {
+  const dateValue = formatDateOnly(value);
+  if (!dateValue) return true;
+  return dateValue >= dateDaysAgo(days);
+}
+
+function systemHealthLevel(value, warning, danger) {
+  if (value >= danger) return "High Risk";
+  if (value >= warning) return "Monitor";
+  return "Healthy";
+}
+
 function getBalance(employee, type) {
   if (type === "PTO") return Number(employee.pto_balance || 0);
   if (type === "Sick Leave") return Number(employee.sick_balance || 0);
@@ -439,7 +464,12 @@ function googleJsonp(params = {}) {
 async function googleGetDatabase() {
   if (!GOOGLE_API_URL || GOOGLE_API_URL.includes("PASTE_YOUR_WORKING")) return null;
   try {
-    const result = await googleJsonp({ action: "getAll" });
+    const result = await googleJsonp({
+      action: "getAll",
+      activeDays: String(ACTIVE_DATA_DAYS),
+      startDate: dateDaysAgo(ACTIVE_DATA_DAYS),
+      endDate: today,
+    });
     console.log("Google Sheets GET result:", result);
     return result?.success ? result.data : null;
   } catch (error) {
@@ -750,7 +780,7 @@ export default function App() {
   const [adminMode, setAdminMode] = useState(false);
   const [search, setSearch] = useState("");
   const [reportView, setReportView] = useState("LOB");
-  const [filters, setFilters] = useState({ lob: "All", department: "All", employee: "All", category: "All", startDate: "", endDate: "" });
+  const [filters, setFilters] = useState({ lob: "All", department: "All", employee: "All", category: "All", startDate: dateDaysAgo(DASHBOARD_DEFAULT_DAYS), endDate: today });
   const [agentStatus, setAgentStatus] = useState("Working");
   const [newTime, setNewTime] = useState({ category: "Working", category_start: "08:00", category_end: "09:00", notes: "" });
   const [newRequest, setNewRequest] = useState({ type: "PTO", start_date: today, end_date: today, hours: 8, reason: "" });
@@ -838,8 +868,8 @@ export default function App() {
       }
 
       const sheetEmployees = (database.employees || []).map(mapEmployeeFromSheet);
-      const sheetTime = (database.timeLogs || []).map(mapTimeFromSheet);
-      const sheetRequests = (database.requests || []).map(mapRequestFromSheet);
+      const sheetTime = (database.timeLogs || []).map(mapTimeFromSheet).filter((row) => isWithinActiveWindow(row.date));
+      const sheetRequests = (database.requests || []).map(mapRequestFromSheet).filter((row) => isWithinActiveWindow(row.start_date));
       const sheetRules = (database.staffingRules || []).map(mapRuleFromSheet);
       const sheetLobs = (database.lobs || []).map((row) => row.LOB_Name).filter(Boolean);
       const sheetDepartments = (database.departments || []).map((row) => row.Department_Name).filter(Boolean);
@@ -847,6 +877,10 @@ export default function App() {
       if (sheetEmployees.length) setEmployees(sheetEmployees);
       if (sheetTime.length) setTimeEntries(sheetTime);
       if (sheetRequests.length) setRequests(sheetRequests);
+      if (database.approvals?.length) {
+        // Approvals are intentionally loaded by Apps Script only for the active window.
+        // They are not currently rendered as a separate module, but this prepares reporting/export growth.
+      }
       if (sheetRules.length) setRules(sheetRules);
       if (sheetLobs.length) setLobs([...new Set(sheetLobs)]);
       if (sheetDepartments.length) setDepartments([...new Set(sheetDepartments)]);
@@ -921,6 +955,9 @@ export default function App() {
     const total = filteredTime.reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
     const working = filteredTime.filter((t) => t.category === "Working").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
     const overtimeMinutes = filteredTime.filter((t) => t.category === "Overtime").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
+    const activeTimeRows = visibleTime.length;
+    const activeRequestRows = visibleRequests.length;
+    const archiveEligibleTimeRows = visibleTime.filter((t) => !isWithinActiveWindow(t.date, ARCHIVE_AFTER_DAYS)).length;
     return {
       active: visibleEmployees.filter((e) => e.employment_status === "Active").length,
       pendingRequests: visibleRequests.filter((r) => r.status === "Pending").length,
@@ -928,6 +965,10 @@ export default function App() {
       productivity: total ? Math.round((working / total) * 100) : 0,
       overtimeMinutes,
       total,
+      activeTimeRows,
+      activeRequestRows,
+      archiveEligibleTimeRows,
+      dataHealth: systemHealthLevel(activeTimeRows, 15000, 30000),
     };
   }, [filteredTime, visibleEmployees, visibleRequests, visibleTime]);
 
@@ -1826,7 +1867,7 @@ User can now log into the Agent Portal.`
       </aside>
 
       <main>
-        <div className="developerWatermark">Developed by MSP · CandoContact HR Workforce System</div>
+        <div className="developerWatermark">Developed by M.P. · CandoContact HR Workforce System</div>
         {overrideModal.show && (
           <OverrideModal
             warning={overrideModal.warning}
@@ -1949,6 +1990,7 @@ User can now log into the Agent Portal.`
             <Metric icon={Clock} label="Payroll Exceptions" value={stats.payrollExceptions} hint="Pending review" />
             <Metric icon={Clock} label="Overtime" value={formatHours(stats.overtimeMinutes)} hint="Tracked OT" />
             <Metric icon={BarChart3} label="Productivity" value={`${stats.productivity}%`} hint="Working vs tracked" />
+            <Metric icon={Database} label="Data Health" value={stats.dataHealth} hint={`${stats.activeTimeRows} active time rows`} />
           </section>
         )}
 
@@ -2387,7 +2429,7 @@ button:hover, .btn:hover { transform: translateY(-1px); box-shadow: 0 10px 22px 
 .field span { color: var(--muted); font-size: 12px; font-weight: 800; }
 input, select { width: 100%; border: 1px solid #d6e6de; background: white; color: var(--dark); border-radius: 12px; padding: 10px 11px; outline: none; min-height: 42px; }
 input:focus, select:focus { border-color: var(--green); box-shadow: 0 0 0 4px rgba(4,120,87,.10); }
-.metrics { margin-top: 18px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; max-width: 100%; }
+.metrics { margin-top: 18px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; max-width: 100%; }
 .metric { background: white; border: 1px solid var(--border); border-radius: 22px; padding: 18px; display: flex; gap: 14px; align-items: center; box-shadow: 0 8px 22px rgba(0,0,0,.035); min-width: 0; overflow: hidden; }
 .metric > div { width: 46px; height: 46px; border-radius: 15px; background: #ecfdf5; color: var(--green); display: grid; place-items: center; }
 .metric span { color: var(--muted); font-size: 13px; }
