@@ -27,8 +27,7 @@ const LOGO = "/cando-logo.png";
 // GOOGLE SHEETS LIVE DATABASE API
 // Option 1: paste your working Apps Script URL here.
 // Option 2: create .env and use VITE_GOOGLE_API_URL=your_url
-const GOOGLE_API_URL =
-  "https://script.google.com/a/macros/goday.ca/s/AKfycbyPzt5bsGY9z_4stWszBX1MQTSmuNSIJit5KP_NtzWu5RmWUSfSPMmM7a9rKqojsKNy/exec";
+const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
 // TEMP LOGIN SIMULATION FOR MVP.
 // Change CURRENT_USER_ACCESS_LEVEL to "Admin" to preview admin access.
 // Later this will come from Supabase Auth + employee profile.
