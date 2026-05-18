@@ -837,6 +837,13 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [toast, setToast] = useState(null);
+  const [processing, setProcessing] = useState({ active: false, title: "", message: "" });
+  const [overrideModal, setOverrideModal] = useState({
+    show: false,
+    requestId: "",
+    warning: null,
+    reason: "",
+  });
   const actionLockRef = useRef(new Set());
   const toastTimerRef = useRef(null);
 
@@ -883,6 +890,11 @@ export default function App() {
     }
 
     actionLockRef.current.add(key);
+    setProcessing({
+      active: true,
+      title: "Processing request",
+      message: `${title} is being checked for duplicates and saved. Please do not click again.`,
+    });
     showToast("Processing", `${title} is being saved. Please do not click again.`, "info");
 
     try {
@@ -897,6 +909,7 @@ export default function App() {
       return null;
     } finally {
       actionLockRef.current.delete(key);
+      setProcessing({ active: false, title: "", message: "" });
     }
   }
 
@@ -1054,6 +1067,77 @@ export default function App() {
     const out = pto + vto + sick;
     const available = scheduled - out;
     return { scheduled, pto, vto, sick, out, available };
+  }
+
+  function getStaffingWarning(request) {
+    const employee = employees.find((e) => e.id === request.employee_id);
+    if (!employee) return null;
+
+    const matchingRule = rules.find(
+      (rule) =>
+        rule.lob === employee.lob &&
+        rule.department === employee.department &&
+        formatMilitaryTime(rule.shift_start) === formatMilitaryTime(employee.shift_start) &&
+        formatMilitaryTime(rule.shift_end) === formatMilitaryTime(employee.shift_end)
+    );
+
+    if (!matchingRule) return null;
+
+    const currentUsage = getRuleUsage(matchingRule);
+    const projected = { ...currentUsage };
+
+    if (request.type === "PTO") projected.pto += 1;
+    if (request.type === "VTO") projected.vto += 1;
+    if (request.type === "Sick Leave") projected.sick += 1;
+
+    projected.out = projected.pto + projected.vto + projected.sick;
+    projected.available = projected.scheduled - projected.out;
+
+    const issues = [];
+
+    if (projected.pto > safeNumber(matchingRule.max_pto_out, 0)) {
+      issues.push(`PTO limit exceeded: ${projected.pto}/${matchingRule.max_pto_out}`);
+    }
+
+    if (projected.vto > safeNumber(matchingRule.max_vto_out, 0)) {
+      issues.push(`VTO limit exceeded: ${projected.vto}/${matchingRule.max_vto_out}`);
+    }
+
+    if (projected.sick > safeNumber(matchingRule.max_sick_out, 0)) {
+      issues.push(`Sick leave limit exceeded: ${projected.sick}/${matchingRule.max_sick_out}`);
+    }
+
+    if (projected.available < safeNumber(matchingRule.min_staff_required, 0)) {
+      issues.push(`Minimum staffing risk: ${projected.available} available / ${matchingRule.min_staff_required} required`);
+    }
+
+    if (!issues.length) return null;
+
+    return {
+      rule: matchingRule,
+      employee,
+      request,
+      currentUsage,
+      projected,
+      issues,
+    };
+  }
+
+  function closeOverrideModal() {
+    setOverrideModal({ show: false, requestId: "", warning: null, reason: "" });
+  }
+
+  async function confirmOverrideApproval() {
+    const requestId = overrideModal.requestId;
+    const reason = String(overrideModal.reason || "").trim();
+
+    if (!reason) {
+      showToast("Override reason required", "Please enter the management reason before approving over the staffing rule.", "warning");
+      return;
+    }
+
+    closeOverrideModal();
+    await setRequestStatus(requestId, "Approved", { override: true, overrideReason: reason });
   }
 
   function addLob() {
@@ -1294,85 +1378,95 @@ User can now log into the Agent Portal.`
     });
   }
 
-  async function setRequestStatus(id, status) {
+  async function setRequestStatus(id, status, options = {}) {
     if (isAgentOnly) return;
 
     const request = requests.find((r) => r.id === id);
     if (!request) return;
 
-    const key = `request-approval-${id}-${status}`;
-    if (actionLockRef.current.has(key)) {
-      showToast("Duplicate approval prevented", `Request ${status} is already processing.`, "warning");
-      return;
-    }
-    if (request.status === status) {
-      showToast("Duplicate approval prevented", `This request is already marked as ${status}.`, "warning");
-      return;
-    }
-    actionLockRef.current.add(key);
-
-    let updatedEmployees = employees;
-    let updatedEmployee = employees.find((e) => e.id === request.employee_id);
-
-    if (status === "Approved") {
-      const field = balanceField(request.type);
-      if (field) {
-        updatedEmployees = employees.map((e) => {
-          if (e.id !== request.employee_id) return e;
-          const newBalance = Math.max(0, safeNumber(e[field], 0) - safeNumber(request.hours, 0));
-          return { ...e, [field]: newBalance };
+    if (status === "Approved" && !options.override) {
+      const warning = getStaffingWarning(request);
+      if (warning) {
+        setOverrideModal({
+          show: true,
+          requestId: id,
+          warning,
+          reason: "",
         });
-        updatedEmployee = updatedEmployees.find((e) => e.id === request.employee_id);
-
-        if (supabase && updatedEmployee) {
-          await supabase.from("employees").update({ [field]: updatedEmployee[field] }).eq("id", request.employee_id);
-        }
-
-        if (updatedEmployee) {
-          await googleUpdateRow("employees", "Employee_ID", request.employee_id, mapEmployeeToSheet(updatedEmployee));
-        }
+        return;
       }
     }
 
-    const updatedRequest = {
-      ...request,
-      status,
-      manager: currentUser.email,
-      projected_balance:
-        status === "Approved" && updatedEmployee && balanceField(request.type)
-          ? updatedEmployee[balanceField(request.type)]
-          : request.projected_balance,
-    };
+    const key = `request-approval-${id}-${status}`;
+    return runProtectedAction(key, `Request ${status}`, async () => {
+      if (request.status === status) {
+        showToast("Duplicate approval prevented", `This request is already marked as ${status}.`, "warning");
+        return "silent";
+      }
 
-    if (supabase) await supabase.from("time_off_requests").update({ status }).eq("id", id);
+      let updatedEmployees = employees;
+      let updatedEmployee = employees.find((e) => e.id === request.employee_id);
 
-    await googleUpdateRow("requests", "Request_ID", id, mapRequestToSheet(updatedRequest));
+      if (status === "Approved") {
+        const field = balanceField(request.type);
+        if (field) {
+          updatedEmployees = employees.map((e) => {
+            if (e.id !== request.employee_id) return e;
+            const newBalance = Math.max(0, safeNumber(e[field], 0) - safeNumber(request.hours, 0));
+            return { ...e, [field]: newBalance };
+          });
+          updatedEmployee = updatedEmployees.find((e) => e.id === request.employee_id);
 
-    await googleAddRow(
-      "approvals",
-      mapApprovalToSheet({
-        id: cleanId("APPROVAL"),
-        employee_id: request.employee_id,
-        employee_name: request.employee_name,
-        approval_type: "Time Off / Request",
-        related_record_id: request.id,
-        request_type: request.type,
-        decision: status,
-        previous_status: request.status,
-        new_status: status,
-        approved_by: currentUser.email,
-        approved_date: new Date(),
-        hours: request.hours,
-        current_balance: request.current_balance,
-        projected_balance: updatedRequest.projected_balance,
-        notes: `Manager decision recorded for ${request.type}`,
-      })
-    );
+          if (supabase && updatedEmployee) {
+            await supabase.from("employees").update({ [field]: updatedEmployee[field] }).eq("id", request.employee_id);
+          }
 
-    setEmployees(updatedEmployees);
-    setRequests((current) => current.map((r) => (r.id === id ? updatedRequest : r)));
-    actionLockRef.current.delete(key);
-    showToast("Approval saved", `Request marked as ${status}.`, "success");
+          if (updatedEmployee) {
+            await googleUpdateRow("employees", "Employee_ID", request.employee_id, mapEmployeeToSheet(updatedEmployee));
+          }
+        }
+      }
+
+      const updatedRequest = {
+        ...request,
+        status,
+        manager: currentUser.email,
+        projected_balance:
+          status === "Approved" && updatedEmployee && balanceField(request.type)
+            ? updatedEmployee[balanceField(request.type)]
+            : request.projected_balance,
+      };
+
+      if (supabase) await supabase.from("time_off_requests").update({ status }).eq("id", id);
+
+      await googleUpdateRow("requests", "Request_ID", id, mapRequestToSheet(updatedRequest));
+
+      await googleAddRow(
+        "approvals",
+        mapApprovalToSheet({
+          id: cleanId("APPROVAL"),
+          employee_id: request.employee_id,
+          employee_name: request.employee_name,
+          approval_type: options.override ? "Time Off / Request - Management Override" : "Time Off / Request",
+          related_record_id: request.id,
+          request_type: request.type,
+          decision: status,
+          previous_status: request.status,
+          new_status: status,
+          approved_by: currentUser.email,
+          approved_date: new Date(),
+          hours: request.hours,
+          current_balance: request.current_balance,
+          projected_balance: updatedRequest.projected_balance,
+          notes: options.override
+            ? `Management override approved for ${request.type}. Reason: ${options.overrideReason}`
+            : `Manager decision recorded for ${request.type}`,
+        })
+      );
+
+      setEmployees(updatedEmployees);
+      setRequests((current) => current.map((r) => (r.id === id ? updatedRequest : r)));
+    });
   }
 
   async function setTimeStatus(id, approved) {
@@ -1382,48 +1476,43 @@ User can now log into the Agent Portal.`
     if (!timeEntry) return;
 
     const key = `time-approval-${id}-${approved}`;
-    if (actionLockRef.current.has(key)) {
-      showToast("Duplicate approval prevented", `Time status ${approved} is already processing.`, "warning");
-      return;
-    }
-    if (timeEntry.approved === approved) {
-      showToast("Duplicate approval prevented", `This time entry is already marked as ${approved}.`, "warning");
-      return;
-    }
-    actionLockRef.current.add(key);
+    return runProtectedAction(key, `Time entry ${approved}`, async () => {
+      if (timeEntry.approved === approved) {
+        showToast("Duplicate approval prevented", `This time entry is already marked as ${approved}.`, "warning");
+        return "silent";
+      }
 
-    const updatedTimeEntry = {
-      ...timeEntry,
-      approved,
-      approved_by: currentUser.email,
-    };
-
-    if (supabase) await supabase.from("time_entries").update({ approved }).eq("id", id);
-
-    await googleUpdateRow("timeLogs", "Log_ID", id, mapTimeToSheet(updatedTimeEntry));
-
-    await googleAddRow(
-      "approvals",
-      mapApprovalToSheet({
-        id: cleanId("APPROVAL"),
-        employee_id: timeEntry.employee_id,
-        employee_name: timeEntry.employee_name,
-        approval_type: "Time Log / Overtime / Disposition",
-        related_record_id: timeEntry.id,
-        request_type: timeEntry.category,
-        decision: approved,
-        previous_status: timeEntry.approved,
-        new_status: approved,
+      const updatedTimeEntry = {
+        ...timeEntry,
+        approved,
         approved_by: currentUser.email,
-        approved_date: new Date(),
-        hours: (minutesBetween(timeEntry.category_start, timeEntry.category_end) / 60).toFixed(2),
-        notes: `Manager decision recorded for ${timeEntry.category}`,
-      })
-    );
+      };
 
-    setTimeEntries((current) => current.map((t) => (t.id === id ? updatedTimeEntry : t)));
-    actionLockRef.current.delete(key);
-    showToast("Approval saved", `Time entry marked as ${approved}.`, "success");
+      if (supabase) await supabase.from("time_entries").update({ approved }).eq("id", id);
+
+      await googleUpdateRow("timeLogs", "Log_ID", id, mapTimeToSheet(updatedTimeEntry));
+
+      await googleAddRow(
+        "approvals",
+        mapApprovalToSheet({
+          id: cleanId("APPROVAL"),
+          employee_id: timeEntry.employee_id,
+          employee_name: timeEntry.employee_name,
+          approval_type: "Time Log / Overtime / Disposition",
+          related_record_id: timeEntry.id,
+          request_type: timeEntry.category,
+          decision: approved,
+          previous_status: timeEntry.approved,
+          new_status: approved,
+          approved_by: currentUser.email,
+          approved_date: new Date(),
+          hours: (minutesBetween(timeEntry.category_start, timeEntry.category_end) / 60).toFixed(2),
+          notes: `Manager decision recorded for ${timeEntry.category}`,
+        })
+      );
+
+      setTimeEntries((current) => current.map((t) => (t.id === id ? updatedTimeEntry : t)));
+    });
   }
 
   function importEmployees(event) {
@@ -1566,6 +1655,16 @@ User can now log into the Agent Portal.`
   return (
     <div className="app">
       <style>{styles}</style>
+      {processing.active && <ProcessingOverlay title={processing.title} message={processing.message} />}
+      {overrideModal.show && (
+        <OverrideModal
+          modal={overrideModal}
+          setReason={(reason) => setOverrideModal((current) => ({ ...current, reason }))}
+          onCancel={closeOverrideModal}
+          onConfirm={confirmOverrideApproval}
+        />
+      )}
+      {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
 
       <aside className="sidebar">
         <div className="logoWrap">
@@ -1958,6 +2057,73 @@ function DeveloperMark({ sidebar = false }) {
   );
 }
 
+function ProcessingOverlay({ title, message }) {
+  return (
+    <div className="processingOverlay">
+      <div className="processingBox">
+        <span className="spinner" />
+        <strong>{title || "Processing"}</strong>
+        <p>{message || "Please wait while the system checks for duplicates and updates the database."}</p>
+      </div>
+    </div>
+  );
+}
+
+function OverrideModal({ modal, setReason, onCancel, onConfirm }) {
+  const warning = modal.warning;
+  const request = warning?.request;
+  const employee = warning?.employee;
+  const projected = warning?.projected;
+  const rule = warning?.rule;
+
+  return (
+    <div className="modalOverlay">
+      <div className="overrideModal">
+        <header>
+          <div>
+            <span>Management override required</span>
+            <h2>Staffing rule exceeded</h2>
+          </div>
+          <button type="button" onClick={onCancel}>×</button>
+        </header>
+
+        <p className="helperText">
+          This approval may exceed the configured staffing coverage rules. A management override reason is required before approving.
+        </p>
+
+        <div className="overrideGrid">
+          <Info label="Employee" value={employee?.full_name || request?.employee_name || "N/A"} />
+          <Info label="Request" value={`${request?.type || ""} · ${request?.hours || 0}h`} />
+          <Info label="LOB" value={employee?.lob || rule?.lob || "N/A"} />
+          <Info label="Department" value={employee?.department || rule?.department || "N/A"} />
+          <Info label="Projected Out" value={projected ? `${projected.out}` : "N/A"} />
+          <Info label="Available Staff" value={projected ? `${projected.available}` : "N/A"} />
+        </div>
+
+        <div className="warningList">
+          {(warning?.issues || []).map((issue) => (
+            <div key={issue}>⚠ {issue}</div>
+          ))}
+        </div>
+
+        <label className="overrideReason">
+          <span>Override reason / management notes</span>
+          <textarea
+            value={modal.reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="Example: Approved due to business exception, additional coverage arranged, or senior management authorization."
+          />
+        </label>
+
+        <footer>
+          <button type="button" onClick={onCancel}>Cancel</button>
+          <button type="button" className="primary" onClick={onConfirm}>Approve with Override</button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
 function Toast({ toast, onClose }) {
   return (
     <div className={`toast ${toast.type || "success"}`}>
@@ -2151,6 +2317,23 @@ td input, td select { min-width: 110px; }
 .productivityHelp { margin: 0 0 16px; }
 .productivityHelp strong { display: block; color: var(--dark); margin-bottom: 6px; }
 .productivityHelp p { margin: 0; }
+
+.processingOverlay, .modalOverlay { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; padding: 20px; background: rgba(6, 46, 35, .42); backdrop-filter: blur(3px); }
+.processingBox { width: min(440px, 100%); background: white; border: 1px solid var(--border); border-radius: 24px; padding: 26px; text-align: center; box-shadow: 0 28px 80px rgba(0,0,0,.22); }
+.processingBox strong { display: block; margin-top: 14px; font-size: 20px; color: var(--dark); }
+.processingBox p { margin: 8px 0 0; color: var(--muted); line-height: 1.45; }
+.spinner { width: 44px; height: 44px; border: 4px solid #d9f3e7; border-top-color: var(--green); border-radius: 999px; display: inline-block; animation: spin .8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.overrideModal { width: min(720px, 100%); max-height: calc(100vh - 40px); overflow: auto; background: white; border: 1px solid var(--border); border-radius: 26px; padding: 22px; box-shadow: 0 28px 80px rgba(0,0,0,.24); }
+.overrideModal header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.overrideModal header span { color: #b91c1c; font-size: 12px; font-weight: 900; text-transform: uppercase; letter-spacing: .08em; }
+.overrideModal header h2 { margin: 4px 0 0; font-size: 28px; }
+.overrideModal header button { width: 38px; height: 38px; padding: 0; justify-content: center; font-size: 24px; }
+.overrideGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
+.warningList { display: grid; gap: 8px; background: #fff7ed; border: 1px solid #fed7aa; color: #9a3412; border-radius: 16px; padding: 12px; font-weight: 800; margin: 12px 0; }
+.overrideReason { display: grid; gap: 8px; color: var(--muted); font-weight: 900; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.overrideReason textarea { width: 100%; min-height: 110px; border: 1px solid #d6e6de; border-radius: 14px; padding: 12px; font: inherit; resize: vertical; color: var(--dark); text-transform: none; letter-spacing: normal; font-weight: 500; }
+.overrideModal footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
 
 .developerMark { color: #7b8b84; font-size: 11px; text-align: center; margin: 18px 0 0; letter-spacing: .02em; }
 .sidebarMark { color: rgba(255,255,255,.62); border-top: 1px solid rgba(255,255,255,.12); padding-top: 14px; margin-top: 0; }
