@@ -408,33 +408,57 @@ function googleJsonp(params = {}) {
       return;
     }
 
-    const callbackName = `candoHrCallback_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
-    const script = document.createElement("script");
+    const callbackName =
+      "candoHrCallback_" +
+      Date.now() +
+      "_" +
+      Math.floor(Math.random() * 100000);
 
-    const cleanup = () => {
-      window.clearTimeout(timeout);
+    window[callbackName] = (data) => {
+      clearTimeout(timeout);
+
       delete window[callbackName];
+
       if (script.parentNode) {
         script.parentNode.removeChild(script);
       }
+
+      resolve(data);
     };
 
-    const timeout = window.setTimeout(() => {
-      cleanup();
+    const script = document.createElement("script");
+
+    const separator = GOOGLE_API_URL.includes("?") ? "&" : "?";
+
+    const query = new URLSearchParams({
+      ...params,
+      callback: callbackName,
+    }).toString();
+
+    const timeout = setTimeout(() => {
+      delete window[callbackName];
+
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+
       reject(new Error("Google Sheets request timed out."));
     }, 30000);
 
-    window[callbackName] = (payload) => {
-      cleanup();
-      resolve(payload);
-    };
-
     script.onerror = () => {
-      cleanup();
+      clearTimeout(timeout);
+
+      delete window[callbackName];
+
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+
       reject(new Error("Google Sheets JSONP request failed."));
     };
 
-    script.src = buildGoogleUrl({ ...params, callback: callbackName });
+    script.src = `${GOOGLE_API_URL}${separator}${query}`;
+
     document.body.appendChild(script);
   });
 }
