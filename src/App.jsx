@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -274,15 +274,37 @@ const requestsSeed = [
   },
 ];
 
+function safeNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function timeToMinutes(value) {
+  const formatted = formatMilitaryTime(value);
+  if (!formatted || typeof formatted !== "string") return null;
+  const match = formatted.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
+  return hours * 60 + minutes;
+}
+
 function minutesBetween(start, end) {
-  if (!start || !end) return 0;
-  const [sh, sm] = start.split(":").map(Number);
-  const [eh, em] = end.split(":").map(Number);
-  return Math.max(0, eh * 60 + em - (sh * 60 + sm));
+  const startMinutes = timeToMinutes(start);
+  const endMinutes = timeToMinutes(end);
+  if (startMinutes === null || endMinutes === null) return 0;
+  const diff = endMinutes - startMinutes;
+  return Number.isFinite(diff) ? Math.max(0, diff) : 0;
+}
+
+function formatMinutes(minutes) {
+  return `${safeNumber(minutes, 0)} min`;
 }
 
 function formatHours(minutes) {
-  const hours = Number(minutes || 0) / 60;
+  const value = safeNumber(minutes, 0);
+  const hours = value / 60;
   return `${hours.toFixed(hours % 1 === 0 ? 0 : 2)}h`;
 }
 
@@ -350,7 +372,7 @@ function requestDaysInclusive(startDate, endDate) {
 
 function calculateRequestHours(request) {
   const sameDay = request.start_date === request.end_date;
-  const manualHours = Number(request.hours || 0);
+  const manualHours = safeNumber(request.hours, 0);
 
   // Same-day requests may be partial-hour requests, so use the field the agent entered.
   if (sameDay) return manualHours;
@@ -360,9 +382,9 @@ function calculateRequestHours(request) {
 }
 
 function getBalance(employee, type) {
-  if (type === "PTO") return Number(employee.pto_balance || 0);
-  if (type === "Sick Leave") return Number(employee.sick_balance || 0);
-  if (type === "VTO") return Number(employee.vto_balance || 0);
+  if (type === "PTO") return safeNumber(employee.pto_balance, 0);
+  if (type === "Sick Leave") return safeNumber(employee.sick_balance, 0);
+  if (type === "VTO") return safeNumber(employee.vto_balance, 0);
   return null;
 }
 
@@ -583,11 +605,11 @@ function mapEmployeeFromSheet(row) {
     lunch_end: row.Lunch_End || "13:00",
     second_break_start: row.Break_2_Start || "15:00",
     second_break_end: row.Break_2_End || "15:15",
-    break_minutes: Number(row.Break_Minutes || 30),
-    lunch_minutes: Number(row.Lunch_Minutes || 60),
-    pto_balance: Number(row.PTO_Balance || 0),
-    sick_balance: Number(row.Sick_Balance || 0),
-    vto_balance: Number(row.VTO_Balance || 0),
+    break_minutes: safeNumber(row.Break_Minutes, 30),
+    lunch_minutes: safeNumber(row.Lunch_Minutes, 60),
+    pto_balance: safeNumber(row.PTO_Balance, 0),
+    sick_balance: safeNumber(row.Sick_Balance, 0),
+    vto_balance: safeNumber(row.VTO_Balance, 0),
     notes: row.Notes || "",
     temp_password: row.Temp_Password || row.Auth_Password || DEFAULT_LOGIN_PASSWORD,
   };
@@ -673,13 +695,13 @@ function mapRequestFromSheet(row) {
     type: row.Request_Type || "PTO",
     start_date: row.Start_Date || today,
     end_date: row.End_Date || today,
-    hours: Number(row.Hours_Requested || 0),
+    hours: safeNumber(row.Hours_Requested, 0),
     status: row.Status || "Pending",
     manager: row.Manager_Approval || "",
     current_balance: row.Current_Balance || "",
     projected_balance: row.Projected_Balance || "",
     reason: row.Reason || "",
-    requested_days: Number(row.Hours_Requested || 0) / 8,
+    requested_days: safeNumber(row.Hours_Requested, 0) / 8,
   };
 }
 
@@ -708,10 +730,10 @@ function mapRuleFromSheet(row) {
     department: row.Department || "Operations",
     shift_start: row.Shift_Start || "08:00",
     shift_end: row.Shift_End || "17:00",
-    max_pto_out: Number(row.Max_PTO_Out || 0),
-    max_vto_out: Number(row.Max_VTO_Out || 0),
-    max_sick_out: Number(row.Max_Sick_Out || 0),
-    min_staff_required: Number(row.Minimum_Staff_Required || 0),
+    max_pto_out: safeNumber(row.Max_PTO_Out, 0),
+    max_vto_out: safeNumber(row.Max_VTO_Out, 0),
+    max_sick_out: safeNumber(row.Max_Sick_Out, 0),
+    min_staff_required: safeNumber(row.Minimum_Staff_Required, 0),
     notes: row.Notes || "",
   };
 }
@@ -814,6 +836,10 @@ export default function App() {
   const [loginEmail, setLoginEmail] = useState(DEFAULT_LOGIN_EMAIL);
   const [loginPassword, setLoginPassword] = useState("");
   const [authError, setAuthError] = useState("");
+  const [toast, setToast] = useState(null);
+  const actionLockRef = useRef(new Set());
+  const toastTimerRef = useRef(null);
+
 
   useEffect(() => {
     async function loadGoogleDatabase() {
@@ -843,6 +869,36 @@ export default function App() {
 
     loadGoogleDatabase();
   }, []);
+
+  function showToast(title, message = "", type = "success") {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ title, message, type });
+    toastTimerRef.current = setTimeout(() => setToast(null), 4200);
+  }
+
+  async function runProtectedAction(key, title, handler) {
+    if (actionLockRef.current.has(key)) {
+      showToast("Duplicate click prevented", `${title} is already processing. Please wait a moment.`, "warning");
+      return null;
+    }
+
+    actionLockRef.current.add(key);
+    showToast("Processing", `${title} is being saved. Please do not click again.`, "info");
+
+    try {
+      const result = await handler();
+      if (result !== "silent") {
+        showToast("Saved successfully", `${title} was completed.`, "success");
+      }
+      return result;
+    } catch (error) {
+      console.error(error);
+      showToast("Action failed", error?.message || "Please review the console or try again.", "danger");
+      return null;
+    } finally {
+      actionLockRef.current.delete(key);
+    }
+  }
 
   const currentUser = employees.find((e) => normalizeEmail(e.email) === normalizeEmail(sessionUserEmail)) || employees.find((e) => normalizeEmail(e.email) === normalizeEmail(DEFAULT_LOGIN_EMAIL)) || employees[0];
   const canAccessAdmin = hasAdminAccess(currentUser);
@@ -950,7 +1006,7 @@ export default function App() {
       const otMinutes = groupTime.filter((t) => t.category === "Overtime").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
       const pendingRequests = groupRequests.filter((r) => r.status === "Pending").length;
       const approvedRequests = groupRequests.filter((r) => r.status === "Approved").length;
-      const scheduledBreakLunch = groupEmployees.reduce((sum, e) => sum + Number(e.break_minutes || 0) + Number(e.lunch_minutes || 0), 0);
+      const scheduledBreakLunch = groupEmployees.reduce((sum, e) => sum + safeNumber(e.break_minutes, 0) + safeNumber(e.lunch_minutes, 0), 0);
       const adherenceRisk = breakMinutes > scheduledBreakLunch || pendingRequests > 0;
 
       groups.push({
@@ -978,7 +1034,7 @@ export default function App() {
       const workingMinutes = empTime.filter((t) => t.category === "Working").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
       const breakMinutes = empTime.filter((t) => ["Break", "Lunch", "Bathroom"].includes(t.category)).reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
       const otMinutes = empTime.filter((t) => t.category === "Overtime").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
-      const scheduledBreakLunch = Number(e.break_minutes || 0) + Number(e.lunch_minutes || 0);
+      const scheduledBreakLunch = safeNumber(e.break_minutes, 0) + safeNumber(e.lunch_minutes, 0);
       const lateMinutes = empTime.reduce((sum, t) => sum + Math.max(0, minutesBetween(t.scheduled_start, t.clock_in)), 0);
       const productivity = totalMinutes ? Math.round((workingMinutes / totalMinutes) * 100) : 0;
       return { ...e, totalMinutes, workingMinutes, breakMinutes, otMinutes, scheduledBreakLunch, lateMinutes, productivity, variance: breakMinutes - scheduledBreakLunch };
@@ -1076,10 +1132,10 @@ User can now log into the Agent Portal.`
     const item = {
       ...newRule,
       id: `RULE-${Date.now().toString().slice(-6)}`,
-      max_pto_out: Number(newRule.max_pto_out || 0),
-      max_vto_out: Number(newRule.max_vto_out || 0),
-      max_sick_out: Number(newRule.max_sick_out || 0),
-      min_staff_required: Number(newRule.min_staff_required || 0),
+      max_pto_out: safeNumber(newRule.max_pto_out, 0),
+      max_vto_out: safeNumber(newRule.max_vto_out, 0),
+      max_sick_out: safeNumber(newRule.max_sick_out, 0),
+      min_staff_required: safeNumber(newRule.min_staff_required, 0),
     };
     setRules([item, ...rules]);
     googleAddRow("staffingRules", mapRuleToSheet(item));
@@ -1109,79 +1165,133 @@ User can now log into the Agent Portal.`
   }
 
   async function agentAction(action, status = agentStatus) {
-    const now = new Date();
-    const time = now.toTimeString().slice(0, 5);
-    const activity = {
-      id: `ACT-${Date.now().toString().slice(-6)}`,
-      employee_id: selectedEmployee.id,
-      employee_name: selectedEmployee.full_name,
-      date: today,
-      action,
-      time,
-      status,
-      lob: selectedEmployee.lob,
-      department: selectedEmployee.department,
-    };
-    const timeEntry = {
-      id: `TIME-${Date.now().toString().slice(-6)}`,
-      employee_id: selectedEmployee.id,
-      employee_name: selectedEmployee.full_name,
-      date: today,
-      scheduled_start: selectedEmployee.shift_start,
-      scheduled_end: selectedEmployee.shift_end,
-      clock_in: action === "Shift Started" ? time : selectedEmployee.shift_start,
-      clock_out: action === "Shift Ended" ? time : selectedEmployee.shift_end,
-      category: status,
-      category_start: time,
-      category_end: time,
-      approved: status === "Overtime" || action.includes("Shift") ? "Pending" : "Auto Logged",
-      lob: selectedEmployee.lob,
-      department: selectedEmployee.department,
-      notes: action,
-    };
-    if (supabase) await supabase.from("time_entries").insert(timeEntry);
-    await googleAddRow("timeLogs", mapTimeToSheet(timeEntry));
-    setActivityLog([activity, ...activityLog]);
-    setTimeEntries([timeEntry, ...timeEntries]);
+    const key = `agent-action-${selectedEmployee.id}-${action}-${status}`;
+    return runProtectedAction(key, action, async () => {
+      const now = new Date();
+      const time = now.toTimeString().slice(0, 5);
+
+      const duplicate = timeEntries.some(
+        (entry) =>
+          entry.employee_id === selectedEmployee.id &&
+          entry.date === today &&
+          entry.category === status &&
+          entry.category_start === time &&
+          entry.notes === action
+      );
+
+      if (duplicate) {
+        showToast("Duplicate status log prevented", "This same status/action was already logged for this minute.", "warning");
+        return "silent";
+      }
+
+      const activity = {
+        id: `ACT-${Date.now().toString().slice(-6)}`,
+        employee_id: selectedEmployee.id,
+        employee_name: selectedEmployee.full_name,
+        date: today,
+        action,
+        time,
+        status,
+        lob: selectedEmployee.lob,
+        department: selectedEmployee.department,
+      };
+      const timeEntry = {
+        id: `TIME-${Date.now().toString().slice(-6)}`,
+        employee_id: selectedEmployee.id,
+        employee_name: selectedEmployee.full_name,
+        date: today,
+        scheduled_start: selectedEmployee.shift_start,
+        scheduled_end: selectedEmployee.shift_end,
+        clock_in: action === "Shift Started" ? time : selectedEmployee.shift_start,
+        clock_out: action === "Shift Ended" ? time : selectedEmployee.shift_end,
+        category: status,
+        category_start: time,
+        category_end: time,
+        approved: status === "Overtime" || action.includes("Shift") ? "Pending" : "Auto Logged",
+        lob: selectedEmployee.lob,
+        department: selectedEmployee.department,
+        notes: action,
+      };
+      if (supabase) await supabase.from("time_entries").insert(timeEntry);
+      await googleAddRow("timeLogs", mapTimeToSheet(timeEntry));
+      setActivityLog((current) => [activity, ...current]);
+      setTimeEntries((current) => [timeEntry, ...current]);
+    });
   }
 
   async function saveTime() {
     if (isAgentOnly) return;
-    const item = {
-      id: `TIME-${Date.now().toString().slice(-6)}`,
-      employee_id: selectedEmployee.id,
-      employee_name: selectedEmployee.full_name,
-      date: today,
-      scheduled_start: selectedEmployee.shift_start,
-      scheduled_end: selectedEmployee.shift_end,
-      clock_in: selectedEmployee.shift_start,
-      clock_out: selectedEmployee.shift_end,
-      approved: "Pending",
-      lob: selectedEmployee.lob,
-      department: selectedEmployee.department,
-      ...newTime,
-    };
-    if (supabase) await supabase.from("time_entries").insert(item);
-    await googleAddRow("timeLogs", mapTimeToSheet(item));
-    setTimeEntries([item, ...timeEntries]);
+    const key = `manual-time-${selectedEmployee.id}-${newTime.category}-${newTime.category_start}-${newTime.category_end}`;
+    return runProtectedAction(key, "Manual time entry", async () => {
+      const duplicate = timeEntries.some(
+        (entry) =>
+          entry.employee_id === selectedEmployee.id &&
+          entry.date === today &&
+          entry.category === newTime.category &&
+          entry.category_start === newTime.category_start &&
+          entry.category_end === newTime.category_end &&
+          entry.notes === newTime.notes
+      );
+
+      if (duplicate) {
+        showToast("Duplicate time entry prevented", "This exact time entry already exists and was not added again.", "warning");
+        return "silent";
+      }
+
+      const item = {
+        id: `TIME-${Date.now().toString().slice(-6)}`,
+        employee_id: selectedEmployee.id,
+        employee_name: selectedEmployee.full_name,
+        date: today,
+        scheduled_start: selectedEmployee.shift_start,
+        scheduled_end: selectedEmployee.shift_end,
+        clock_in: selectedEmployee.shift_start,
+        clock_out: selectedEmployee.shift_end,
+        approved: "Pending",
+        lob: selectedEmployee.lob,
+        department: selectedEmployee.department,
+        ...newTime,
+      };
+      if (supabase) await supabase.from("time_entries").insert(item);
+      await googleAddRow("timeLogs", mapTimeToSheet(item));
+      setTimeEntries((current) => [item, ...current]);
+    });
   }
 
   async function saveRequest() {
-    const item = {
-      id: `REQ-${Date.now().toString().slice(-6)}`,
-      employee_id: selectedEmployee.id,
-      employee_name: selectedEmployee.full_name,
-      manager: selectedEmployee.supervisor || selectedEmployee.manager,
-      status: "Pending",
-      ...newRequest,
-      hours: requestPreview.requestedHours,
-      requested_days: requestPreview.requestedDays,
-      current_balance: requestPreview.currentBalance,
-      projected_balance: requestPreview.projectedBalance,
-    };
-    if (supabase) await supabase.from("time_off_requests").insert(item);
-    await googleAddRow("requests", mapRequestToSheet(item));
-    setRequests([item, ...requests]);
+    const key = `request-${selectedEmployee.id}-${newRequest.type}-${newRequest.start_date}-${newRequest.end_date}-${newRequest.hours}-${newRequest.reason}`;
+    return runProtectedAction(key, "Request submission", async () => {
+      const duplicate = requests.some(
+        (request) =>
+          request.employee_id === selectedEmployee.id &&
+          request.type === newRequest.type &&
+          request.start_date === newRequest.start_date &&
+          request.end_date === newRequest.end_date &&
+          request.status === "Pending" &&
+          String(request.reason || "").trim() === String(newRequest.reason || "").trim()
+      );
+
+      if (duplicate) {
+        showToast("Duplicate request prevented", "A matching pending request already exists and was not submitted again.", "warning");
+        return "silent";
+      }
+
+      const item = {
+        id: `REQ-${Date.now().toString().slice(-6)}`,
+        employee_id: selectedEmployee.id,
+        employee_name: selectedEmployee.full_name,
+        manager: selectedEmployee.supervisor || selectedEmployee.manager,
+        status: "Pending",
+        ...newRequest,
+        hours: requestPreview.requestedHours,
+        requested_days: requestPreview.requestedDays,
+        current_balance: requestPreview.currentBalance,
+        projected_balance: requestPreview.projectedBalance,
+      };
+      if (supabase) await supabase.from("time_off_requests").insert(item);
+      await googleAddRow("requests", mapRequestToSheet(item));
+      setRequests((current) => [item, ...current]);
+    });
   }
 
   async function setRequestStatus(id, status) {
@@ -1189,6 +1299,17 @@ User can now log into the Agent Portal.`
 
     const request = requests.find((r) => r.id === id);
     if (!request) return;
+
+    const key = `request-approval-${id}-${status}`;
+    if (actionLockRef.current.has(key)) {
+      showToast("Duplicate approval prevented", `Request ${status} is already processing.`, "warning");
+      return;
+    }
+    if (request.status === status) {
+      showToast("Duplicate approval prevented", `This request is already marked as ${status}.`, "warning");
+      return;
+    }
+    actionLockRef.current.add(key);
 
     let updatedEmployees = employees;
     let updatedEmployee = employees.find((e) => e.id === request.employee_id);
@@ -1198,7 +1319,7 @@ User can now log into the Agent Portal.`
       if (field) {
         updatedEmployees = employees.map((e) => {
           if (e.id !== request.employee_id) return e;
-          const newBalance = Math.max(0, Number(e[field] || 0) - Number(request.hours || 0));
+          const newBalance = Math.max(0, safeNumber(e[field], 0) - safeNumber(request.hours, 0));
           return { ...e, [field]: newBalance };
         });
         updatedEmployee = updatedEmployees.find((e) => e.id === request.employee_id);
@@ -1249,7 +1370,9 @@ User can now log into the Agent Portal.`
     );
 
     setEmployees(updatedEmployees);
-    setRequests(requests.map((r) => (r.id === id ? updatedRequest : r)));
+    setRequests((current) => current.map((r) => (r.id === id ? updatedRequest : r)));
+    actionLockRef.current.delete(key);
+    showToast("Approval saved", `Request marked as ${status}.`, "success");
   }
 
   async function setTimeStatus(id, approved) {
@@ -1257,6 +1380,17 @@ User can now log into the Agent Portal.`
 
     const timeEntry = timeEntries.find((t) => t.id === id);
     if (!timeEntry) return;
+
+    const key = `time-approval-${id}-${approved}`;
+    if (actionLockRef.current.has(key)) {
+      showToast("Duplicate approval prevented", `Time status ${approved} is already processing.`, "warning");
+      return;
+    }
+    if (timeEntry.approved === approved) {
+      showToast("Duplicate approval prevented", `This time entry is already marked as ${approved}.`, "warning");
+      return;
+    }
+    actionLockRef.current.add(key);
 
     const updatedTimeEntry = {
       ...timeEntry,
@@ -1287,7 +1421,9 @@ User can now log into the Agent Portal.`
       })
     );
 
-    setTimeEntries(timeEntries.map((t) => (t.id === id ? updatedTimeEntry : t)));
+    setTimeEntries((current) => current.map((t) => (t.id === id ? updatedTimeEntry : t)));
+    actionLockRef.current.delete(key);
+    showToast("Approval saved", `Time entry marked as ${approved}.`, "success");
   }
 
   function importEmployees(event) {
@@ -1325,11 +1461,11 @@ User can now log into the Agent Portal.`
           lunch_end: r.Lunch_End || "13:00",
           second_break_start: r.Second_Break_Start || "15:00",
           second_break_end: r.Second_Break_End || "15:15",
-          lunch_minutes: Number(r.Lunch_Minutes || 60),
-          break_minutes: Number(r.Break_Minutes || 30),
-          pto_balance: Number(r.PTO_Balance || 0),
-          sick_balance: Number(r.Sick_Balance || 0),
-          vto_balance: Number(r.VTO_Balance || 0),
+          lunch_minutes: safeNumber(r.Lunch_Minutes, 60),
+          break_minutes: safeNumber(r.Break_Minutes, 30),
+          pto_balance: safeNumber(r.PTO_Balance, 0),
+          sick_balance: safeNumber(r.Sick_Balance, 0),
+          vto_balance: safeNumber(r.VTO_Balance, 0),
         };
       });
       if (supabase && imported.length) await supabase.from("employees").upsert(imported);
@@ -1444,6 +1580,7 @@ User can now log into the Agent Portal.`
           ))}
         </nav>
         <div className="syncBox"><Database size={16} /><span>{databaseStatus}</span></div>
+        <DeveloperMark sidebar />
       </aside>
 
       <main>
@@ -1674,8 +1811,8 @@ User can now log into the Agent Portal.`
                   <div className="reportMiniGrid">
                     <Info label="Headcount" value={group.headcount} />
                     <Info label="Productivity" value={`${group.productivity}%`} />
-                    <Info label="Break/Lunch Used" value={`${group.breakMinutes} min`} />
-                    <Info label="Scheduled Break/Lunch" value={`${group.scheduledBreakLunch} min`} />
+                    <Info label="Break/Lunch Used" value={formatMinutes(group.breakMinutes)} />
+                    <Info label="Scheduled Break/Lunch" value={formatMinutes(group.scheduledBreakLunch)} />
                     <Info label="Overtime" value={formatHours(group.otMinutes)} />
                     <Info label="Pending Requests" value={group.pendingRequests} />
                   </div>
@@ -1689,7 +1826,7 @@ User can now log into the Agent Portal.`
               <Card title="Agent-level adherence detail">
                 <Table
                   headers={["Employee", "LOB", "Department", "Productivity", "Late", "Break Used", "Scheduled Break", "Variance", "OT"]}
-                  rows={agentReporting.map((e) => [e.full_name, e.lob, e.department, `${e.productivity}%`, `${e.lateMinutes} min`, `${e.breakMinutes} min`, `${e.scheduledBreakLunch} min`, <Badge danger={e.variance > 0} muted={e.variance <= 0}>{e.variance > 0 ? "+" : ""}{e.variance} min</Badge>, formatHours(e.otMinutes)])}
+                  rows={agentReporting.map((e) => [e.full_name, e.lob, e.department, `${e.productivity}%`, formatMinutes(e.lateMinutes), formatMinutes(e.breakMinutes), formatMinutes(e.scheduledBreakLunch), <Badge danger={e.variance > 0} muted={e.variance <= 0}>{e.variance > 0 ? "+" : ""}{formatMinutes(e.variance)}</Badge>, formatHours(e.otMinutes)])}
                 />
               </Card>
               <Card title="Category utilization summary">
@@ -1807,7 +1944,29 @@ function LoginScreen({ logo, email, password, setEmail, setPassword, onLogin, er
           <Database size={16} />
           <span>{databaseStatus}</span>
         </div>
+        <DeveloperMark />
       </section>
+    </div>
+  );
+}
+
+function DeveloperMark({ sidebar = false }) {
+  return (
+    <div className={sidebar ? "developerMark sidebarMark" : "developerMark"}>
+      Developed by M.P.
+    </div>
+  );
+}
+
+function Toast({ toast, onClose }) {
+  return (
+    <div className={`toast ${toast.type || "success"}`}>
+      <div className="toastIcon">{toast.type === "danger" ? "!" : toast.type === "warning" ? "!" : "✓"}</div>
+      <section>
+        <strong>{toast.title}</strong>
+        {toast.message && <span>{toast.message}</span>}
+      </section>
+      <button type="button" onClick={onClose}>×</button>
     </div>
   );
 }
@@ -1853,8 +2012,8 @@ function ActivityList({ activities }) {
 
 const styles = `
 * { box-sizing: border-box; }
-:root { --green: #047857; --dark: #10251c; --soft: #f4faf7; --border: #dfeee7; --muted: #64756d; }
-body { margin: 0; background: #f7faf8; color: var(--dark); font-family: Inter, Segoe UI, Roboto, Arial, sans-serif; }
+:root { --green: #047857; --dark: #10251c; --deep: #062e23; --soft: #f4faf7; --border: #dfeee7; --muted: #64756d; }
+html, body, #root { min-height: 100%; }\nbody { margin: 0; background: #f7faf8; color: var(--dark); font-family: Inter, Segoe UI, Roboto, Arial, sans-serif; }
 .loginPage { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at top left, #e8fff3, #f7faf8 42%, #ffffff); }
 .loginCard { width: min(520px, 100%); background: white; border: 1px solid var(--border); border-radius: 28px; padding: 28px; box-shadow: 0 28px 80px rgba(4,120,87,.14); overflow: hidden; }
 .loginBrand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
@@ -1870,8 +2029,8 @@ body { margin: 0; background: #f7faf8; color: var(--dark); font-family: Inter, S
 .loginNote strong { color: var(--dark); }
 .loginSync { margin-top: 14px; background: #0d2018; }
 button, input, select { font: inherit; }
-.app { min-height: 100vh; display: grid; grid-template-columns: 280px minmax(0, 1fr); width: 100%; overflow-x: hidden; }
-.sidebar { background: #0d2018; color: white; padding: 22px; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 22px; }
+.app { min-height: 100vh; display: grid; grid-template-columns: 280px minmax(0, 1fr); width: 100%; overflow-x: hidden; align-items: stretch; }
+.sidebar { background: linear-gradient(180deg, #063b2c 0%, #062e23 58%, #041c16 100%); color: white; padding: 22px; position: sticky; top: 0; min-height: 100vh; height: 100%; display: flex; flex-direction: column; gap: 22px; box-shadow: 18px 0 45px rgba(4, 37, 29, .12); }
 .logoWrap { display: flex; align-items: center; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,.12); }
 .logoWrap img { width: 46px; height: 46px; object-fit: contain; border-radius: 12px; background: white; padding: 5px; flex: 0 0 auto; }
 .logoWrap strong { display: block; font-size: 16px; }
@@ -1880,7 +2039,7 @@ button, input, select { font: inherit; }
 .sidebar nav button { width: 100%; border: 0; background: transparent; color: #cce0d6; border-radius: 14px; padding: 12px; display: flex; align-items: center; gap: 10px; text-transform: capitalize; cursor: pointer; }
 .sidebar nav button:hover, .sidebar nav button.active { background: #123d2c; color: white; }
 .syncBox { margin-top: auto; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12); border-radius: 16px; padding: 12px; display: flex; align-items: center; gap: 8px; color: #bfe0d2; font-size: 13px; }
-main { padding: 24px; min-width: 0; width: 100%; overflow-x: hidden; }
+main { padding: 26px 28px 18px; min-width: 0; width: 100%; overflow-x: hidden; }
 .topbar { background: linear-gradient(135deg, white, #edf8f2); border: 1px solid var(--border); border-radius: 26px; padding: 22px; display: flex; justify-content: space-between; gap: 18px; align-items: center; box-shadow: 0 18px 40px rgba(4,120,87,.08); max-width: 100%; overflow: hidden; }
 h1 { margin: 0; font-size: clamp(28px, 3vw, 42px); letter-spacing: -1px; }
 .topbar p { margin: 8px 0 0; color: var(--muted); }
@@ -1903,16 +2062,16 @@ input:focus, select:focus { border-color: var(--green); box-shadow: 0 0 0 4px rg
 .grid { margin-top: 18px; display: grid; gap: 18px; }
 .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid.split { grid-template-columns: minmax(0, 2fr) 380px; }
-.grid.split.reverse { grid-template-columns: 380px minmax(0, 2fr); }
+.grid.split.reverse { grid-template-columns: minmax(320px, 420px) minmax(0, 2fr); }
 .card { background: white; border: 1px solid var(--border); border-radius: 24px; padding: 18px; min-width: 0; max-width: 100%; overflow: hidden; box-shadow: 0 8px 22px rgba(0,0,0,.035); }
 .card header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
 .card h2 { margin: 0; font-size: 20px; letter-spacing: -.2px; }
 .search { display: flex; align-items: center; gap: 8px; border: 1px solid #d6e6de; border-radius: 13px; padding-left: 10px; min-width: 250px; color: var(--muted); }
 .search input { border: 0; box-shadow: none; }
 .table { border: 1px solid #e6f0eb; border-radius: 16px; overflow: auto; max-width: 100%; }
-table { width: 100%; min-width: 720px; border-collapse: collapse; background: white; }
-th { background: #f3faf6; color: #64756d; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; text-align: left; padding: 12px; }
-td { padding: 12px; border-top: 1px solid #edf4f0; vertical-align: middle; max-width: 280px; overflow-wrap: anywhere; word-break: normal; }
+table { width: 100%; min-width: 860px; border-collapse: collapse; background: white; table-layout: auto; }
+th { background: #f3faf6; color: #64756d; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; text-align: left; padding: 14px 12px; position: sticky; top: 0; z-index: 1; }
+td { padding: 14px 12px; border-top: 1px solid #edf4f0; vertical-align: middle; max-width: 320px; overflow-wrap: break-word; word-break: normal; line-height: 1.45; }
 td input, td select { min-width: 110px; }
 .textBtn { padding: 0; border: 0; box-shadow: none; background: transparent; display: block; text-align: left; color: #064e3b; }
 .textBtn small { display: block; color: #7b8b84; margin-top: 3px; }
@@ -1964,7 +2123,7 @@ td input, td select { min-width: 110px; }
 .balanceGrid strong { display: block; margin-top: 4px; font-size: 22px; }
 .schedulePage { margin-top: 18px; }
 .miniTimes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; min-width: 190px; }
-.rulesPage { margin-top: 18px; }
+.rulesPage { margin-top: 18px; }\n.rulesPage .grid.split.reverse { grid-template-columns: minmax(320px, 430px) minmax(0, 1fr); align-items: start; }\n.rulesPage .table table { min-width: 980px; }
 .helperText { margin: 0 0 12px; color: var(--muted); line-height: 1.45; max-width: 100%; overflow-wrap: anywhere; }
 .inlineForm { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
 .chipList { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
@@ -1982,7 +2141,7 @@ td input, td select { min-width: 110px; }
 .reportHeader h2 { margin: 0; font-size: 26px; }
 .reportHeader p { margin: 6px 0 0; color: var(--muted); }
 .reportControls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.reportGrid { margin-top: 18px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; max-width: 100%; }
+.reportGrid { margin-top: 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 18px; max-width: 100%; }
 .reportCard { background: white; border: 1px solid var(--border); border-radius: 24px; padding: 18px; box-shadow: 0 8px 22px rgba(0,0,0,.035); min-width: 0; max-width: 100%; overflow: hidden; }
 .reportCardHead { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 12px; }
 .reportCardHead span { display: block; color: var(--muted); font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .05em; }
@@ -1992,8 +2151,21 @@ td input, td select { min-width: 110px; }
 .productivityHelp { margin: 0 0 16px; }
 .productivityHelp strong { display: block; color: var(--dark); margin-bottom: 6px; }
 .productivityHelp p { margin: 0; }
+
+.developerMark { color: #7b8b84; font-size: 11px; text-align: center; margin: 18px 0 0; letter-spacing: .02em; }
+.sidebarMark { color: rgba(255,255,255,.62); border-top: 1px solid rgba(255,255,255,.12); padding-top: 14px; margin-top: 0; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 9999; min-width: min(460px, calc(100vw - 32px)); max-width: 560px; background: #064e3b; color: white; border: 1px solid rgba(255,255,255,.14); border-radius: 16px; box-shadow: 0 24px 70px rgba(4, 78, 59, .35); display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 14px 16px; }
+.toast.info { background: #0f5132; }
+.toast.warning { background: #92400e; }
+.toast.danger { background: #991b1b; }
+.toastIcon { width: 34px; height: 34px; border-radius: 999px; background: rgba(255,255,255,.16); display: grid; place-items: center; font-weight: 900; }
+.toast section { min-width: 0; }
+.toast strong { display: block; font-size: 14px; }
+.toast span { display: block; margin-top: 3px; font-size: 12px; opacity: .9; line-height: 1.35; }
+.toast button { color: white; background: transparent; border: 0; box-shadow: none; padding: 6px; font-size: 22px; line-height: 1; }
+
 @media (max-width: 1280px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .filterPanel { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 1120px) { .app { grid-template-columns: 1fr; } .sidebar { position: static; height: auto; } .sidebar nav { grid-template-columns: repeat(3, 1fr); } .syncBox { margin-top: 0; } .topbar, .reportHeader { flex-direction: column; align-items: stretch; } .actions { justify-content: flex-start; } .filterPanel { grid-template-columns: repeat(2, 1fr); } .agentHero { flex-direction: column; align-items: stretch; } .agentGrid, .reportGrid { grid-template-columns: 1fr; } .balanceGrid, .reportMiniGrid { grid-template-columns: repeat(2, 1fr); } .profileGrid, .requestPreview { grid-template-columns: repeat(2, 1fr); } .metrics, .grid.two, .grid.split, .grid.split.reverse { grid-template-columns: 1fr; } }
+@media (max-width: 1120px) { .app { grid-template-columns: 1fr; } .sidebar { position: static; min-height: auto; height: auto; } .sidebar nav { grid-template-columns: repeat(3, 1fr); } .syncBox { margin-top: 0; } .topbar, .reportHeader { flex-direction: column; align-items: stretch; } .actions { justify-content: flex-start; } .filterPanel { grid-template-columns: repeat(2, 1fr); } .agentHero { flex-direction: column; align-items: stretch; } .agentGrid, .reportGrid { grid-template-columns: 1fr; } .balanceGrid, .reportMiniGrid { grid-template-columns: repeat(2, 1fr); } .profileGrid, .requestPreview { grid-template-columns: repeat(2, 1fr); } .metrics, .grid.two, .grid.split, .grid.split.reverse { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .topbar, .agentHero, .reportHeader { padding: 16px; } .metrics { grid-template-columns: 1fr; } .filterPanel { grid-template-columns: 1fr; } .approval { grid-template-columns: 1fr; } .approval div { display: flex; gap: 8px; } .activityItem { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 640px) { main, .sidebar { padding: 14px; } .filterPanel, .metrics, .profileGrid, .requestPreview, .reportMiniGrid, .inlineForm, .describedField, .activityItem { grid-template-columns: 1fr; } .currentStatus, .agentActions, .balanceGrid { grid-template-columns: 1fr; } .sidebar nav { grid-template-columns: 1fr; } .employeeFooter { flex-direction: column; align-items: flex-start; } .search { min-width: 0; width: 100%; } .card header { flex-direction: column; align-items: stretch; } }
 `;
