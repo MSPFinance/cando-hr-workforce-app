@@ -24,16 +24,9 @@ const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPAB
 const today = new Date().toISOString().slice(0, 10);
 const LOGO = "/cando-logo.png";
 
-// PERFORMANCE / GROWTH SETTINGS FOR 150–300 USERS
-// Keep the app live and fast by loading recent operational records only.
-// Historical records should be archived in Google Drive and not loaded into dashboards by default.
-const ACTIVE_DATA_DAYS = 90;
-const DASHBOARD_DEFAULT_DAYS = 60;
-const ARCHIVE_AFTER_DAYS = 90;
-
 // GOOGLE SHEETS LIVE DATABASE API
 // Production setup: keep this URL in .env / Vercel Environment Variables.
-// Local .env example: VITE_GOOGLE_API_URL=https://script.google.com/a/macros/goday.ca/s/DEPLOYMENT_ID/exec
+// Local .env example: VITE_GOOGLE_API_URL=https://script.google.com/a/macros/goday.ca/s/AKfycbyPzt5bsGY9z_4stWszBX1MQTSmuNSIJit5KP_NtzWu5RmWUSfSPMmM7a9rKqojsKNy/exec
 const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
 
 // LOGIN + ROLE ACCESS
@@ -366,24 +359,6 @@ function calculateRequestHours(request) {
   return requestDaysInclusive(request.start_date, request.end_date) * 8;
 }
 
-function dateDaysAgo(days) {
-  const date = new Date();
-  date.setDate(date.getDate() - Number(days || 0));
-  return date.toISOString().slice(0, 10);
-}
-
-function isWithinActiveWindow(value, days = ACTIVE_DATA_DAYS) {
-  const dateValue = formatDateOnly(value);
-  if (!dateValue) return true;
-  return dateValue >= dateDaysAgo(days);
-}
-
-function systemHealthLevel(value, warning, danger) {
-  if (value >= danger) return "High Risk";
-  if (value >= warning) return "Monitor";
-  return "Healthy";
-}
-
 function getBalance(employee, type) {
   if (type === "PTO") return Number(employee.pto_balance || 0);
   if (type === "Sick Leave") return Number(employee.sick_balance || 0);
@@ -428,23 +403,26 @@ function buildGoogleUrl(params = {}) {
 
 function googleJsonp(params = {}) {
   return new Promise((resolve, reject) => {
-    if (!GOOGLE_API_URL || GOOGLE_API_URL.includes("PASTE_YOUR_WORKING")) {
-      resolve(null);
+    if (!GOOGLE_API_URL) {
+      reject(new Error("Google API URL is missing."));
       return;
     }
 
-    const callbackName = `candoHrCallback_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const callbackName = `candoHrCallback_${Date.now()}_${Math.floor(Math.random() * 100000)}`;
     const script = document.createElement("script");
+
+    const cleanup = () => {
+      window.clearTimeout(timeout);
+      delete window[callbackName];
+      if (script.parentNode) {
+        script.parentNode.removeChild(script);
+      }
+    };
+
     const timeout = window.setTimeout(() => {
       cleanup();
       reject(new Error("Google Sheets request timed out."));
-    }, 15000);
-
-    function cleanup() {
-      window.clearTimeout(timeout);
-      delete window[callbackName];
-      if (script.parentNode) script.parentNode.removeChild(script);
-    }
+    }, 30000);
 
     window[callbackName] = (payload) => {
       cleanup();
@@ -464,12 +442,7 @@ function googleJsonp(params = {}) {
 async function googleGetDatabase() {
   if (!GOOGLE_API_URL || GOOGLE_API_URL.includes("PASTE_YOUR_WORKING")) return null;
   try {
-    const result = await googleJsonp({
-      action: "getAll",
-      activeDays: String(ACTIVE_DATA_DAYS),
-      startDate: dateDaysAgo(ACTIVE_DATA_DAYS),
-      endDate: today,
-    });
+    const result = await googleJsonp({ action: "getAll" });
     console.log("Google Sheets GET result:", result);
     return result?.success ? result.data : null;
   } catch (error) {
@@ -592,10 +565,6 @@ function mapEmployeeFromSheet(row) {
     sick_balance: Number(row.Sick_Balance || 0),
     vto_balance: Number(row.VTO_Balance || 0),
     notes: row.Notes || "",
-    account_status: row.Account_Status || row.Employment_Status || "Active",
-    force_password_reset: String(row.Force_Password_Reset || "No").toLowerCase() === "yes",
-    last_login: row.Last_Login || "",
-    password_updated_at: row.Password_Updated_At || "",
     temp_password: row.Temp_Password || row.Auth_Password || DEFAULT_LOGIN_PASSWORD,
   };
 }
@@ -630,10 +599,6 @@ function mapEmployeeToSheet(employee) {
     Sick_Balance: employee.sick_balance,
     VTO_Balance: employee.vto_balance,
     Notes: employee.notes || "",
-    Account_Status: employee.account_status || employee.employment_status || "Active",
-    Force_Password_Reset: employee.force_password_reset ? "Yes" : "No",
-    Last_Login: employee.last_login || "",
-    Password_Updated_At: employee.password_updated_at || "",
     Temp_Password: employee.temp_password || "",
   };
 }
@@ -759,9 +724,6 @@ function mapApprovalToSheet(item) {
     Hours: item.hours || "",
     Current_Balance: item.current_balance ?? "",
     Projected_Balance: item.projected_balance ?? "",
-    Override_Flag: item.override_flag || "No",
-    Override_Reason: item.override_reason || "",
-    Rule_Warning: item.rule_warning || "",
     Notes: item.notes || "",
   };
 }
@@ -780,7 +742,7 @@ export default function App() {
   const [adminMode, setAdminMode] = useState(false);
   const [search, setSearch] = useState("");
   const [reportView, setReportView] = useState("LOB");
-  const [filters, setFilters] = useState({ lob: "All", department: "All", employee: "All", category: "All", startDate: dateDaysAgo(DASHBOARD_DEFAULT_DAYS), endDate: today });
+  const [filters, setFilters] = useState({ lob: "All", department: "All", employee: "All", category: "All", startDate: "", endDate: "" });
   const [agentStatus, setAgentStatus] = useState("Working");
   const [newTime, setNewTime] = useState({ category: "Working", category_start: "08:00", category_end: "09:00", notes: "" });
   const [newRequest, setNewRequest] = useState({ type: "PTO", start_date: today, end_date: today, hours: 8, reason: "" });
@@ -822,44 +784,12 @@ export default function App() {
     pto_balance: 0,
     sick_balance: 0,
     vto_balance: 0,
-    account_status: "Active",
-    force_password_reset: true,
   });
   const [databaseStatus, setDatabaseStatus] = useState("Loading Google Sheets database...");
   const [sessionUserEmail, setSessionUserEmail] = useState(localStorage.getItem("candoHrUserEmail") || "");
   const [loginEmail, setLoginEmail] = useState(DEFAULT_LOGIN_EMAIL);
   const [loginPassword, setLoginPassword] = useState("");
   const [authError, setAuthError] = useState("");
-  const [bulkImportPreview, setBulkImportPreview] = useState([]);
-  const [bulkImportErrors, setBulkImportErrors] = useState([]);
-  const [archiveStatus, setArchiveStatus] = useState({ loading: false, message: "Archive engine ready. Run monthly or as needed.", lastResult: null });
-  const [passwordResetUser, setPasswordResetUser] = useState(null);
-  const [newPasswordValue, setNewPasswordValue] = useState("");
-  const [confirmPasswordValue, setConfirmPasswordValue] = useState("");
-  const [processing, setProcessing] = useState({ active: false, message: "" });
-  const [notice, setNotice] = useState({ show: false, title: "", message: "" });
-  const [overrideModal, setOverrideModal] = useState({ show: false, requestId: "", warning: null, reason: "" });
-
-  function showNotice(title, message) {
-    setNotice({ show: true, title, message });
-    window.setTimeout(() => setNotice({ show: false, title: "", message: "" }), 3200);
-  }
-
-  async function runWithProcessing(message, action, successTitle = "Completed", successMessage = "Action completed successfully.") {
-    if (processing.active) return;
-    setProcessing({ active: true, message });
-    try {
-      const result = await action();
-      showNotice(successTitle, successMessage);
-      return result;
-    } catch (error) {
-      console.error(error);
-      showNotice("Action failed", error.message || "Please try again.");
-      return null;
-    } finally {
-      setProcessing({ active: false, message: "" });
-    }
-  }
 
   useEffect(() => {
     async function loadGoogleDatabase() {
@@ -871,8 +801,8 @@ export default function App() {
       }
 
       const sheetEmployees = (database.employees || []).map(mapEmployeeFromSheet);
-      const sheetTime = (database.timeLogs || []).map(mapTimeFromSheet).filter((row) => isWithinActiveWindow(row.date));
-      const sheetRequests = (database.requests || []).map(mapRequestFromSheet).filter((row) => isWithinActiveWindow(row.start_date));
+      const sheetTime = (database.timeLogs || []).map(mapTimeFromSheet);
+      const sheetRequests = (database.requests || []).map(mapRequestFromSheet);
       const sheetRules = (database.staffingRules || []).map(mapRuleFromSheet);
       const sheetLobs = (database.lobs || []).map((row) => row.LOB_Name).filter(Boolean);
       const sheetDepartments = (database.departments || []).map((row) => row.Department_Name).filter(Boolean);
@@ -880,10 +810,6 @@ export default function App() {
       if (sheetEmployees.length) setEmployees(sheetEmployees);
       if (sheetTime.length) setTimeEntries(sheetTime);
       if (sheetRequests.length) setRequests(sheetRequests);
-      if (database.approvals?.length) {
-        // Approvals are intentionally loaded by Apps Script only for the active window.
-        // They are not currently rendered as a separate module, but this prepares reporting/export growth.
-      }
       if (sheetRules.length) setRules(sheetRules);
       if (sheetLobs.length) setLobs([...new Set(sheetLobs)]);
       if (sheetDepartments.length) setDepartments([...new Set(sheetDepartments)]);
@@ -958,9 +884,6 @@ export default function App() {
     const total = filteredTime.reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
     const working = filteredTime.filter((t) => t.category === "Working").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
     const overtimeMinutes = filteredTime.filter((t) => t.category === "Overtime").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
-    const activeTimeRows = visibleTime.length;
-    const activeRequestRows = visibleRequests.length;
-    const archiveEligibleTimeRows = visibleTime.filter((t) => !isWithinActiveWindow(t.date, ARCHIVE_AFTER_DAYS)).length;
     return {
       active: visibleEmployees.filter((e) => e.employment_status === "Active").length,
       pendingRequests: visibleRequests.filter((r) => r.status === "Pending").length,
@@ -968,10 +891,6 @@ export default function App() {
       productivity: total ? Math.round((working / total) * 100) : 0,
       overtimeMinutes,
       total,
-      activeTimeRows,
-      activeRequestRows,
-      archiveEligibleTimeRows,
-      dataHealth: systemHealthLevel(activeTimeRows, 15000, 30000),
     };
   }, [filteredTime, visibleEmployees, visibleRequests, visibleTime]);
 
@@ -1042,200 +961,19 @@ export default function App() {
     });
   }, [employees, filteredTime]);
 
-  const exportDataset = useMemo(() => {
-    const timeRows = filteredTime.map((t) => {
-      const employee = employees.find((e) => e.id === t.employee_id) || {};
-      const durationMinutes = minutesBetween(t.category_start, t.category_end);
-      const workedMinutes = minutesBetween(t.clock_in, t.clock_out);
-      const lateMinutes = Math.max(0, minutesBetween(t.scheduled_start, t.clock_in));
-      const overtimeMinutes = t.category === "Overtime" ? durationMinutes : Math.max(0, minutesBetween(t.scheduled_end, t.clock_out));
-
-      return {
-        record_type: "Time Log",
-        record_id: t.id,
-        employee_id: t.employee_id,
-        employee_name: t.employee_name,
-        email: employee.email || "",
-        lob: t.lob,
-        department: t.department,
-        role: employee.role || "",
-        date: formatDateOnly(t.date),
-        category: t.category,
-        request_type: "",
-        scheduled_time: formatTimeRange(t.scheduled_start, t.scheduled_end),
-        clock_time: formatTimeRange(t.clock_in, t.clock_out),
-        category_time: formatTimeRange(t.category_start, t.category_end),
-        duration_minutes: durationMinutes,
-        duration_hours: (durationMinutes / 60).toFixed(2),
-        worked_hours: (workedMinutes / 60).toFixed(2),
-        overtime_hours: (overtimeMinutes / 60).toFixed(2),
-        late_minutes: lateMinutes,
-        requested_days: "",
-        current_balance: "",
-        projected_balance: "",
-        status: t.approved,
-        manager: t.approved_by || "",
-        notes: t.notes || "",
-      };
-    });
-
-    const requestRows = filteredRequests.map((r) => {
-      const employee = employees.find((e) => e.id === r.employee_id) || {};
-      return {
-        record_type: "Request",
-        record_id: r.id,
-        employee_id: r.employee_id,
-        employee_name: r.employee_name,
-        email: employee.email || "",
-        lob: employee.lob || "",
-        department: employee.department || "",
-        role: employee.role || "",
-        date: `${formatDateOnly(r.start_date)} to ${formatDateOnly(r.end_date)}`,
-        category: "",
-        request_type: r.type,
-        scheduled_time: "",
-        clock_time: "",
-        category_time: "",
-        duration_minutes: Number(r.hours || 0) * 60,
-        duration_hours: Number(r.hours || 0).toFixed(2),
-        worked_hours: "",
-        overtime_hours: r.type === "Overtime" ? Number(r.hours || 0).toFixed(2) : "",
-        late_minutes: "",
-        requested_days: Number(r.requested_days || r.hours / 8 || 0).toFixed(1),
-        current_balance: r.current_balance ?? "",
-        projected_balance: r.projected_balance ?? "",
-        status: r.status,
-        manager: r.manager || "",
-        notes: r.reason || "",
-      };
-    });
-
-    return [...timeRows, ...requestRows].sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.employee_name).localeCompare(String(b.employee_name)));
-  }, [filteredTime, filteredRequests, employees]);
-
-  function getRuleUsage(rule, requestOverride = null) {
+  function getRuleUsage(rule) {
     const matchingEmployees = employees.filter((e) => e.department === rule.department && e.lob === rule.lob && e.shift_start === rule.shift_start && e.shift_end === rule.shift_end);
     const matchingRequests = requests.filter((r) => {
       const employee = employees.find((e) => e.id === r.employee_id);
       return employee?.department === rule.department && employee?.lob === rule.lob && employee?.shift_start === rule.shift_start && employee?.shift_end === rule.shift_end && r.status === "Approved";
     });
-
-    const requestList = requestOverride ? [...matchingRequests, requestOverride] : matchingRequests;
-    const pto = requestList.filter((r) => r.type === "PTO").length;
-    const vto = requestList.filter((r) => r.type === "VTO").length;
-    const sick = requestList.filter((r) => r.type === "Sick Leave").length;
+    const pto = matchingRequests.filter((r) => r.type === "PTO").length;
+    const vto = matchingRequests.filter((r) => r.type === "VTO").length;
+    const sick = matchingRequests.filter((r) => r.type === "Sick Leave").length;
     const scheduled = matchingEmployees.length;
     const out = pto + vto + sick;
     const available = scheduled - out;
     return { scheduled, pto, vto, sick, out, available };
-  }
-
-  function getStaffingRuleWarning(request) {
-    if (!request) return null;
-
-    const employee = employees.find((e) => e.id === request.employee_id);
-    if (!employee) return null;
-
-    const requestType = request.type || "Request";
-    const normalizedOutTypes = ["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change", "Overtime"];
-    const countsAsOut = normalizedOutTypes.includes(requestType);
-    if (!countsAsOut) return null;
-
-    // Production rule matching:
-    // 1. Prefer exact LOB + Department + Shift rule.
-    // 2. If no exact shift rule exists, use LOB + Department rule.
-    // 3. If still no rule exists, use Department rule.
-    // This prevents rules from being skipped because Google Sheets time formatting differs.
-    const exactRule = rules.find(
-      (rule) =>
-        rule.lob === employee.lob &&
-        rule.department === employee.department &&
-        formatMilitaryTime(rule.shift_start) === formatMilitaryTime(employee.shift_start) &&
-        formatMilitaryTime(rule.shift_end) === formatMilitaryTime(employee.shift_end)
-    );
-
-    const lobDepartmentRule = rules.find(
-      (rule) => rule.lob === employee.lob && rule.department === employee.department
-    );
-
-    const departmentRule = rules.find((rule) => rule.department === employee.department);
-    const matchingRule = exactRule || lobDepartmentRule || departmentRule;
-
-    if (!matchingRule) return null;
-
-    const ruleEmployees = employees.filter(
-      (e) =>
-        e.department === matchingRule.department &&
-        (!matchingRule.lob || e.lob === matchingRule.lob)
-    );
-
-    const approvedRequests = requests.filter((r) => {
-      const requestEmployee = employees.find((e) => e.id === r.employee_id);
-      return (
-        r.status === "Approved" &&
-        requestEmployee?.department === matchingRule.department &&
-        (!matchingRule.lob || requestEmployee?.lob === matchingRule.lob)
-      );
-    });
-
-    const afterApprovalRequests = [...approvedRequests, request];
-
-    const countType = (type) => afterApprovalRequests.filter((r) => r.type === type).length;
-    const beforeOut = approvedRequests.filter((r) => normalizedOutTypes.includes(r.type)).length;
-    const afterOut = afterApprovalRequests.filter((r) => normalizedOutTypes.includes(r.type)).length;
-
-    const afterPto = countType("PTO");
-    const afterVto = countType("VTO");
-    const afterSick = countType("Sick Leave");
-    const scheduled = ruleEmployees.length;
-    const availableAfter = scheduled - afterOut;
-
-    const maxPto = Number(matchingRule.max_pto_out || 0);
-    const maxVto = Number(matchingRule.max_vto_out || 0);
-    const maxSick = Number(matchingRule.max_sick_out || 0);
-    const minStaff = Number(matchingRule.min_staff_required || 0);
-
-    const exceedsPto = requestType === "PTO" && afterPto > maxPto;
-    const exceedsVto = requestType === "VTO" && afterVto > maxVto;
-    const exceedsSick = requestType === "Sick Leave" && afterSick > maxSick;
-    const belowMinimum = minStaff > 0 && availableAfter < minStaff;
-
-    // For request types without their own dedicated max field, enforce minimum staff required.
-    const exceedsGeneralCoverage = !["PTO", "VTO", "Sick Leave"].includes(requestType) && belowMinimum;
-
-    if (!exceedsPto && !exceedsVto && !exceedsSick && !belowMinimum && !exceedsGeneralCoverage) return null;
-
-    const warnings = [];
-    if (exceedsPto) warnings.push(`PTO limit exceeded: ${afterPto}/${maxPto}`);
-    if (exceedsVto) warnings.push(`VTO limit exceeded: ${afterVto}/${maxVto}`);
-    if (exceedsSick) warnings.push(`Sick Leave limit exceeded: ${afterSick}/${maxSick}`);
-    if (belowMinimum) warnings.push(`Minimum staffing risk: ${availableAfter}/${minStaff} available after approval`);
-
-    return {
-      rule: matchingRule,
-      employee,
-      before: { out: beforeOut },
-      after: { out: afterOut, pto: afterPto, vto: afterVto, sick: afterSick, scheduled, available: availableAfter },
-      exceedsPto,
-      exceedsVto,
-      exceedsSick,
-      belowMinimum,
-      message: `This approval exceeds one or more staffing rules for ${employee.lob} / ${employee.department}. ${warnings.join(" · ")}. Manager override is required to approve this request.`,
-    };
-  }
-
-  async function runArchiveNow() {
-    if (isAgentOnly || processing.active) return;
-    setArchiveStatus({ loading: true, message: "Running archive engine...", lastResult: null });
-    await runWithProcessing("Archiving records older than 90 days to Google Drive...", async () => {
-      const result = await googleJsonp({ action: "runArchive", activeDays: String(ARCHIVE_AFTER_DAYS) });
-      setArchiveStatus({
-        loading: false,
-        message: result?.success ? "Archive completed successfully." : result?.message || "Archive completed with warnings.",
-        lastResult: result,
-      });
-      if (!result?.success) throw new Error(result?.message || "Archive failed.");
-    }, "Archive completed", "Older records were exported to Google Drive and logged in Archive_Log.");
   }
 
   function addLob() {
@@ -1263,14 +1001,11 @@ export default function App() {
   }
 
   async function saveEmployee() {
-    if (processing.active) return;
     if (isAgentOnly) return;
 
     if (!newEmployee.full_name || !newEmployee.email) {
-      return showNotice("Missing information", "Name and email are required.");
+      return alert("Name and email are required.");
     }
-
-    return runWithProcessing("Creating employee access and saving to database...", async () => {
 
     const generatedPassword = Math.random().toString(36).slice(-8) + "A1!";
     let authUserId = null;
@@ -1311,12 +1046,9 @@ User can now log into the Agent Portal.`
     );
 
     setNewEmployee({ ...newEmployee, full_name: "", email: "" });
-    }, "Employee saved", "Employee access was created and saved to the database.");
   }
 
   function saveRule() {
-    if (processing.active) return;
-    return runWithProcessing("Saving staffing rule...", async () => {
     const item = {
       ...newRule,
       id: `RULE-${Date.now().toString().slice(-6)}`,
@@ -1326,8 +1058,7 @@ User can now log into the Agent Portal.`
       min_staff_required: Number(newRule.min_staff_required || 0),
     };
     setRules([item, ...rules]);
-    await googleAddRow("staffingRules", mapRuleToSheet(item));
-    }, "Rule saved", "Staffing rule was saved successfully.");
+    googleAddRow("staffingRules", mapRuleToSheet(item));
   }
 
   function deleteRule(id) {
@@ -1354,8 +1085,6 @@ User can now log into the Agent Portal.`
   }
 
   async function agentAction(action, status = agentStatus) {
-    if (processing.active) return;
-    return runWithProcessing(`${action} is being recorded...`, async () => {
     const now = new Date();
     const time = now.toTimeString().slice(0, 5);
     const activity = {
@@ -1390,13 +1119,10 @@ User can now log into the Agent Portal.`
     await googleAddRow("timeLogs", mapTimeToSheet(timeEntry));
     setActivityLog([activity, ...activityLog]);
     setTimeEntries([timeEntry, ...timeEntries]);
-    }, "Action recorded", `${action} was saved successfully.`);
   }
 
   async function saveTime() {
-    if (processing.active) return;
     if (isAgentOnly) return;
-    return runWithProcessing("Saving time entry...", async () => {
     const item = {
       id: `TIME-${Date.now().toString().slice(-6)}`,
       employee_id: selectedEmployee.id,
@@ -1414,12 +1140,9 @@ User can now log into the Agent Portal.`
     if (supabase) await supabase.from("time_entries").insert(item);
     await googleAddRow("timeLogs", mapTimeToSheet(item));
     setTimeEntries([item, ...timeEntries]);
-    }, "Time saved", "Time entry was saved successfully.");
   }
 
   async function saveRequest() {
-    if (processing.active) return;
-    return runWithProcessing("Submitting request to manager...", async () => {
     const item = {
       id: `REQ-${Date.now().toString().slice(-6)}`,
       employee_id: selectedEmployee.id,
@@ -1435,25 +1158,13 @@ User can now log into the Agent Portal.`
     if (supabase) await supabase.from("time_off_requests").insert(item);
     await googleAddRow("requests", mapRequestToSheet(item));
     setRequests([item, ...requests]);
-    }, "Request submitted", "Your request was submitted to your manager.");
   }
 
-  async function setRequestStatus(id, status, overrideDetails = null) {
-    if (processing.active) return;
+  async function setRequestStatus(id, status) {
     if (isAgentOnly) return;
 
     const request = requests.find((r) => r.id === id);
     if (!request) return;
-
-    if (status === "Approved" && !overrideDetails) {
-      const warning = getStaffingRuleWarning(request);
-      if (warning) {
-        setOverrideModal({ show: true, requestId: id, warning, reason: "" });
-        return;
-      }
-    }
-
-    return runWithProcessing(`${status} request is being saved...`, async () => {
 
     let updatedEmployees = employees;
     let updatedEmployee = employees.find((e) => e.id === request.employee_id);
@@ -1509,22 +1220,16 @@ User can now log into the Agent Portal.`
         hours: request.hours,
         current_balance: request.current_balance,
         projected_balance: updatedRequest.projected_balance,
-        override_flag: overrideDetails?.override ? "Yes" : "No",
-        override_reason: overrideDetails?.reason || "",
-        rule_warning: overrideDetails?.warning?.message || "",
-        notes: overrideDetails?.override ? `Manager override recorded for ${request.type}` : `Manager decision recorded for ${request.type}`,
+        notes: `Manager decision recorded for ${request.type}`,
       })
     );
 
     setEmployees(updatedEmployees);
     setRequests(requests.map((r) => (r.id === id ? updatedRequest : r)));
-    }, `Request ${status}`, `The request was marked as ${status} and the audit trail was updated.`);
   }
 
   async function setTimeStatus(id, approved) {
-    if (processing.active) return;
     if (isAgentOnly) return;
-    return runWithProcessing(`${approved} time exception is being saved...`, async () => {
 
     const timeEntry = timeEntries.find((t) => t.id === id);
     if (!timeEntry) return;
@@ -1559,93 +1264,6 @@ User can now log into the Agent Portal.`
     );
 
     setTimeEntries(timeEntries.map((t) => (t.id === id ? updatedTimeEntry : t)));
-    }, `Time ${approved}`, `The time entry was marked as ${approved} and the audit trail was updated.`);
-  }
-
-  function parseCsvLine(line) {
-    const result = [];
-    let current = "";
-    let insideQuotes = false;
-
-    for (let i = 0; i < line.length; i++) {
-      const char = line[i];
-      const next = line[i + 1];
-
-      if (char === '"' && next === '"') {
-        current += '"';
-        i++;
-      } else if (char === '"') {
-        insideQuotes = !insideQuotes;
-      } else if (char === "," && !insideQuotes) {
-        result.push(current.trim());
-        current = "";
-      } else {
-        current += char;
-      }
-    }
-
-    result.push(current.trim());
-    return result;
-  }
-
-  function normalizeImportedEmployee(row, index) {
-    const tempPassword = row.Temp_Password || "Cando123!";
-    return {
-      id: row.Employee_ID || cleanId("EMP"),
-      full_name: row.Full_Name || row.full_name || "",
-      email: row.Auth_Email || row.Email || row.email || "",
-      country: row.Country || "Costa Rica",
-      department: row.Department || "Operations",
-      lob: row.LOB || "GoDay",
-      role: row.Role || "Agent",
-      access_level: row.Access_Level || "Employee",
-      supervisor: row.Supervisor || "",
-      manager: row.Manager || "",
-      hire_date: row.Hire_Date || "",
-      birthday: row.Birthday || "",
-      employment_status: row.Employment_Status || "Active",
-      employment_type: row.Employment_Type || "Full-Time",
-      shift_start: row.Shift_Start || "08:00",
-      shift_end: row.Shift_End || "17:00",
-      break_start: row.Break_1_Start || "10:00",
-      break_end: row.Break_1_End || "10:15",
-      lunch_start: row.Lunch_Start || "12:00",
-      lunch_end: row.Lunch_End || "13:00",
-      second_break_start: row.Break_2_Start || "15:00",
-      second_break_end: row.Break_2_End || "15:15",
-      lunch_minutes: Number(row.Lunch_Minutes || 60),
-      break_minutes: Number(row.Break_Minutes || 30),
-      pto_balance: Number(row.PTO_Balance || 0),
-      sick_balance: Number(row.Sick_Balance || 0),
-      vto_balance: Number(row.VTO_Balance || 0),
-      account_status: row.Account_Status || "Active",
-      force_password_reset: String(row.Force_Password_Reset || "Yes").toLowerCase() === "yes",
-      temp_password: tempPassword,
-      notes: row.Notes || "",
-      import_row: index + 2,
-    };
-  }
-
-  function validateImportedEmployees(imported) {
-    const errors = [];
-    const seenEmails = new Set();
-    const existingEmails = new Set(employees.map((e) => normalizeEmail(e.email)));
-
-    imported.forEach((employee) => {
-      if (!employee.full_name) errors.push(`Row ${employee.import_row}: Full_Name is required.`);
-      if (!employee.email) errors.push(`Row ${employee.import_row}: Auth_Email is required.`);
-      if (employee.email && !employee.email.includes("@")) errors.push(`Row ${employee.import_row}: Auth_Email must be a valid email.`);
-      if (employee.email && seenEmails.has(normalizeEmail(employee.email))) errors.push(`Row ${employee.import_row}: duplicate email in upload: ${employee.email}.`);
-      if (employee.email && existingEmails.has(normalizeEmail(employee.email))) errors.push(`Row ${employee.import_row}: email already exists in database: ${employee.email}.`);
-      if (!employee.lob) errors.push(`Row ${employee.import_row}: LOB is required.`);
-      if (!employee.department) errors.push(`Row ${employee.import_row}: Department is required.`);
-      if (!employee.role) errors.push(`Row ${employee.import_row}: Role is required.`);
-      if (!employee.access_level) errors.push(`Row ${employee.import_row}: Access_Level is required.`);
-      if (!employee.temp_password) errors.push(`Row ${employee.import_row}: Temp_Password is required.`);
-      seenEmails.add(normalizeEmail(employee.email));
-    });
-
-    return errors;
   }
 
   function importEmployees(event) {
@@ -1653,111 +1271,58 @@ User can now log into the Agent Portal.`
     const file = event.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (e) => {
-    const text = String(e.target?.result || "").replace(/^\uFEFF/, "");
-const lines = text
-  .split(String.fromCharCode(10))
-  .filter((line) => line.trim());
-      const [headerLine, ...rows] = lines;
-      const headers = parseCsvLine(headerLine).map((h) => h.trim());
+    reader.onload = async (e) => {
+      const text = String(e.target?.result || "");
+      const [headerLine, ...rows] = text.split(/\r?\n/).filter(Boolean);
+      const headers = headerLine.split(",").map((h) => h.trim());
       const imported = rows.map((row, index) => {
-        const values = parseCsvLine(row);
-        const record = Object.fromEntries(headers.map((h, i) => [h, values[i] || ""]));
-        return normalizeImportedEmployee(record, index);
+        const values = row.split(",").map((v) => v.trim());
+        const r = Object.fromEntries(headers.map((h, i) => [h, values[i] || ""]));
+        return {
+          id: r.Employee_ID || `IMP-${Date.now()}-${index}`,
+          full_name: r.Full_Name || r.full_name || "Unnamed Employee",
+          email: r.Email || r.email || "",
+          country: r.Country || "Costa Rica",
+          department: r.Department || "Operations",
+          lob: r.LOB || r.lob || "GoDay",
+          role: r.Role || "Agent",
+          access_level: r.Access_Level || "Employee",
+          supervisor: r.Supervisor || "",
+          manager: r.Manager || "",
+          hire_date: r.Hire_Date || "",
+          birthday: r.Birthday || "",
+          employment_status: r.Employment_Status || "Active",
+          employment_type: r.Employment_Type || "Full-Time",
+          shift_start: r.Scheduled_Shift_Start || "08:00",
+          shift_end: r.Scheduled_Shift_End || "17:00",
+          break_start: r.Break_Start || "10:00",
+          break_end: r.Break_End || "10:15",
+          lunch_start: r.Lunch_Start || "12:00",
+          lunch_end: r.Lunch_End || "13:00",
+          second_break_start: r.Second_Break_Start || "15:00",
+          second_break_end: r.Second_Break_End || "15:15",
+          lunch_minutes: Number(r.Lunch_Minutes || 60),
+          break_minutes: Number(r.Break_Minutes || 30),
+          pto_balance: Number(r.PTO_Balance || 0),
+          sick_balance: Number(r.Sick_Balance || 0),
+          vto_balance: Number(r.VTO_Balance || 0),
+        };
       });
-
-      const errors = validateImportedEmployees(imported);
-      setBulkImportPreview(imported);
-      setBulkImportErrors(errors);
-
-      if (errors.length) {
-        showNotice("Bulk import needs review", `${errors.length} validation issue(s) found. Please review before saving.`);
-      } else {
-        showNotice("Bulk import ready", `${imported.length} employee record(s) are ready to save.`);
-      }
+      if (supabase && imported.length) await supabase.from("employees").upsert(imported);
+      setEmployees([...imported, ...employees]);
     };
     reader.readAsText(file);
-    event.target.value = "";
-  }
-
-  async function confirmBulkImport() {
-    if (isAgentOnly || processing.active || !bulkImportPreview.length) return;
-    const errors = validateImportedEmployees(bulkImportPreview);
-    setBulkImportErrors(errors);
-    if (errors.length) {
-      showNotice("Cannot import yet", "Please fix the validation issues before saving employees.");
-      return;
-    }
-
-    return runWithProcessing(`Saving ${bulkImportPreview.length} employees to the database...`, async () => {
-      for (const employee of bulkImportPreview) {
-        await googleAddRow("employees", mapEmployeeToSheet(employee));
-      }
-
-      setEmployees([...bulkImportPreview, ...employees]);
-      setBulkImportPreview([]);
-      setBulkImportErrors([]);
-    }, "Bulk import saved", `${bulkImportPreview.length} employee profile(s) were created successfully.`);
-  }
-
-  function clearBulkImport() {
-    setBulkImportPreview([]);
-    setBulkImportErrors([]);
   }
 
   function exportTimeCsv() {
-    const headers = [
-      "record_type",
-      "record_id",
-      "employee_id",
-      "employee_name",
-      "email",
-      "lob",
-      "department",
-      "role",
-      "date",
-      "category",
-      "request_type",
-      "scheduled_time",
-      "clock_time",
-      "category_time",
-      "duration_minutes",
-      "duration_hours",
-      "worked_hours",
-      "overtime_hours",
-      "late_minutes",
-      "requested_days",
-      "current_balance",
-      "projected_balance",
-      "status",
-      "manager",
-      "notes",
-    ];
-    downloadFile("cando-hr-unified-export.csv", csv(exportDataset, headers), "text/csv");
+    const headers = ["employee_name", "date", "lob", "department", "category", "category_start", "category_end", "duration_minutes", "approved", "notes"];
+    const rows = filteredTime.map((t) => ({ ...t, duration_minutes: minutesBetween(t.category_start, t.category_end) }));
+    downloadFile("cando-hr-time-report.csv", csv(rows, headers), "text/csv");
   }
 
   function exportRequestsCsv() {
-    const headers = [
-      "record_type",
-      "record_id",
-      "employee_id",
-      "employee_name",
-      "email",
-      "lob",
-      "department",
-      "role",
-      "date",
-      "request_type",
-      "duration_hours",
-      "requested_days",
-      "current_balance",
-      "projected_balance",
-      "status",
-      "manager",
-      "notes",
-    ];
-    const requestOnlyRows = exportDataset.filter((row) => row.record_type === "Request");
-    downloadFile("cando-hr-requests-export.csv", csv(requestOnlyRows, headers), "text/csv");
+    const headers = ["employee_name", "type", "start_date", "end_date", "hours", "requested_days", "current_balance", "projected_balance", "status", "manager", "reason"];
+    downloadFile("cando-hr-requests-report.csv", csv(filteredRequests, headers), "text/csv");
   }
 
   function exportReportingCsv() {
@@ -1766,90 +1331,32 @@ const lines = text
   }
 
   function exportPdf() {
-    const doc = new jsPDF({ orientation: "landscape" });
+    const doc = new jsPDF();
     doc.setFontSize(16);
-    doc.text("CandoContact HR Workforce Unified Report", 14, 16);
-    doc.setFontSize(9);
-    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 23);
-    doc.text(`Records exported: ${exportDataset.length}`, 14, 29);
-
-    const totalDuration = exportDataset.reduce((sum, row) => sum + Number(row.duration_hours || 0), 0);
-    const totalOt = exportDataset.reduce((sum, row) => sum + Number(row.overtime_hours || 0), 0);
-    const pending = exportDataset.filter((row) => row.status === "Pending").length;
-
+    doc.text("CandoContact HR Workforce Report", 14, 16);
+    doc.setFontSize(10);
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 24);
     autoTable(doc, {
-      startY: 35,
-      head: [["Metric", "Value"]],
-      body: [
-        ["Filtered Records", exportDataset.length],
-        ["Total Duration Hours", totalDuration.toFixed(2)],
-        ["Overtime Hours", totalOt.toFixed(2)],
-        ["Pending Items", pending],
-      ],
-      styles: { fontSize: 8 },
-      margin: { left: 14, right: 14 },
+      startY: 32,
+      head: [["Employee", "Date", "LOB", "Dept", "Category", "Time", "Duration", "Status"]],
+      body: filteredTime.map((t) => [t.employee_name, t.date, t.lob, t.department, t.category, `${t.category_start}-${t.category_end}`, formatHours(minutesBetween(t.category_start, t.category_end)), t.approved]),
     });
-
-    autoTable(doc, {
-      startY: doc.lastAutoTable.finalY + 8,
-      head: [["Type", "Employee", "LOB", "Department", "Date", "Category/Request", "Time", "Hours", "OT", "Status", "Manager"]],
-      body: exportDataset.map((row) => [
-        row.record_type,
-        row.employee_name,
-        row.lob,
-        row.department,
-        row.date,
-        row.category || row.request_type,
-        row.category_time || row.scheduled_time || "",
-        row.duration_hours,
-        row.overtime_hours,
-        row.status,
-        row.manager,
-      ]),
-      styles: { fontSize: 7, cellPadding: 2 },
-      headStyles: { fontSize: 7 },
-      margin: { left: 14, right: 14 },
-    });
-
-    doc.save("cando-hr-unified-report.pdf");
+    doc.save("cando-hr-report.pdf");
   }
 
-  async function login() {
+  function login() {
     const employee = employees.find((e) => normalizeEmail(e.email) === normalizeEmail(loginEmail));
-   if (!employee) {
-  setAuthError(
-    "No active employee profile was found for this email. Please contact HR or your manager."
-  );
-  return;
-}
+    const expectedPassword = employee?.temp_password || DEFAULT_LOGIN_PASSWORD;
 
-const savedPassword =
-  employee.temp_password ||
-  employee.Temp_Password ||
-  employee.password ||
-  employee.Password ||
-  DEFAULT_LOGIN_PASSWORD;
-
-if (
-  String(loginPassword || "").trim() !==
-  String(savedPassword || "").trim()
-) {
-  setAuthError(
-    "Invalid password. Please try again or request a reset from HR/Admin."
-  );
-  return;
-}
-
-    if (employee.force_password_reset) {
-      setPasswordResetUser(employee);
-      setAuthError("");
+    if (!employee) {
+      setAuthError("No active employee profile was found for this email. Please contact HR or your manager.");
       return;
     }
 
-    const loginStamp = new Date().toISOString();
-    const updatedEmployee = { ...employee, last_login: loginStamp };
-    await googleUpdateRow("employees", "Employee_ID", employee.id, mapEmployeeToSheet(updatedEmployee));
-    setEmployees(employees.map((e) => (e.id === employee.id ? updatedEmployee : e)));
+    if (String(loginPassword || "") !== String(expectedPassword || "")) {
+      setAuthError("Invalid password. Please try again or request a reset from HR/Admin.");
+      return;
+    }
 
     localStorage.setItem("candoHrUserEmail", employee.email);
     setSessionUserEmail(employee.email);
@@ -1858,60 +1365,12 @@ if (
     setAuthError("");
   }
 
-  async function completePasswordReset() {
-    if (!passwordResetUser) return;
-    if (!newPasswordValue || newPasswordValue.length < 8) {
-      setAuthError("Password must be at least 8 characters.");
-      return;
-    }
-    if (newPasswordValue !== confirmPasswordValue) {
-      setAuthError("Passwords do not match.");
-      return;
-    }
-
-    await runWithProcessing("Updating password and activating account...", async () => {
-      const updatedEmployee = {
-        ...passwordResetUser,
-        temp_password: newPasswordValue,
-        force_password_reset: false,
-        account_status: "Active",
-        password_updated_at: new Date().toISOString(),
-        last_login: new Date().toISOString(),
-      };
-
-      await googleUpdateRow("employees", "Employee_ID", updatedEmployee.id, mapEmployeeToSheet(updatedEmployee));
-      setEmployees(employees.map((e) => (e.id === updatedEmployee.id ? updatedEmployee : e)));
-      localStorage.setItem("candoHrUserEmail", updatedEmployee.email);
-      setSessionUserEmail(updatedEmployee.email);
-      setSelectedEmployeeId(updatedEmployee.id);
-      setPasswordResetUser(null);
-      setNewPasswordValue("");
-      setConfirmPasswordValue("");
-      setAdminMode(false);
-      setAuthError("");
-    }, "Password updated", "Your password was updated and your session has started.");
-  }
-
   function logout() {
     localStorage.removeItem("candoHrUserEmail");
     setSessionUserEmail("");
     setLoginPassword("");
     setAdminMode(false);
     setTab("agent");
-  }
-
-  function confirmOverrideApproval() {
-    if (!overrideModal.requestId || !overrideModal.warning) return;
-    if (!overrideModal.reason.trim()) {
-      showNotice("Override reason required", "Please enter a reason before overriding the staffing rule.");
-      return;
-    }
-
-    const requestId = overrideModal.requestId;
-    const warning = overrideModal.warning;
-    const reason = overrideModal.reason.trim();
-    setOverrideModal({ show: false, requestId: "", warning: null, reason: "" });
-    setRequestStatus(requestId, "Approved", { override: true, reason, warning });
   }
 
   const navItems = isAgentOnly
@@ -1926,31 +1385,8 @@ if (
         ["manager", CheckCircle],
         ["payroll", FileCheck],
         ["reporting", BarChart3],
-        ["archive", Database],
         ["rules", Settings],
       ];
-
-  if (passwordResetUser) {
-    return (
-      <PasswordResetScreen
-        logo={LOGO}
-        employee={passwordResetUser}
-        newPassword={newPasswordValue}
-        confirmPassword={confirmPasswordValue}
-        setNewPassword={setNewPasswordValue}
-        setConfirmPassword={setConfirmPasswordValue}
-        onSubmit={completePasswordReset}
-        onCancel={() => {
-          setPasswordResetUser(null);
-          setLoginPassword("");
-          setAuthError("");
-        }}
-        error={authError}
-        processing={processing}
-        notice={notice}
-      />
-    );
-  }
 
   if (!isAuthenticated) {
     return (
@@ -1987,18 +1423,6 @@ if (
       </aside>
 
       <main>
-        <div className="developerWatermark">Developed by MSP · CandoContact HR Workforce System</div>
-        {overrideModal.show && (
-          <OverrideModal
-            warning={overrideModal.warning}
-            reason={overrideModal.reason}
-            setReason={(reason) => setOverrideModal({ ...overrideModal, reason })}
-            onCancel={() => setOverrideModal({ show: false, requestId: "", warning: null, reason: "" })}
-            onConfirm={confirmOverrideApproval}
-          />
-        )}
-        {processing.active && <ProcessingOverlay message={processing.message} />}
-        {notice.show && <NoticeToast title={notice.title} message={notice.message} />}
         <header className="topbar">
           <div>
             <h1>{isAgentOnly ? "My HR Portal" : "Workforce Command Center"}</h1>
@@ -2059,13 +1483,13 @@ if (
             <div className="agentGrid">
               <Card title="My shift actions / overtime">
                 <div className="agentActions">
-                  <button className="primary" disabled={processing.active} onClick={() => agentAction("Shift Started", "Working")}>Start Shift</button>
-                  <button disabled={processing.active} onClick={() => agentAction("Shift Ended", "Working")}>End Shift</button>
+                  <button className="primary" onClick={() => agentAction("Shift Started", "Working")}>Start Shift</button>
+                  <button onClick={() => agentAction("Shift Ended", "Working")}>End Shift</button>
                 </div>
                 <div className="currentStatus">
                   <label><span>Current Status / Disposition</span><select value={agentStatus} onChange={(e) => setAgentStatus(e.target.value)}>{timeCategories.map((x) => <option key={x}>{x}</option>)}</select></label>
-                  <button className="primary" disabled={processing.active} onClick={() => agentAction("Status Changed", agentStatus)}>Log Status</button>
-                  <button disabled={processing.active} onClick={() => { setAgentStatus("Overtime"); agentAction("Overtime Logged", "Overtime"); }}>Log Overtime</button>
+                  <button className="primary" onClick={() => agentAction("Status Changed", agentStatus)}>Log Status</button>
+                  <button onClick={() => { setAgentStatus("Overtime"); agentAction("Overtime Logged", "Overtime"); }}>Log Overtime</button>
                 </div>
               </Card>
 
@@ -2092,7 +1516,7 @@ if (
                   <input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} />
                   <input type="number" min="0" step="0.25" title="Hours are automatic for multi-day requests. For same-day partial requests, enter the exact hours needed." value={newRequest.start_date !== newRequest.end_date ? calculateRequestHours(newRequest) : newRequest.hours} disabled={newRequest.start_date !== newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} />
                   <input placeholder="Reason or notes" value={newRequest.reason} onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })} />
-                  <button className="primary wide" disabled={processing.active} onClick={saveRequest}>Submit to Manager</button>
+                  <button className="primary wide" onClick={saveRequest}>Submit to Manager</button>
                 </FormGrid>
               </Card>
 
@@ -2110,7 +1534,6 @@ if (
             <Metric icon={Clock} label="Payroll Exceptions" value={stats.payrollExceptions} hint="Pending review" />
             <Metric icon={Clock} label="Overtime" value={formatHours(stats.overtimeMinutes)} hint="Tracked OT" />
             <Metric icon={BarChart3} label="Productivity" value={`${stats.productivity}%`} hint="Working vs tracked" />
-            <Metric icon={Database} label="Data Health" value={stats.dataHealth} hint={`${stats.activeTimeRows} active time rows`} />
           </section>
         )}
 
@@ -2142,30 +1565,8 @@ if (
                 <input placeholder="Role" value={newEmployee.role} onChange={(e) => setNewEmployee({ ...newEmployee, role: e.target.value })} />
                 <input type="time" value={newEmployee.shift_start} onChange={(e) => setNewEmployee({ ...newEmployee, shift_start: e.target.value })} />
                 <input type="time" value={newEmployee.shift_end} onChange={(e) => setNewEmployee({ ...newEmployee, shift_end: e.target.value })} />
-                <button className="primary wide" disabled={processing.active} onClick={saveEmployee}>Save employee</button>
+                <button className="primary wide" onClick={saveEmployee}>Save employee</button>
               </FormGrid>
-            </Card>
-            <Card title="Bulk employee import with schedules">
-              <p className="helperText">Upload the HR CSV template to create multiple users at once. This includes role access, LOB, department, balances, shift start/end, breaks, lunch, temporary password, and forced password reset.</p>
-              <div className="bulkActions">
-                <label className="btn"><Upload size={16} /> Upload HR CSV<input type="file" accept=".csv" onChange={importEmployees} /></label>
-                <button disabled={!bulkImportPreview.length || processing.active || bulkImportErrors.length > 0} className="primary" onClick={confirmBulkImport}>Save Preview to Database</button>
-                <button disabled={!bulkImportPreview.length || processing.active} onClick={clearBulkImport}>Clear Preview</button>
-              </div>
-              {bulkImportErrors.length > 0 && (
-                <div className="errorPanel">
-                  <strong>Validation issues</strong>
-                  {bulkImportErrors.slice(0, 8).map((error, index) => <span key={index}>{error}</span>)}
-                  {bulkImportErrors.length > 8 && <span>+ {bulkImportErrors.length - 8} more issue(s).</span>}
-                </div>
-              )}
-              {bulkImportPreview.length > 0 && (
-                <Table
-                  headers={["Employee", "Email", "LOB", "Department", "Role", "Access", "Shift", "Temp Password"]}
-                  rows={bulkImportPreview.slice(0, 25).map((e) => [e.full_name, e.email, e.lob, e.department, e.role, e.access_level, formatTimeRange(e.shift_start, e.shift_end), e.temp_password])}
-                />
-              )}
-              {bulkImportPreview.length > 25 && <p className="helperText">Showing first 25 of {bulkImportPreview.length} imported employees.</p>}
             </Card>
           </section>
         )}
@@ -2195,7 +1596,7 @@ if (
 
         {!isAgentOnly && tab === "time" && (
           <section className="grid split reverse">
-            <Card title="Log time category"><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newTime.category} onChange={(e) => setNewTime({ ...newTime, category: e.target.value })}>{timeCategories.map((x) => <option key={x}>{x}</option>)}</select><input type="time" value={newTime.category_start} onChange={(e) => setNewTime({ ...newTime, category_start: e.target.value })} /><input type="time" value={newTime.category_end} onChange={(e) => setNewTime({ ...newTime, category_end: e.target.value })} /><input placeholder="Notes" value={newTime.notes} onChange={(e) => setNewTime({ ...newTime, notes: e.target.value })} /><button className="primary wide" disabled={processing.active} onClick={saveTime}>Add time entry</button></FormGrid></Card>
+            <Card title="Log time category"><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newTime.category} onChange={(e) => setNewTime({ ...newTime, category: e.target.value })}>{timeCategories.map((x) => <option key={x}>{x}</option>)}</select><input type="time" value={newTime.category_start} onChange={(e) => setNewTime({ ...newTime, category_start: e.target.value })} /><input type="time" value={newTime.category_end} onChange={(e) => setNewTime({ ...newTime, category_end: e.target.value })} /><input placeholder="Notes" value={newTime.notes} onChange={(e) => setNewTime({ ...newTime, notes: e.target.value })} /><button className="primary wide" onClick={saveTime}>Add time entry</button></FormGrid></Card>
             <Card title="Daily time utilization"><Table headers={["Employee", "Date", "LOB", "Category", "Time", "Duration", "Approval"]} rows={filteredTime.map((t) => [t.employee_name, t.date, t.lob, <Badge muted>{t.category}</Badge>, formatTimeRange(t.category_start, t.category_end), formatHours(minutesBetween(t.category_start, t.category_end)), t.approved])} /></Card>
           </section>
         )}
@@ -2211,11 +1612,11 @@ if (
           <section className="grid two">
             <Card title="Time-Off & Schedule Request Approvals">
               <p className="helperText">Use this queue for requests submitted by employees, including PTO, VTO, Sick Leave, Paid Leave, Unpaid Leave, Schedule Change, and OT requests submitted as a formal request. Approval updates the Requests tab, creates an Approvals audit record, and deducts balances when applicable.</p>
-              {requests.filter((r) => r.status === "Pending").length ? requests.filter((r) => r.status === "Pending").map((r) => <Approval key={r.id} title={r.employee_name} detail={`${r.type} · ${formatDateOnly(r.start_date)} to ${formatDateOnly(r.end_date)} · ${r.hours}h / ${Number(r.requested_days || r.hours / 8).toFixed(1)} days · Current: ${r.current_balance ?? "N/A"}h · After: ${r.projected_balance ?? "N/A"}h`} approve={() => setRequestStatus(r.id, "Approved")} deny={() => setRequestStatus(r.id, "Denied")} disabled={processing.active} />) : <p className="muted">No pending employee requests at this time.</p>}
+              {requests.filter((r) => r.status === "Pending").length ? requests.filter((r) => r.status === "Pending").map((r) => <Approval key={r.id} title={r.employee_name} detail={`${r.type} · ${formatDateOnly(r.start_date)} to ${formatDateOnly(r.end_date)} · ${r.hours}h / ${Number(r.requested_days || r.hours / 8).toFixed(1)} days · Current: ${r.current_balance ?? "N/A"}h · After: ${r.projected_balance ?? "N/A"}h`} approve={() => setRequestStatus(r.id, "Approved")} deny={() => setRequestStatus(r.id, "Denied")} />) : <p className="muted">No pending employee requests at this time.</p>}
             </Card>
             <Card title="Time Log & Overtime Exception Review">
               <p className="helperText">Use this queue for time entries that require manager review, such as overtime logged from the agent portal, late/early shift exceptions, manual time corrections, or unusual dispositions. Approval updates the Time_Logs tab and creates an Approvals audit record.</p>
-              {timeEntries.filter((t) => t.approved === "Pending").length ? timeEntries.filter((t) => t.approved === "Pending").map((t) => <Approval key={t.id} title={t.employee_name} detail={`${t.category} · ${formatDateOnly(t.date)} · ${formatTimeRange(t.category_start, t.category_end)}`} approve={() => setTimeStatus(t.id, "Approved")} deny={() => setTimeStatus(t.id, "Denied")} disabled={processing.active} />) : <p className="muted">No pending time or overtime exceptions at this time.</p>}
+              {timeEntries.filter((t) => t.approved === "Pending").length ? timeEntries.filter((t) => t.approved === "Pending").map((t) => <Approval key={t.id} title={t.employee_name} detail={`${t.category} · ${formatDateOnly(t.date)} · ${formatTimeRange(t.category_start, t.category_end)}`} approve={() => setTimeStatus(t.id, "Approved")} deny={() => setTimeStatus(t.id, "Denied")} />) : <p className="muted">No pending time or overtime exceptions at this time.</p>}
             </Card>
           </section>
         )}
@@ -2275,46 +1676,6 @@ if (
           </section>
         )}
 
-        {!isAgentOnly && tab === "archive" && (
-          <section className="reportingPage">
-            <div className="reportHeader">
-              <div>
-                <h2>Archive Center</h2>
-                <p>Protect live database performance by archiving records older than {ARCHIVE_AFTER_DAYS} days to Google Drive. Active dashboards continue using recent live data.</p>
-              </div>
-              <div className="reportControls">
-                <button className="primary" disabled={processing.active || archiveStatus.loading} onClick={runArchiveNow}>Run Archive Now</button>
-              </div>
-            </div>
-            <section className="grid two">
-              <Card title="Archive Health">
-                <div className="reportMiniGrid">
-                  <Info label="Active Window" value={`${ACTIVE_DATA_DAYS} days`} />
-                  <Info label="Archive After" value={`${ARCHIVE_AFTER_DAYS} days`} />
-                  <Info label="Time Rows Loaded" value={stats.activeTimeRows} />
-                  <Info label="Request Rows Loaded" value={stats.activeRequestRows} />
-                  <Info label="Data Health" value={stats.dataHealth} />
-                  <Info label="Archive Status" value={archiveStatus.loading ? "Running" : "Ready"} />
-                </div>
-                <div className="reportNote">{archiveStatus.message}</div>
-              </Card>
-              <Card title="Google Drive Archive Location">
-                <p className="helperText">Archive files are saved in the Google Drive account that owns the Apps Script deployment. Look for this folder path:</p>
-                <div className="archivePath">My Drive / CandoContact HR Archives / Year / Month</div>
-                <p className="helperText">Example: My Drive / CandoContact HR Archives / 2026 / 05-May / Time_Logs_2026-05.csv</p>
-              </Card>
-            </section>
-            {archiveStatus.lastResult?.files?.length > 0 && (
-              <Card title="Last Archive Files">
-                <Table
-                  headers={["Tab", "Rows", "File", "Drive URL"]}
-                  rows={archiveStatus.lastResult.files.map((file) => [file.tab, file.rowsArchived, file.fileName, file.fileUrl ? <a href={file.fileUrl} target="_blank" rel="noreferrer">Open file</a> : "N/A"])}
-                />
-              </Card>
-            )}
-          </section>
-        )}
-
         {!isAgentOnly && tab === "rules" && (
           <section className="rulesPage">
             <section className="grid two">
@@ -2353,7 +1714,7 @@ if (
                   <DescribedField title="Minimum Staff Required" description="Minimum employees that must remain available after all approvals."><input type="number" value={newRule.min_staff_required} onChange={(e) => setNewRule({ ...newRule, min_staff_required: e.target.value })} /></DescribedField>
                   <DescribedField title="Notes" description="Optional business context, exception instructions, or manager notes."><input value={newRule.notes} onChange={(e) => setNewRule({ ...newRule, notes: e.target.value })} /></DescribedField>
                 </div>
-                <button className="primary wide" disabled={processing.active} onClick={saveRule}>Save Staffing Rule</button>
+                <button className="primary wide" onClick={saveRule}>Save Staffing Rule</button>
               </Card>
               <Card title="Current coverage rules and usage">
                 <Table
@@ -2372,91 +1733,7 @@ if (
         
       </main>
     </div>
-  );
-}
-
-function OverrideModal({ warning, reason, setReason, onCancel, onConfirm }) {
-  if (!warning) return null;
-  return (
-    <div className="processingOverlay">
-      <div className="overrideBox">
-        <strong>Staffing Rule Warning</strong>
-        <p>{warning.message}</p>
-        <div className="overrideGrid">
-          <Info label="LOB" value={warning.employee.lob} />
-          <Info label="Department" value={warning.employee.department} />
-          <Info label="Shift" value={formatTimeRange(warning.employee.shift_start, warning.employee.shift_end)} />
-          <Info label="Available After" value={warning.after.available} />
-        </div>
-        <label className="overrideReason">
-          Override reason required
-          <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Explain why this approval should be overridden..." />
-        </label>
-        <div className="overrideActions">
-          <button onClick={onCancel}>Cancel Approval</button>
-          <button className="primary" onClick={onConfirm}>Approve With Override</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function PasswordResetScreen({ logo, employee, newPassword, confirmPassword, setNewPassword, setConfirmPassword, onSubmit, onCancel, error, processing, notice }) {
-  return (
-    <div className="loginPage">
-      <style>{styles}</style>
-      {processing.active && <ProcessingOverlay message={processing.message} />}
-      {notice.show && <NoticeToast title={notice.title} message={notice.message} />}
-      <section className="loginCard">
-        <div className="loginBrand">
-          <img src={logo} alt="CandoContact" />
-          <div>
-            <strong>CandoContact</strong>
-            <span>Secure Password Setup</span>
-          </div>
-        </div>
-        <h1>Create your password</h1>
-        <p>Welcome, {employee.full_name}. For security, please create a new password before accessing the HR Workforce Portal.</p>
-        <div className="loginForm">
-          <label>
-            New password
-            <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Minimum 8 characters" />
-          </label>
-          <label>
-            Confirm password
-            <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} placeholder="Re-enter password" onKeyDown={(e) => e.key === "Enter" && onSubmit()} />
-          </label>
-          {error && <div className="loginError">{error}</div>}
-          <button className="primary wide" disabled={processing.active} onClick={onSubmit}>Save Password & Continue</button>
-          <button disabled={processing.active} onClick={onCancel}>Cancel</button>
-        </div>
-        <div className="loginNote">
-          <strong>Security note.</strong>
-          <span>Your temporary password will be replaced and your login date will be recorded.</span>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function ProcessingOverlay({ message }) {
-  return (
-    <div className="processingOverlay">
-      <div className="processingBox">
-        <span className="spinner" />
-        <strong>{message || "Saving..."}</strong>
-        <p>Please wait. This prevents duplicate submissions while the database updates.</p>
-      </div>
-    </div>
-  );
-}
-
-function NoticeToast({ title, message }) {
-  return (
-    <div className="noticeToast">
-      <strong>{title}</strong>
-      <span>{message}</span>
-    </div>
+    
   );
 }
 
@@ -2521,7 +1798,7 @@ function SearchBox({ value, onChange }) { return <div className="search"><Search
 function FormGrid({ children }) { return <div className="formGrid">{children}</div>; }
 function Badge({ children, muted, danger }) { return <span className={`badge ${muted ? "muted" : ""} ${danger ? "danger" : ""}`}>{children}</span>; }
 function Progress({ label, value, percent }) { return <div className="progress"><div><span>{label}</span><strong>{value}</strong></div><i><b style={{ width: `${Math.max(4, percent)}%` }} /></i></div>; }
-function Approval({ title, detail, approve, deny, disabled }) { return <div className="approval"><section><strong>{title}</strong><span>{detail}</span></section><div><button className="approve" disabled={disabled} onClick={approve}><CheckCircle size={18} /></button><button className="deny" disabled={disabled} onClick={deny}><XCircle size={18} /></button></div></div>; }
+function Approval({ title, detail, approve, deny }) { return <div className="approval"><section><strong>{title}</strong><span>{detail}</span></section><div><button className="approve" onClick={approve}><CheckCircle size={18} /></button><button className="deny" onClick={deny}><XCircle size={18} /></button></div></div>; }
 function ActivityList({ activities }) {
   if (!activities.length) return <p className="muted">No activity logged yet today.</p>;
   return (
@@ -2569,24 +1846,6 @@ body { margin: 0; background: #f7faf8; color: var(--dark); font-family: Inter, S
 .loginNote strong { color: var(--dark); }
 .loginSync { margin-top: 14px; background: #0d2018; }
 button, input, select { font: inherit; }
-button:disabled { opacity: .55; cursor: not-allowed; transform: none !important; box-shadow: none !important; }
-.processingOverlay { position: fixed; inset: 0; background: rgba(13,32,24,.42); z-index: 9999; display: grid; place-items: center; padding: 20px; backdrop-filter: blur(2px); }
-.processingBox { width: min(420px, 100%); background: white; border: 1px solid var(--border); border-radius: 24px; padding: 24px; text-align: center; box-shadow: 0 28px 80px rgba(0,0,0,.18); }
-.overrideBox { width: min(680px, 100%); background: white; border: 1px solid var(--border); border-radius: 24px; padding: 24px; box-shadow: 0 28px 80px rgba(0,0,0,.18); }
-.overrideBox > strong { display: block; font-size: 24px; color: #b45309; margin-bottom: 8px; }
-.overrideBox > p { margin: 0 0 14px; color: var(--muted); line-height: 1.55; }
-.overrideGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
-.overrideReason { display: grid; gap: 8px; color: var(--muted); font-size: 13px; font-weight: 800; }
-.overrideReason textarea { min-height: 90px; resize: vertical; border: 1px solid #d6e6de; border-radius: 14px; padding: 11px; font: inherit; }
-.overrideActions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
-.processingBox strong { display: block; font-size: 20px; margin-top: 12px; }
-.processingBox p { margin: 8px 0 0; color: var(--muted); line-height: 1.45; }
-.spinner { width: 42px; height: 42px; border: 4px solid #d9f3e7; border-top-color: var(--green); border-radius: 999px; display: inline-block; animation: spin .8s linear infinite; }
-.noticeToast { position: fixed; right: 24px; top: 24px; z-index: 10000; width: min(360px, calc(100vw - 32px)); background: #0d2018; color: white; border-radius: 18px; padding: 14px 16px; box-shadow: 0 18px 44px rgba(0,0,0,.18); display: grid; gap: 4px; }
-.noticeToast span { color: #bfe0d2; font-size: 13px; line-height: 1.4; }
-@keyframes spin { to { transform: rotate(360deg); } }
-.developerWatermark { position: fixed; right: 18px; bottom: 14px; z-index: 1200; background: rgba(13,32,24,.92); color: rgba(255,255,255,.88); border: 1px solid rgba(255,255,255,.08); border-radius: 999px; padding: 7px 12px; font-size: 11px; letter-spacing: .03em; box-shadow: 0 10px 24px rgba(0,0,0,.18); backdrop-filter: blur(6px); pointer-events: none; }
-@media (max-width: 640px) { .developerWatermark { font-size: 10px; right: 10px; bottom: 10px; padding: 6px 10px; } }
 .app { min-height: 100vh; display: grid; grid-template-columns: 280px minmax(0, 1fr); width: 100%; overflow-x: hidden; }
 .sidebar { background: #0d2018; color: white; padding: 22px; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 22px; }
 .logoWrap { display: flex; align-items: center; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,.12); }
@@ -2611,7 +1870,7 @@ button:hover, .btn:hover { transform: translateY(-1px); box-shadow: 0 10px 22px 
 .field span { color: var(--muted); font-size: 12px; font-weight: 800; }
 input, select { width: 100%; border: 1px solid #d6e6de; background: white; color: var(--dark); border-radius: 12px; padding: 10px 11px; outline: none; min-height: 42px; }
 input:focus, select:focus { border-color: var(--green); box-shadow: 0 0 0 4px rgba(4,120,87,.10); }
-.metrics { margin-top: 18px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; max-width: 100%; }
+.metrics { margin-top: 18px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; max-width: 100%; }
 .metric { background: white; border: 1px solid var(--border); border-radius: 22px; padding: 18px; display: flex; gap: 14px; align-items: center; box-shadow: 0 8px 22px rgba(0,0,0,.035); min-width: 0; overflow: hidden; }
 .metric > div { width: 46px; height: 46px; border-radius: 15px; background: #ecfdf5; color: var(--green); display: grid; place-items: center; }
 .metric span { color: var(--muted); font-size: 13px; }
@@ -2684,9 +1943,6 @@ td input, td select { min-width: 110px; }
 .rulesPage { margin-top: 18px; }
 .helperText { margin: 0 0 12px; color: var(--muted); line-height: 1.45; max-width: 100%; overflow-wrap: anywhere; }
 .inlineForm { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
-.bulkActions { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
-.errorPanel { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; border-radius: 16px; padding: 12px; margin: 12px 0; display: grid; gap: 6px; font-size: 13px; }
-.errorPanel strong { color: #7f1d1d; }
 .chipList { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .chip { display: inline-flex; align-items: center; gap: 8px; background: #ecfdf5; color: #047857; border-radius: 999px; padding: 7px 10px; font-size: 12px; font-weight: 800; }
 .chip button { width: 22px; height: 22px; border-radius: 999px; padding: 0; justify-content: center; color: #047857; }
@@ -2709,12 +1965,11 @@ td input, td select { min-width: 110px; }
 .reportCardHead strong { display: block; font-size: 22px; margin-top: 3px; }
 .reportMiniGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 8px; }
 .reportNote, .productivityHelp { margin-top: 16px; background: #f5fbf8; border: 1px solid var(--border); border-radius: 16px; padding: 14px; color: var(--muted); line-height: 1.5; }
-.archivePath { background: #0d2018; color: #bfe0d2; border-radius: 16px; padding: 14px; font-weight: 800; overflow-wrap: anywhere; margin: 12px 0; }
 .productivityHelp { margin: 0 0 16px; }
 .productivityHelp strong { display: block; color: var(--dark); margin-bottom: 6px; }
 .productivityHelp p { margin: 0; }
 @media (max-width: 1280px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .filterPanel { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 1120px) { .app { grid-template-columns: 1fr; } .sidebar { position: static; height: auto; } .sidebar nav { grid-template-columns: repeat(3, 1fr); } .syncBox { margin-top: 0; } .topbar, .reportHeader { flex-direction: column; align-items: stretch; } .actions { justify-content: flex-start; } .filterPanel { grid-template-columns: repeat(2, 1fr); } .agentHero { flex-direction: column; align-items: stretch; } .agentGrid, .reportGrid { grid-template-columns: 1fr; } .balanceGrid, .reportMiniGrid { grid-template-columns: repeat(2, 1fr); } .profileGrid, .requestPreview { grid-template-columns: repeat(2, 1fr); } .metrics, .grid.two, .grid.split, .grid.split.reverse { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .topbar, .agentHero, .reportHeader { padding: 16px; } .metrics { grid-template-columns: 1fr; } .filterPanel { grid-template-columns: 1fr; } .approval { grid-template-columns: 1fr; } .approval div { display: flex; gap: 8px; } .activityItem { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 640px) { main, .sidebar { padding: 14px; } .filterPanel, .metrics, .profileGrid, .requestPreview, .reportMiniGrid, .inlineForm, .describedField, .activityItem, .overrideGrid { grid-template-columns: 1fr; } .currentStatus, .agentActions, .balanceGrid { grid-template-columns: 1fr; } .sidebar nav { grid-template-columns: 1fr; } .employeeFooter { flex-direction: column; align-items: flex-start; } .search { min-width: 0; width: 100%; } .card header { flex-direction: column; align-items: stretch; } }
+@media (max-width: 640px) { main, .sidebar { padding: 14px; } .filterPanel, .metrics, .profileGrid, .requestPreview, .reportMiniGrid, .inlineForm, .describedField, .activityItem { grid-template-columns: 1fr; } .currentStatus, .agentActions, .balanceGrid { grid-template-columns: 1fr; } .sidebar nav { grid-template-columns: 1fr; } .employeeFooter { flex-direction: column; align-items: flex-start; } .search { min-width: 0; width: 100%; } .card header { flex-direction: column; align-items: stretch; } }
 `;
