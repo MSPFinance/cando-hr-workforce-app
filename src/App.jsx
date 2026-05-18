@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -25,16 +25,15 @@ const today = new Date().toISOString().slice(0, 10);
 const LOGO = "/cando-logo.png";
 
 // GOOGLE SHEETS LIVE DATABASE API
-// Production setup: keep this URL in .env / Vercel Environment Variables.
-// Local .env example: VITE_GOOGLE_API_URL=https://script.google.com/a/macros/goday.ca/s/AKfycbyPzt5bsGY9z_4stWszBX1MQTSmuNSIJit5KP_NtzWu5RmWUSfSPMmM7a9rKqojsKNy/exec
-const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
-
-// LOGIN + ROLE ACCESS
-// Production path: this uses the Employees database to identify the user and role.
-// For full enterprise security later, connect this to Google SSO or Supabase Auth.
-const DEFAULT_LOGIN_EMAIL = "agent1@goday.ca";
-const DEFAULT_LOGIN_PASSWORD = "Cando123!";
-const ADMIN_ACCESS_LEVELS = ["TL", "Manager", "HR", "Payroll", "Admin", "Executive"];
+// Option 1: paste your working Apps Script URL here.
+// Option 2: create .env and use VITE_GOOGLE_API_URL=your_url
+const GOOGLE_API_URL =
+  "https://script.google.com/a/macros/goday.ca/s/AKfycbyPzt5bsGY9z_4stWszBX1MQTSmuNSIJit5KP_NtzWu5RmWUSfSPMmM7a9rKqojsKNy/exec";
+// TEMP LOGIN SIMULATION FOR MVP.
+// Change CURRENT_USER_ACCESS_LEVEL to "Admin" to preview admin access.
+// Later this will come from Supabase Auth + employee profile.
+const CURRENT_USER_EMAIL = "agent1@goday.ca";
+const CURRENT_USER_ACCESS_LEVEL = "Employee"; // Employee, TL, Manager, HR, Payroll, Admin, Executive
 
 const lobSeed = ["GoDay", "Lending Creative"];
 const departmentSeed = ["Operations", "Customer Service", "Collections", "QA", "Training", "Compliance", "HR", "Payroll"];
@@ -274,37 +273,15 @@ const requestsSeed = [
   },
 ];
 
-function safeNumber(value, fallback = 0) {
-  const number = Number(value);
-  return Number.isFinite(number) ? number : fallback;
-}
-
-function timeToMinutes(value) {
-  const formatted = formatMilitaryTime(value);
-  if (!formatted || typeof formatted !== "string") return null;
-  const match = formatted.match(/^(\d{1,2}):(\d{2})$/);
-  if (!match) return null;
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return null;
-  return hours * 60 + minutes;
-}
-
 function minutesBetween(start, end) {
-  const startMinutes = timeToMinutes(start);
-  const endMinutes = timeToMinutes(end);
-  if (startMinutes === null || endMinutes === null) return 0;
-  const diff = endMinutes - startMinutes;
-  return Number.isFinite(diff) ? Math.max(0, diff) : 0;
-}
-
-function formatMinutes(minutes) {
-  return `${safeNumber(minutes, 0)} min`;
+  if (!start || !end) return 0;
+  const [sh, sm] = start.split(":").map(Number);
+  const [eh, em] = end.split(":").map(Number);
+  return Math.max(0, eh * 60 + em - (sh * 60 + sm));
 }
 
 function formatHours(minutes) {
-  const value = safeNumber(minutes, 0);
-  const hours = value / 60;
+  const hours = Number(minutes || 0) / 60;
   return `${hours.toFixed(hours % 1 === 0 ? 0 : 2)}h`;
 }
 
@@ -331,60 +308,10 @@ function tenure(hireDate) {
   return `${Math.floor(months / 12)}y ${months % 12}m`;
 }
 
-function formatMilitaryTime(value) {
-  if (!value) return "";
-
-  if (typeof value === "string" && /^[0-9]{2}:[0-9]{2}$/.test(value)) return value;
-  if (typeof value === "string" && /^[0-9]{2}:[0-9]{2}:[0-9]{2}$/.test(value)) return value.slice(0, 5);
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-
-  return date.toLocaleTimeString("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: "UTC",
-  });
-}
-
-function formatTimeRange(start, end) {
-  return `${formatMilitaryTime(start)} - ${formatMilitaryTime(end)}`;
-}
-
-function formatDateOnly(value) {
-  if (!value) return "";
-  if (typeof value === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value)) return value;
-
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return String(value);
-
-  return date.toISOString().slice(0, 10);
-}
-
-function requestDaysInclusive(startDate, endDate) {
-  if (!startDate || !endDate) return 0;
-  const start = new Date(`${startDate}T00:00:00`);
-  const end = new Date(`${endDate}T00:00:00`);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
-  return Math.max(1, Math.round((end - start) / 86400000) + 1);
-}
-
-function calculateRequestHours(request) {
-  const sameDay = request.start_date === request.end_date;
-  const manualHours = safeNumber(request.hours, 0);
-
-  // Same-day requests may be partial-hour requests, so use the field the agent entered.
-  if (sameDay) return manualHours;
-
-  // Multi-day requests calculate automatically as full scheduled days.
-  return requestDaysInclusive(request.start_date, request.end_date) * 8;
-}
-
 function getBalance(employee, type) {
-  if (type === "PTO") return safeNumber(employee.pto_balance, 0);
-  if (type === "Sick Leave") return safeNumber(employee.sick_balance, 0);
-  if (type === "VTO") return safeNumber(employee.vto_balance, 0);
+  if (type === "PTO") return Number(employee.pto_balance || 0);
+  if (type === "Sick Leave") return Number(employee.sick_balance || 0);
+  if (type === "VTO") return Number(employee.vto_balance || 0);
   return null;
 }
 
@@ -409,87 +336,11 @@ function cleanId(prefix) {
   return `${prefix}-${Date.now().toString().slice(-6)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
-function normalizeEmail(value) {
-  return String(value || "").trim().toLowerCase();
-}
-
-function hasAdminAccess(employee) {
-  return ADMIN_ACCESS_LEVELS.includes(employee?.access_level || employee?.role || "");
-}
-
-function buildGoogleUrl(params = {}) {
-  const base = String(GOOGLE_API_URL || "").trim();
-  const connector = base.includes("?") ? "&" : "?";
-  return `${base}${connector}${new URLSearchParams(params).toString()}`;
-}
-
-function googleJsonp(params = {}) {
-  return new Promise((resolve, reject) => {
-    if (!GOOGLE_API_URL) {
-      reject(new Error("Google API URL is missing."));
-      return;
-    }
-
-    const callbackName =
-      "candoHrCallback_" +
-      Date.now() +
-      "_" +
-      Math.floor(Math.random() * 100000);
-
-    window[callbackName] = (data) => {
-      clearTimeout(timeout);
-
-      delete window[callbackName];
-
-      if (script.parentNode) {
-        script.parentNode.removeChild(script);
-      }
-
-      resolve(data);
-    };
-
-    const script = document.createElement("script");
-
-    const separator = GOOGLE_API_URL.includes("?") ? "&" : "?";
-
-    const query = new URLSearchParams({
-      ...params,
-      callback: callbackName,
-    }).toString();
-
-    const timeout = setTimeout(() => {
-      delete window[callbackName];
-
-      if (script.parentNode) {
-        script.parentNode.removeChild(script);
-      }
-
-      reject(new Error("Google Sheets request timed out."));
-    }, 30000);
-
-    script.onerror = () => {
-      clearTimeout(timeout);
-
-      delete window[callbackName];
-
-      if (script.parentNode) {
-        script.parentNode.removeChild(script);
-      }
-
-      reject(new Error("Google Sheets JSONP request failed."));
-    };
-
-    script.src = `${GOOGLE_API_URL}${separator}${query}`;
-
-    document.body.appendChild(script);
-  });
-}
-
 async function googleGetDatabase() {
   if (!GOOGLE_API_URL || GOOGLE_API_URL.includes("PASTE_YOUR_WORKING")) return null;
   try {
-    const result = await googleJsonp({ action: "getAll" });
-    console.log("Google Sheets GET result:", result);
+    const response = await fetch(GOOGLE_API_URL);
+    const result = await response.json();
     return result?.success ? result.data : null;
   } catch (error) {
     console.error("Google Sheets GET error:", error);
@@ -504,16 +355,20 @@ async function googleAddRow(tab, data) {
   }
 
   try {
-    const result = await googleJsonp({
-      action: "addRow",
-      tab,
-      payload: JSON.stringify(data),
+    const response = await fetch(GOOGLE_API_URL, {
+      method: "POST",
+      body: JSON.stringify({
+        action: "addRow",
+        tab,
+        data,
+      }),
     });
 
+    const result = await response.json();
     console.log("Google Sheets addRow result:", result);
 
-    if (!result?.success) {
-      alert(`Google Sheets write failed: ${result?.message || "Unknown error"}`);
+    if (!result.success) {
+      alert(`Google Sheets write failed: ${result.message || "Unknown error"}`);
     }
 
     return result;
@@ -531,18 +386,22 @@ async function googleUpdateRow(tab, idColumn, idValue, data) {
   }
 
   try {
-    const result = await googleJsonp({
-      action: "updateRow",
-      tab,
-      idColumn,
-      idValue,
-      payload: JSON.stringify(data),
+    const response = await fetch(GOOGLE_API_URL, {
+      method: "POST",
+      body: JSON.stringify({
+        action: "updateRow",
+        tab,
+        idColumn,
+        idValue,
+        data,
+      }),
     });
 
+    const result = await response.json();
     console.log("Google Sheets updateRow result:", result);
 
-    if (!result?.success) {
-      alert(`Google Sheets update failed: ${result?.message || "Unknown error"}`);
+    if (!result.success) {
+      alert(`Google Sheets update failed: ${result.message || "Unknown error"}`);
     }
 
     return result;
@@ -560,17 +419,21 @@ async function googleDeleteRow(tab, idColumn, idValue) {
   }
 
   try {
-    const result = await googleJsonp({
-      action: "deleteRow",
-      tab,
-      idColumn,
-      idValue,
+    const response = await fetch(GOOGLE_API_URL, {
+      method: "POST",
+      body: JSON.stringify({
+        action: "deleteRow",
+        tab,
+        idColumn,
+        idValue,
+      }),
     });
 
+    const result = await response.json();
     console.log("Google Sheets deleteRow result:", result);
 
-    if (!result?.success) {
-      alert(`Google Sheets delete failed: ${result?.message || "Unknown error"}`);
+    if (!result.success) {
+      alert(`Google Sheets delete failed: ${result.message || "Unknown error"}`);
     }
 
     return result;
@@ -578,6 +441,26 @@ async function googleDeleteRow(tab, idColumn, idValue) {
     console.error("Google Sheets deleteRow error:", error);
     alert(`Google Sheets connection error: ${error.message}`);
     return null;
+  }
+}
+
+async function googleRunArchive(activeDays = 90) {
+  if (!GOOGLE_API_URL || GOOGLE_API_URL.includes("PASTE_YOUR_WORKING")) {
+    console.warn("Google API URL is missing. Archive cannot run in local demo mode.");
+    return { success: false, message: "Google API URL is missing. Archive cannot run in local demo mode." };
+  }
+
+  try {
+    const result = await googleJsonp({
+      action: "runArchive",
+      activeDays,
+    });
+
+    console.log("Google Sheets archive result:", result);
+    return result;
+  } catch (error) {
+    console.error("Google Sheets archive error:", error);
+    return { success: false, message: error.message };
   }
 }
 
@@ -605,13 +488,12 @@ function mapEmployeeFromSheet(row) {
     lunch_end: row.Lunch_End || "13:00",
     second_break_start: row.Break_2_Start || "15:00",
     second_break_end: row.Break_2_End || "15:15",
-    break_minutes: safeNumber(row.Break_Minutes, 30),
-    lunch_minutes: safeNumber(row.Lunch_Minutes, 60),
-    pto_balance: safeNumber(row.PTO_Balance, 0),
-    sick_balance: safeNumber(row.Sick_Balance, 0),
-    vto_balance: safeNumber(row.VTO_Balance, 0),
+    break_minutes: Number(row.Break_Minutes || 30),
+    lunch_minutes: Number(row.Lunch_Minutes || 60),
+    pto_balance: Number(row.PTO_Balance || 0),
+    sick_balance: Number(row.Sick_Balance || 0),
+    vto_balance: Number(row.VTO_Balance || 0),
     notes: row.Notes || "",
-    temp_password: row.Temp_Password || row.Auth_Password || DEFAULT_LOGIN_PASSWORD,
   };
 }
 
@@ -645,7 +527,6 @@ function mapEmployeeToSheet(employee) {
     Sick_Balance: employee.sick_balance,
     VTO_Balance: employee.vto_balance,
     Notes: employee.notes || "",
-    Temp_Password: employee.temp_password || "",
   };
 }
 
@@ -695,13 +576,13 @@ function mapRequestFromSheet(row) {
     type: row.Request_Type || "PTO",
     start_date: row.Start_Date || today,
     end_date: row.End_Date || today,
-    hours: safeNumber(row.Hours_Requested, 0),
+    hours: Number(row.Hours_Requested || 0),
     status: row.Status || "Pending",
     manager: row.Manager_Approval || "",
     current_balance: row.Current_Balance || "",
     projected_balance: row.Projected_Balance || "",
     reason: row.Reason || "",
-    requested_days: safeNumber(row.Hours_Requested, 0) / 8,
+    requested_days: Number(row.Hours_Requested || 0) / 8,
   };
 }
 
@@ -730,10 +611,10 @@ function mapRuleFromSheet(row) {
     department: row.Department || "Operations",
     shift_start: row.Shift_Start || "08:00",
     shift_end: row.Shift_End || "17:00",
-    max_pto_out: safeNumber(row.Max_PTO_Out, 0),
-    max_vto_out: safeNumber(row.Max_VTO_Out, 0),
-    max_sick_out: safeNumber(row.Max_Sick_Out, 0),
-    min_staff_required: safeNumber(row.Minimum_Staff_Required, 0),
+    max_pto_out: Number(row.Max_PTO_Out || 0),
+    max_vto_out: Number(row.Max_VTO_Out || 0),
+    max_sick_out: Number(row.Max_Sick_Out || 0),
+    min_staff_required: Number(row.Minimum_Staff_Required || 0),
     notes: row.Notes || "",
   };
 }
@@ -751,26 +632,6 @@ function mapRuleToSheet(rule) {
     Minimum_Staff_Required: rule.min_staff_required,
     Notes: rule.notes,
     Last_Updated: new Date(),
-  };
-}
-
-function mapApprovalToSheet(item) {
-  return {
-    Approval_ID: item.id || cleanId("APPROVAL"),
-    Employee_ID: item.employee_id || "",
-    Employee_Name: item.employee_name || "",
-    Approval_Type: item.approval_type || "",
-    Related_Record_ID: item.related_record_id || "",
-    Request_Type: item.request_type || "",
-    Decision: item.decision || "",
-    Previous_Status: item.previous_status || "Pending",
-    New_Status: item.new_status || item.decision || "",
-    Approved_By: item.approved_by || "System",
-    Approved_Date: item.approved_date || new Date(),
-    Hours: item.hours || "",
-    Current_Balance: item.current_balance ?? "",
-    Projected_Balance: item.projected_balance ?? "",
-    Notes: item.notes || "",
   };
 }
 
@@ -832,14 +693,19 @@ export default function App() {
     vto_balance: 0,
   });
   const [databaseStatus, setDatabaseStatus] = useState("Loading Google Sheets database...");
-  const [sessionUserEmail, setSessionUserEmail] = useState(localStorage.getItem("candoHrUserEmail") || "");
-  const [loginEmail, setLoginEmail] = useState(DEFAULT_LOGIN_EMAIL);
-  const [loginPassword, setLoginPassword] = useState("");
-  const [authError, setAuthError] = useState("");
+  const [processModal, setProcessModal] = useState({
+    show: false,
+    status: "idle",
+    title: "",
+    message: "",
+    details: "",
+  });
   const [toast, setToast] = useState(null);
+  const [archiveActiveDays, setArchiveActiveDays] = useState(90);
+  const [lastArchiveResult, setLastArchiveResult] = useState(null);
   const actionLockRef = useRef(new Set());
+  const modalTimerRef = useRef(null);
   const toastTimerRef = useRef(null);
-
 
   useEffect(() => {
     async function loadGoogleDatabase() {
@@ -876,34 +742,70 @@ export default function App() {
     toastTimerRef.current = setTimeout(() => setToast(null), 4200);
   }
 
+  function showProcessModal(status, title, message = "", details = "") {
+    if (modalTimerRef.current) clearTimeout(modalTimerRef.current);
+    setProcessModal({ show: true, status, title, message, details });
+
+    if (["success", "error", "warning"].includes(status)) {
+      modalTimerRef.current = setTimeout(() => {
+        setProcessModal({ show: false, status: "idle", title: "", message: "", details: "" });
+      }, 2800);
+    }
+  }
+
+  function closeProcessModal() {
+    if (modalTimerRef.current) clearTimeout(modalTimerRef.current);
+    setProcessModal({ show: false, status: "idle", title: "", message: "", details: "" });
+  }
+
   async function runProtectedAction(key, title, handler) {
     if (actionLockRef.current.has(key)) {
-      showToast("Duplicate click prevented", `${title} is already processing. Please wait a moment.`, "warning");
+      const message = `${title} is already processing. Please wait a moment.`;
+      showToast("Duplicate click prevented", message, "warning");
+      showProcessModal("warning", "Duplicate click prevented", message, "No duplicate data was submitted.");
       return null;
     }
 
     actionLockRef.current.add(key);
     showToast("Processing", `${title} is being saved. Please do not click again.`, "info");
+    showProcessModal(
+      "processing",
+      "Processing request",
+      `${title} is being checked and saved. Please do not click again.`,
+      "The system is checking for duplicate data and updating Google Sheets."
+    );
 
     try {
       const result = await handler();
-      if (result !== "silent") {
-        showToast("Saved successfully", `${title} was completed.`, "success");
+
+      if (result === "silent") {
+        showProcessModal("warning", "Duplicate prevented", `${title} was not saved because a matching record already exists.`, "No duplicate data was added.");
+        return result;
       }
+
+      if (result && result.success === false) {
+        const message = result.message || `${title} was not saved.`;
+        showToast("Not saved", message, "danger");
+        showProcessModal("error", "Not saved", message, "Please review the database connection or try again.");
+        return result;
+      }
+
+      showToast("Saved successfully", `${title} was completed.`, "success");
+      showProcessModal("success", "Saved successfully", `${title} was completed and saved correctly.`, "The database update finished successfully.");
       return result;
     } catch (error) {
       console.error(error);
-      showToast("Action failed", error?.message || "Please review the console or try again.", "danger");
+      const message = error?.message || "Please review the console or try again.";
+      showToast("Action failed", message, "danger");
+      showProcessModal("error", "Action failed", message, "The record was not saved.");
       return null;
     } finally {
       actionLockRef.current.delete(key);
     }
   }
 
-  const currentUser = employees.find((e) => normalizeEmail(e.email) === normalizeEmail(sessionUserEmail)) || employees.find((e) => normalizeEmail(e.email) === normalizeEmail(DEFAULT_LOGIN_EMAIL)) || employees[0];
-  const canAccessAdmin = hasAdminAccess(currentUser);
-  const isAuthenticated = Boolean(sessionUserEmail && currentUser);
-  const isAgentOnly = !adminMode || !canAccessAdmin;
+  const currentUser = employees.find((e) => e.email === CURRENT_USER_EMAIL) || employees[0];
+  const isAgentOnly = !adminMode && (CURRENT_USER_ACCESS_LEVEL === "Employee" || currentUser.access_level === "Employee");
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(currentUser.id);
   const selectedEmployee = isAgentOnly ? currentUser : employees.find((e) => e.id === selectedEmployeeId) || currentUser;
 
@@ -948,7 +850,7 @@ export default function App() {
   );
 
   const requestPreview = useMemo(() => {
-    const requestedHours = calculateRequestHours(newRequest);
+    const requestedHours = Number(newRequest.hours || 0);
     const requestedDays = requestedHours / 8;
     const currentBalance = getBalance(selectedEmployee, newRequest.type);
     return {
@@ -1006,7 +908,7 @@ export default function App() {
       const otMinutes = groupTime.filter((t) => t.category === "Overtime").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
       const pendingRequests = groupRequests.filter((r) => r.status === "Pending").length;
       const approvedRequests = groupRequests.filter((r) => r.status === "Approved").length;
-      const scheduledBreakLunch = groupEmployees.reduce((sum, e) => sum + safeNumber(e.break_minutes, 0) + safeNumber(e.lunch_minutes, 0), 0);
+      const scheduledBreakLunch = groupEmployees.reduce((sum, e) => sum + Number(e.break_minutes || 0) + Number(e.lunch_minutes || 0), 0);
       const adherenceRisk = breakMinutes > scheduledBreakLunch || pendingRequests > 0;
 
       groups.push({
@@ -1034,7 +936,7 @@ export default function App() {
       const workingMinutes = empTime.filter((t) => t.category === "Working").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
       const breakMinutes = empTime.filter((t) => ["Break", "Lunch", "Bathroom"].includes(t.category)).reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
       const otMinutes = empTime.filter((t) => t.category === "Overtime").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
-      const scheduledBreakLunch = safeNumber(e.break_minutes, 0) + safeNumber(e.lunch_minutes, 0);
+      const scheduledBreakLunch = Number(e.break_minutes || 0) + Number(e.lunch_minutes || 0);
       const lateMinutes = empTime.reduce((sum, t) => sum + Math.max(0, minutesBetween(t.scheduled_start, t.clock_in)), 0);
       const productivity = totalMinutes ? Math.round((workingMinutes / totalMinutes) * 100) : 0;
       return { ...e, totalMinutes, workingMinutes, breakMinutes, otMinutes, scheduledBreakLunch, lateMinutes, productivity, variance: breakMinutes - scheduledBreakLunch };
@@ -1078,6 +980,41 @@ export default function App() {
 
   function deleteDepartment(value) {
     setDepartments(departments.filter((department) => department !== value));
+  }
+
+  async function runArchiveBackup() {
+    if (isAgentOnly) return;
+
+    const activeDays = safeNumber(archiveActiveDays, 90);
+    const confirmed = window.confirm(
+      `Archive and backup records older than ${activeDays} days?\n\nThis will move eligible historical records to archive tabs and create CSV backup files in Google Drive. Active/current records will remain in the live database.`
+    );
+
+    if (!confirmed) return;
+
+    return runProtectedAction("archive-backup-run", "Archive backup", async () => {
+      const result = await googleRunArchive(activeDays);
+      setLastArchiveResult(result);
+
+      if (!result?.success) {
+        return {
+          success: false,
+          message: result?.message || "Archive backup did not complete.",
+        };
+      }
+
+      const database = await googleGetDatabase();
+      if (database) {
+        const sheetTime = (database.timeLogs || []).map(mapTimeFromSheet);
+        const sheetRequests = (database.requests || []).map(mapRequestFromSheet);
+        const sheetRules = (database.staffingRules || []).map(mapRuleFromSheet);
+        if (Array.isArray(database.timeLogs)) setTimeEntries(sheetTime);
+        if (Array.isArray(database.requests)) setRequests(sheetRequests);
+        if (sheetRules.length) setRules(sheetRules);
+      }
+
+      return result;
+    });
   }
 
   async function saveEmployee() {
@@ -1132,10 +1069,10 @@ User can now log into the Agent Portal.`
     const item = {
       ...newRule,
       id: `RULE-${Date.now().toString().slice(-6)}`,
-      max_pto_out: safeNumber(newRule.max_pto_out, 0),
-      max_vto_out: safeNumber(newRule.max_vto_out, 0),
-      max_sick_out: safeNumber(newRule.max_sick_out, 0),
-      min_staff_required: safeNumber(newRule.min_staff_required, 0),
+      max_pto_out: Number(newRule.max_pto_out || 0),
+      max_vto_out: Number(newRule.max_vto_out || 0),
+      max_sick_out: Number(newRule.max_sick_out || 0),
+      min_staff_required: Number(newRule.min_staff_required || 0),
     };
     setRules([item, ...rules]);
     googleAddRow("staffingRules", mapRuleToSheet(item));
@@ -1179,10 +1116,7 @@ User can now log into the Agent Portal.`
           entry.notes === action
       );
 
-      if (duplicate) {
-        showToast("Duplicate status log prevented", "This same status/action was already logged for this minute.", "warning");
-        return "silent";
-      }
+      if (duplicate) return "silent";
 
       const activity = {
         id: `ACT-${Date.now().toString().slice(-6)}`,
@@ -1195,6 +1129,7 @@ User can now log into the Agent Portal.`
         lob: selectedEmployee.lob,
         department: selectedEmployee.department,
       };
+
       const timeEntry = {
         id: `TIME-${Date.now().toString().slice(-6)}`,
         employee_id: selectedEmployee.id,
@@ -1212,15 +1147,20 @@ User can now log into the Agent Portal.`
         department: selectedEmployee.department,
         notes: action,
       };
+
       if (supabase) await supabase.from("time_entries").insert(timeEntry);
-      await googleAddRow("timeLogs", mapTimeToSheet(timeEntry));
+      const result = await googleAddRow("timeLogs", mapTimeToSheet(timeEntry));
+      if (result && result.success === false) return result;
+
       setActivityLog((current) => [activity, ...current]);
       setTimeEntries((current) => [timeEntry, ...current]);
+      return result || { success: true };
     });
   }
 
   async function saveTime() {
     if (isAgentOnly) return;
+
     const key = `manual-time-${selectedEmployee.id}-${newTime.category}-${newTime.category_start}-${newTime.category_end}`;
     return runProtectedAction(key, "Manual time entry", async () => {
       const duplicate = timeEntries.some(
@@ -1230,13 +1170,10 @@ User can now log into the Agent Portal.`
           entry.category === newTime.category &&
           entry.category_start === newTime.category_start &&
           entry.category_end === newTime.category_end &&
-          entry.notes === newTime.notes
+          String(entry.notes || "").trim() === String(newTime.notes || "").trim()
       );
 
-      if (duplicate) {
-        showToast("Duplicate time entry prevented", "This exact time entry already exists and was not added again.", "warning");
-        return "silent";
-      }
+      if (duplicate) return "silent";
 
       const item = {
         id: `TIME-${Date.now().toString().slice(-6)}`,
@@ -1252,14 +1189,19 @@ User can now log into the Agent Portal.`
         department: selectedEmployee.department,
         ...newTime,
       };
+
       if (supabase) await supabase.from("time_entries").insert(item);
-      await googleAddRow("timeLogs", mapTimeToSheet(item));
+      const result = await googleAddRow("timeLogs", mapTimeToSheet(item));
+      if (result && result.success === false) return result;
+
       setTimeEntries((current) => [item, ...current]);
+      return result || { success: true };
     });
   }
 
   async function saveRequest() {
     const key = `request-${selectedEmployee.id}-${newRequest.type}-${newRequest.start_date}-${newRequest.end_date}-${newRequest.hours}-${newRequest.reason}`;
+
     return runProtectedAction(key, "Request submission", async () => {
       const duplicate = requests.some(
         (request) =>
@@ -1271,10 +1213,7 @@ User can now log into the Agent Portal.`
           String(request.reason || "").trim() === String(newRequest.reason || "").trim()
       );
 
-      if (duplicate) {
-        showToast("Duplicate request prevented", "A matching pending request already exists and was not submitted again.", "warning");
-        return "silent";
-      }
+      if (duplicate) return "silent";
 
       const item = {
         id: `REQ-${Date.now().toString().slice(-6)}`,
@@ -1283,14 +1222,18 @@ User can now log into the Agent Portal.`
         manager: selectedEmployee.supervisor || selectedEmployee.manager,
         status: "Pending",
         ...newRequest,
-        hours: requestPreview.requestedHours,
+        hours: calculateRequestHours(newRequest),
         requested_days: requestPreview.requestedDays,
         current_balance: requestPreview.currentBalance,
         projected_balance: requestPreview.projectedBalance,
       };
+
       if (supabase) await supabase.from("time_off_requests").insert(item);
-      await googleAddRow("requests", mapRequestToSheet(item));
+      const result = await googleAddRow("requests", mapRequestToSheet(item));
+      if (result && result.success === false) return result;
+
       setRequests((current) => [item, ...current]);
+      return result || { success: true };
     });
   }
 
@@ -1301,78 +1244,72 @@ User can now log into the Agent Portal.`
     if (!request) return;
 
     const key = `request-approval-${id}-${status}`;
-    if (actionLockRef.current.has(key)) {
-      showToast("Duplicate approval prevented", `Request ${status} is already processing.`, "warning");
-      return;
-    }
-    if (request.status === status) {
-      showToast("Duplicate approval prevented", `This request is already marked as ${status}.`, "warning");
-      return;
-    }
-    actionLockRef.current.add(key);
+    return runProtectedAction(key, `Request ${status}`, async () => {
+      if (request.status === status) return "silent";
 
-    let updatedEmployees = employees;
-    let updatedEmployee = employees.find((e) => e.id === request.employee_id);
+      let updatedEmployees = employees;
+      let updatedEmployee = employees.find((e) => e.id === request.employee_id);
 
-    if (status === "Approved") {
-      const field = balanceField(request.type);
-      if (field) {
-        updatedEmployees = employees.map((e) => {
-          if (e.id !== request.employee_id) return e;
-          const newBalance = Math.max(0, safeNumber(e[field], 0) - safeNumber(request.hours, 0));
-          return { ...e, [field]: newBalance };
-        });
-        updatedEmployee = updatedEmployees.find((e) => e.id === request.employee_id);
+      if (status === "Approved") {
+        const field = balanceField(request.type);
+        if (field) {
+          updatedEmployees = employees.map((e) => {
+            if (e.id !== request.employee_id) return e;
+            const newBalance = Math.max(0, Number(e[field] || 0) - Number(request.hours || 0));
+            return { ...e, [field]: newBalance };
+          });
 
-        if (supabase && updatedEmployee) {
-          await supabase.from("employees").update({ [field]: updatedEmployee[field] }).eq("id", request.employee_id);
-        }
+          updatedEmployee = updatedEmployees.find((e) => e.id === request.employee_id);
 
-        if (updatedEmployee) {
-          await googleUpdateRow("employees", "Employee_ID", request.employee_id, mapEmployeeToSheet(updatedEmployee));
+          if (supabase && updatedEmployee) {
+            await supabase.from("employees").update({ [field]: updatedEmployee[field] }).eq("id", request.employee_id);
+          }
+
+          if (updatedEmployee) {
+            await googleUpdateRow("employees", "Employee_ID", request.employee_id, mapEmployeeToSheet(updatedEmployee));
+          }
         }
       }
-    }
 
-    const updatedRequest = {
-      ...request,
-      status,
-      manager: currentUser.email,
-      projected_balance:
-        status === "Approved" && updatedEmployee && balanceField(request.type)
-          ? updatedEmployee[balanceField(request.type)]
-          : request.projected_balance,
-    };
+      const updatedRequest = {
+        ...request,
+        status,
+        manager: currentUser.email,
+        projected_balance:
+          status === "Approved" && updatedEmployee && balanceField(request.type)
+            ? updatedEmployee[balanceField(request.type)]
+            : request.projected_balance,
+      };
 
-    if (supabase) await supabase.from("time_off_requests").update({ status }).eq("id", id);
+      if (supabase) await supabase.from("time_off_requests").update({ status }).eq("id", id);
+      const result = await googleUpdateRow("requests", "Request_ID", id, mapRequestToSheet(updatedRequest));
+      if (result && result.success === false) return result;
 
-    await googleUpdateRow("requests", "Request_ID", id, mapRequestToSheet(updatedRequest));
+      await googleAddRow(
+        "approvals",
+        mapApprovalToSheet({
+          id: cleanId("APPROVAL"),
+          employee_id: request.employee_id,
+          employee_name: request.employee_name,
+          approval_type: "Time Off / Request",
+          related_record_id: request.id,
+          request_type: request.type,
+          decision: status,
+          previous_status: request.status,
+          new_status: status,
+          approved_by: currentUser.email,
+          approved_date: new Date(),
+          hours: request.hours,
+          current_balance: request.current_balance,
+          projected_balance: updatedRequest.projected_balance,
+          notes: `Manager decision recorded for ${request.type}`,
+        })
+      );
 
-    await googleAddRow(
-      "approvals",
-      mapApprovalToSheet({
-        id: cleanId("APPROVAL"),
-        employee_id: request.employee_id,
-        employee_name: request.employee_name,
-        approval_type: "Time Off / Request",
-        related_record_id: request.id,
-        request_type: request.type,
-        decision: status,
-        previous_status: request.status,
-        new_status: status,
-        approved_by: currentUser.email,
-        approved_date: new Date(),
-        hours: request.hours,
-        current_balance: request.current_balance,
-        projected_balance: updatedRequest.projected_balance,
-        notes: `Manager decision recorded for ${request.type}`,
-      })
-    );
-
-    setEmployees(updatedEmployees);
-    setRequests((current) => current.map((r) => (r.id === id ? updatedRequest : r)));
-    actionLockRef.current.delete(key);
-    showToast("Approval saved", `Request marked as ${status}.`, "success");
+      setEmployees(updatedEmployees);
+      setRequests((current) => current.map((r) => (r.id === id ? updatedRequest : r)));
+      return result || { success: true };
+    });
   }
 
   async function setTimeStatus(id, approved) {
@@ -1382,48 +1319,41 @@ User can now log into the Agent Portal.`
     if (!timeEntry) return;
 
     const key = `time-approval-${id}-${approved}`;
-    if (actionLockRef.current.has(key)) {
-      showToast("Duplicate approval prevented", `Time status ${approved} is already processing.`, "warning");
-      return;
-    }
-    if (timeEntry.approved === approved) {
-      showToast("Duplicate approval prevented", `This time entry is already marked as ${approved}.`, "warning");
-      return;
-    }
-    actionLockRef.current.add(key);
+    return runProtectedAction(key, `Time entry ${approved}`, async () => {
+      if (timeEntry.approved === approved) return "silent";
 
-    const updatedTimeEntry = {
-      ...timeEntry,
-      approved,
-      approved_by: currentUser.email,
-    };
-
-    if (supabase) await supabase.from("time_entries").update({ approved }).eq("id", id);
-
-    await googleUpdateRow("timeLogs", "Log_ID", id, mapTimeToSheet(updatedTimeEntry));
-
-    await googleAddRow(
-      "approvals",
-      mapApprovalToSheet({
-        id: cleanId("APPROVAL"),
-        employee_id: timeEntry.employee_id,
-        employee_name: timeEntry.employee_name,
-        approval_type: "Time Log / Overtime / Disposition",
-        related_record_id: timeEntry.id,
-        request_type: timeEntry.category,
-        decision: approved,
-        previous_status: timeEntry.approved,
-        new_status: approved,
+      const updatedTimeEntry = {
+        ...timeEntry,
+        approved,
         approved_by: currentUser.email,
-        approved_date: new Date(),
-        hours: (minutesBetween(timeEntry.category_start, timeEntry.category_end) / 60).toFixed(2),
-        notes: `Manager decision recorded for ${timeEntry.category}`,
-      })
-    );
+      };
 
-    setTimeEntries((current) => current.map((t) => (t.id === id ? updatedTimeEntry : t)));
-    actionLockRef.current.delete(key);
-    showToast("Approval saved", `Time entry marked as ${approved}.`, "success");
+      if (supabase) await supabase.from("time_entries").update({ approved }).eq("id", id);
+      const result = await googleUpdateRow("timeLogs", "Log_ID", id, mapTimeToSheet(updatedTimeEntry));
+      if (result && result.success === false) return result;
+
+      await googleAddRow(
+        "approvals",
+        mapApprovalToSheet({
+          id: cleanId("APPROVAL"),
+          employee_id: timeEntry.employee_id,
+          employee_name: timeEntry.employee_name,
+          approval_type: "Time Log / Overtime / Disposition",
+          related_record_id: timeEntry.id,
+          request_type: timeEntry.category,
+          decision: approved,
+          previous_status: timeEntry.approved,
+          new_status: approved,
+          approved_by: currentUser.email,
+          approved_date: new Date(),
+          hours: (minutesBetween(timeEntry.category_start, timeEntry.category_end) / 60).toFixed(2),
+          notes: `Manager decision recorded for ${timeEntry.category}`,
+        })
+      );
+
+      setTimeEntries((current) => current.map((t) => (t.id === id ? updatedTimeEntry : t)));
+      return result || { success: true };
+    });
   }
 
   function importEmployees(event) {
@@ -1461,11 +1391,11 @@ User can now log into the Agent Portal.`
           lunch_end: r.Lunch_End || "13:00",
           second_break_start: r.Second_Break_Start || "15:00",
           second_break_end: r.Second_Break_End || "15:15",
-          lunch_minutes: safeNumber(r.Lunch_Minutes, 60),
-          break_minutes: safeNumber(r.Break_Minutes, 30),
-          pto_balance: safeNumber(r.PTO_Balance, 0),
-          sick_balance: safeNumber(r.Sick_Balance, 0),
-          vto_balance: safeNumber(r.VTO_Balance, 0),
+          lunch_minutes: Number(r.Lunch_Minutes || 60),
+          break_minutes: Number(r.Break_Minutes || 30),
+          pto_balance: Number(r.PTO_Balance || 0),
+          sick_balance: Number(r.Sick_Balance || 0),
+          vto_balance: Number(r.VTO_Balance || 0),
         };
       });
       if (supabase && imported.length) await supabase.from("employees").upsert(imported);
@@ -1504,35 +1434,6 @@ User can now log into the Agent Portal.`
     doc.save("cando-hr-report.pdf");
   }
 
-  function login() {
-    const employee = employees.find((e) => normalizeEmail(e.email) === normalizeEmail(loginEmail));
-    const expectedPassword = employee?.temp_password || DEFAULT_LOGIN_PASSWORD;
-
-    if (!employee) {
-      setAuthError("No active employee profile was found for this email. Please contact HR or your manager.");
-      return;
-    }
-
-    if (String(loginPassword || "") !== String(expectedPassword || "")) {
-      setAuthError("Invalid password. Please try again or request a reset from HR/Admin.");
-      return;
-    }
-
-    localStorage.setItem("candoHrUserEmail", employee.email);
-    setSessionUserEmail(employee.email);
-    setSelectedEmployeeId(employee.id);
-    setAdminMode(false);
-    setAuthError("");
-  }
-
-  function logout() {
-    localStorage.removeItem("candoHrUserEmail");
-    setSessionUserEmail("");
-    setLoginPassword("");
-    setAdminMode(false);
-    setTab("agent");
-  }
-
   const navItems = isAgentOnly
     ? [["agent", Clock]]
     : [
@@ -1545,27 +1446,15 @@ User can now log into the Agent Portal.`
         ["manager", CheckCircle],
         ["payroll", FileCheck],
         ["reporting", BarChart3],
+        ["archive", Database],
         ["rules", Settings],
       ];
-
-  if (!isAuthenticated) {
-    return (
-      <LoginScreen
-        logo={LOGO}
-        email={loginEmail}
-        password={loginPassword}
-        setEmail={setLoginEmail}
-        setPassword={setLoginPassword}
-        onLogin={login}
-        error={authError}
-        databaseStatus={databaseStatus}
-      />
-    );
-  }
 
   return (
     <div className="app">
       <style>{styles}</style>
+      {processModal.show && <ProcessingModal modal={processModal} onClose={closeProcessModal} />}
+      {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
 
       <aside className="sidebar">
         <div className="logoWrap">
@@ -1590,15 +1479,11 @@ User can now log into the Agent Portal.`
             <p>{isAgentOnly ? "Manage your shift, status/disposition, balances, and time-off requests." : "Time tracking, schedules, PTO/VTO, OT, payroll review, rules, and reporting."}</p>
           </div>
           {isAgentOnly && (
-            <div className="actions">
-              {canAccessAdmin && <button className="primary" onClick={() => setAdminMode(true)}>Admin / Manager Access</button>}
-              <button onClick={logout}>Logout</button>
-            </div>
+            <div className="actions"><button className="primary" onClick={() => setAdminMode(true)}>Admin / Manager Access</button></div>
           )}
           {!isAgentOnly && (
             <div className="actions">
               <button onClick={() => { setAdminMode(false); setTab("agent"); }}>Return to Agent View</button>
-              <button onClick={logout}>Logout</button>
               <label className="btn"><Upload size={16} /> Import CSV<input type="file" accept=".csv" onChange={importEmployees} /></label>
               <button onClick={exportTimeCsv}><Download size={16} /> Time CSV</button>
               <button onClick={exportRequestsCsv}><Download size={16} /> Requests CSV</button>
@@ -1636,8 +1521,8 @@ User can now log into the Agent Portal.`
               </div>
               <div className="agentShiftCard">
                 <span>Today’s Shift</span>
-                <strong>{formatTimeRange(selectedEmployee.shift_start, selectedEmployee.shift_end)}</strong>
-                <small>Break: {formatTimeRange(selectedEmployee.break_start, selectedEmployee.break_end)} · Lunch: {formatTimeRange(selectedEmployee.lunch_start, selectedEmployee.lunch_end)}</small>
+                <strong>{selectedEmployee.shift_start} - {selectedEmployee.shift_end}</strong>
+                <small>Break: {selectedEmployee.break_start}-{selectedEmployee.break_end} · Lunch: {selectedEmployee.lunch_start}-{selectedEmployee.lunch_end}</small>
               </div>
             </div>
 
@@ -1664,7 +1549,6 @@ User can now log into the Agent Portal.`
               </Card>
 
               <Card title="Submit my PTO / VTO / OT request">
-                <p className="helperText">For full-day or multi-day requests, select the start and end dates and the app calculates hours automatically at 8 hours per day. For same-day partial requests, enter the exact number of hours needed.</p>
                 <div className="requestPreview">
                   <Info label="Request Type" value={newRequest.type} />
                   <Info label="Requested" value={`${requestPreview.requestedHours}h / ${requestPreview.requestedDays.toFixed(1)} days`} />
@@ -1675,14 +1559,14 @@ User can now log into the Agent Portal.`
                   <select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change", "Overtime"].map((x) => <option key={x}>{x}</option>)}</select>
                   <input type="date" value={newRequest.start_date} onChange={(e) => setNewRequest({ ...newRequest, start_date: e.target.value })} />
                   <input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} />
-                  <input type="number" min="0" step="0.25" title="Hours are automatic for multi-day requests. For same-day partial requests, enter the exact hours needed." value={newRequest.start_date !== newRequest.end_date ? calculateRequestHours(newRequest) : newRequest.hours} disabled={newRequest.start_date !== newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} />
+                  <input type="number" value={newRequest.hours} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} />
                   <input placeholder="Reason or notes" value={newRequest.reason} onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })} />
                   <button className="primary wide" onClick={saveRequest}>Submit to Manager</button>
                 </FormGrid>
               </Card>
 
               <Card title="My activity today">
-                <ActivityList activities={visibleActivity} />
+                <Table headers={["Action", "Status", "Time", "Date"]} rows={visibleActivity.map((a) => [a.action, <Badge muted>{a.status}</Badge>, a.time, a.date])} />
               </Card>
             </div>
           </section>
@@ -1714,7 +1598,7 @@ User can now log into the Agent Portal.`
         {!isAgentOnly && tab === "employees" && (
           <section className="grid split">
             <Card title="Employee master database" action={<SearchBox value={search} onChange={setSearch} />}>
-              <Table headers={["Employee", "LOB", "Department", "Role", "Country", "Shift", "Status"]} rows={filteredEmployees.map((e) => [<button className="textBtn" onClick={() => setSelectedEmployeeId(e.id)}>{e.full_name}<small>{e.email}</small></button>, e.lob, e.department, e.role, e.country, formatTimeRange(e.shift_start, e.shift_end), <Badge>{e.employment_status}</Badge>])} />
+              <Table headers={["Employee", "LOB", "Department", "Role", "Country", "Shift", "Status"]} rows={filteredEmployees.map((e) => [<button className="textBtn" onClick={() => setSelectedEmployeeId(e.id)}>{e.full_name}<small>{e.email}</small></button>, e.lob, e.department, e.role, e.country, `${e.shift_start} - ${e.shift_end}`, <Badge>{e.employment_status}</Badge>])} />
             </Card>
             <Card title="Add employee">
               <FormGrid>
@@ -1758,32 +1642,26 @@ User can now log into the Agent Portal.`
         {!isAgentOnly && tab === "time" && (
           <section className="grid split reverse">
             <Card title="Log time category"><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newTime.category} onChange={(e) => setNewTime({ ...newTime, category: e.target.value })}>{timeCategories.map((x) => <option key={x}>{x}</option>)}</select><input type="time" value={newTime.category_start} onChange={(e) => setNewTime({ ...newTime, category_start: e.target.value })} /><input type="time" value={newTime.category_end} onChange={(e) => setNewTime({ ...newTime, category_end: e.target.value })} /><input placeholder="Notes" value={newTime.notes} onChange={(e) => setNewTime({ ...newTime, notes: e.target.value })} /><button className="primary wide" onClick={saveTime}>Add time entry</button></FormGrid></Card>
-            <Card title="Daily time utilization"><Table headers={["Employee", "Date", "LOB", "Category", "Time", "Duration", "Approval"]} rows={filteredTime.map((t) => [t.employee_name, t.date, t.lob, <Badge muted>{t.category}</Badge>, formatTimeRange(t.category_start, t.category_end), formatHours(minutesBetween(t.category_start, t.category_end)), t.approved])} /></Card>
+            <Card title="Daily time utilization"><Table headers={["Employee", "Date", "LOB", "Category", "Time", "Duration", "Approval"]} rows={filteredTime.map((t) => [t.employee_name, t.date, t.lob, <Badge muted>{t.category}</Badge>, `${t.category_start} - ${t.category_end}`, formatHours(minutesBetween(t.category_start, t.category_end)), t.approved])} /></Card>
           </section>
         )}
 
         {!isAgentOnly && tab === "requests" && (
           <section className="grid split reverse">
-            <Card title="Submit PTO / VTO / leave"><p className="helperText">For full-day or multi-day requests, select the start and end dates and the app calculates hours automatically at 8 hours per day. For same-day partial requests, enter the exact number of hours needed.</p><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change", "Overtime"].map((x) => <option key={x}>{x}</option>)}</select><input type="date" value={newRequest.start_date} onChange={(e) => setNewRequest({ ...newRequest, start_date: e.target.value })} /><input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} /><input type="number" min="0" step="0.25" title="Hours are automatic for multi-day requests. For same-day partial requests, enter the exact hours needed." value={newRequest.start_date !== newRequest.end_date ? calculateRequestHours(newRequest) : newRequest.hours} disabled={newRequest.start_date !== newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} /><input placeholder="Reason" value={newRequest.reason} onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })} /><button className="primary wide" onClick={saveRequest}>Submit request</button></FormGrid></Card>
+            <Card title="Submit PTO / VTO / leave"><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change", "Overtime"].map((x) => <option key={x}>{x}</option>)}</select><input type="date" value={newRequest.start_date} onChange={(e) => setNewRequest({ ...newRequest, start_date: e.target.value })} /><input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} /><input type="number" value={newRequest.hours} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} /><input placeholder="Reason" value={newRequest.reason} onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })} /><button className="primary wide" onClick={saveRequest}>Submit request</button></FormGrid></Card>
             <Card title="Request history"><Table headers={["Employee", "Type", "Dates", "Hours", "Days", "Current", "After", "Status"]} rows={filteredRequests.map((r) => [r.employee_name, r.type, `${r.start_date} to ${r.end_date}`, r.hours, Number(r.requested_days || r.hours / 8).toFixed(1), r.current_balance ?? "N/A", r.projected_balance ?? "N/A", <Badge>{r.status}</Badge>])} /></Card>
           </section>
         )}
 
         {!isAgentOnly && tab === "manager" && (
           <section className="grid two">
-            <Card title="Time-Off & Schedule Request Approvals">
-              <p className="helperText">Use this queue for requests submitted by employees, including PTO, VTO, Sick Leave, Paid Leave, Unpaid Leave, Schedule Change, and OT requests submitted as a formal request. Approval updates the Requests tab, creates an Approvals audit record, and deducts balances when applicable.</p>
-              {requests.filter((r) => r.status === "Pending").length ? requests.filter((r) => r.status === "Pending").map((r) => <Approval key={r.id} title={r.employee_name} detail={`${r.type} · ${formatDateOnly(r.start_date)} to ${formatDateOnly(r.end_date)} · ${r.hours}h / ${Number(r.requested_days || r.hours / 8).toFixed(1)} days · Current: ${r.current_balance ?? "N/A"}h · After: ${r.projected_balance ?? "N/A"}h`} approve={() => setRequestStatus(r.id, "Approved")} deny={() => setRequestStatus(r.id, "Denied")} />) : <p className="muted">No pending employee requests at this time.</p>}
-            </Card>
-            <Card title="Time Log & Overtime Exception Review">
-              <p className="helperText">Use this queue for time entries that require manager review, such as overtime logged from the agent portal, late/early shift exceptions, manual time corrections, or unusual dispositions. Approval updates the Time_Logs tab and creates an Approvals audit record.</p>
-              {timeEntries.filter((t) => t.approved === "Pending").length ? timeEntries.filter((t) => t.approved === "Pending").map((t) => <Approval key={t.id} title={t.employee_name} detail={`${t.category} · ${formatDateOnly(t.date)} · ${formatTimeRange(t.category_start, t.category_end)}`} approve={() => setTimeStatus(t.id, "Approved")} deny={() => setTimeStatus(t.id, "Denied")} />) : <p className="muted">No pending time or overtime exceptions at this time.</p>}
-            </Card>
+            <Card title="Pending leave and OT requests">{requests.filter((r) => r.status === "Pending").map((r) => <Approval key={r.id} title={r.employee_name} detail={`${r.type} · ${r.hours}h / ${Number(r.requested_days || r.hours / 8).toFixed(1)} days · Current: ${r.current_balance ?? "N/A"}h · After: ${r.projected_balance ?? "N/A"}h`} approve={() => setRequestStatus(r.id, "Approved")} deny={() => setRequestStatus(r.id, "Denied")} />)}</Card>
+            <Card title="Pending time and OT exceptions">{timeEntries.filter((t) => t.approved === "Pending").map((t) => <Approval key={t.id} title={t.employee_name} detail={`${t.category} · ${t.category_start}-${t.category_end}`} approve={() => setTimeStatus(t.id, "Approved")} deny={() => setTimeStatus(t.id, "Denied")} />)}</Card>
           </section>
         )}
 
         {!isAgentOnly && tab === "payroll" && (
-          <Card title="Payroll review"><Table headers={["Employee", "Scheduled", "Clock In/Out", "Late", "Worked", "OT", "Status"]} rows={filteredTime.map((t) => { const late = Math.max(0, minutesBetween(t.scheduled_start, t.clock_in)); const worked = minutesBetween(t.clock_in, t.clock_out); const ot = t.category === "Overtime" ? minutesBetween(t.category_start, t.category_end) : Math.max(0, minutesBetween(t.scheduled_end, t.clock_out)); return [t.employee_name, formatTimeRange(t.scheduled_start, t.scheduled_end), formatTimeRange(t.clock_in, t.clock_out), `${late} min`, formatHours(worked), formatHours(ot), <Badge danger={late > 0}>{late > 0 ? "Late" : "On Time"}</Badge>]; })} /></Card>
+          <Card title="Payroll review"><Table headers={["Employee", "Scheduled", "Clock In/Out", "Late", "Worked", "OT", "Status"]} rows={filteredTime.map((t) => { const late = Math.max(0, minutesBetween(t.scheduled_start, t.clock_in)); const worked = minutesBetween(t.clock_in, t.clock_out); const ot = t.category === "Overtime" ? minutesBetween(t.category_start, t.category_end) : Math.max(0, minutesBetween(t.scheduled_end, t.clock_out)); return [t.employee_name, `${t.scheduled_start} - ${t.scheduled_end}`, `${t.clock_in} - ${t.clock_out}`, `${late} min`, formatHours(worked), formatHours(ot), <Badge danger={late > 0}>{late > 0 ? "Late" : "On Time"}</Badge>]; })} /></Card>
         )}
 
         {!isAgentOnly && tab === "reporting" && (
@@ -1811,8 +1689,8 @@ User can now log into the Agent Portal.`
                   <div className="reportMiniGrid">
                     <Info label="Headcount" value={group.headcount} />
                     <Info label="Productivity" value={`${group.productivity}%`} />
-                    <Info label="Break/Lunch Used" value={formatMinutes(group.breakMinutes)} />
-                    <Info label="Scheduled Break/Lunch" value={formatMinutes(group.scheduledBreakLunch)} />
+                    <Info label="Break/Lunch Used" value={`${group.breakMinutes} min`} />
+                    <Info label="Scheduled Break/Lunch" value={`${group.scheduledBreakLunch} min`} />
                     <Info label="Overtime" value={formatHours(group.otMinutes)} />
                     <Info label="Pending Requests" value={group.pendingRequests} />
                   </div>
@@ -1826,7 +1704,7 @@ User can now log into the Agent Portal.`
               <Card title="Agent-level adherence detail">
                 <Table
                   headers={["Employee", "LOB", "Department", "Productivity", "Late", "Break Used", "Scheduled Break", "Variance", "OT"]}
-                  rows={agentReporting.map((e) => [e.full_name, e.lob, e.department, `${e.productivity}%`, formatMinutes(e.lateMinutes), formatMinutes(e.breakMinutes), formatMinutes(e.scheduledBreakLunch), <Badge danger={e.variance > 0} muted={e.variance <= 0}>{e.variance > 0 ? "+" : ""}{formatMinutes(e.variance)}</Badge>, formatHours(e.otMinutes)])}
+                  rows={agentReporting.map((e) => [e.full_name, e.lob, e.department, `${e.productivity}%`, `${e.lateMinutes} min`, `${e.breakMinutes} min`, `${e.scheduledBreakLunch} min`, <Badge danger={e.variance > 0} muted={e.variance <= 0}>{e.variance > 0 ? "+" : ""}{e.variance} min</Badge>, formatHours(e.otMinutes)])}
                 />
               </Card>
               <Card title="Category utilization summary">
@@ -1834,6 +1712,79 @@ User can now log into the Agent Portal.`
                 <div className="reportNote">Use this view to compare scheduled expectations against actual logged time by LOB, department, and agent. This helps review breaks, lunch, bathroom time, meetings, training, system issues, OT, and productivity.</div>
               </Card>
             </section>
+          </section>
+        )}
+
+        {!isAgentOnly && tab === "archive" && (
+          <section className="archivePage">
+            <div className="reportHeader">
+              <div>
+                <h2>Archive & Backup Center</h2>
+                <p>Move older operational records out of the live database and create CSV backups in Google Drive. This keeps Google Sheets faster while preserving historical audit records.</p>
+              </div>
+              <div className="reportControls">
+                <label className="field archiveDays">
+                  <span>Keep active data for</span>
+                  <input
+                    type="number"
+                    min="30"
+                    step="15"
+                    value={archiveActiveDays}
+                    onChange={(e) => setArchiveActiveDays(e.target.value)}
+                  />
+                </label>
+                <button className="primary" onClick={runArchiveBackup}>
+                  <Database size={16} /> Create Archive Backup
+                </button>
+              </div>
+            </div>
+
+            <section className="grid two">
+              <Card title="What this archive does">
+                <div className="archiveInfoGrid">
+                  <Info label="Live data kept" value={`${safeNumber(archiveActiveDays, 90)} days`} />
+                  <Info label="Backup location" value="Google Drive" />
+                  <Info label="Archive method" value="Move + CSV backup" />
+                  <Info label="Deletion" value="No permanent deletion" />
+                </div>
+                <div className="productivityHelp">
+                  <strong>How the archive protects the app</strong>
+                  <p>
+                    Records older than the selected retention window are moved from live operational tabs into archive tabs.
+                    A CSV backup is also created in Google Drive under CandoContact HR Archives. This helps prevent Google Sheets
+                    from becoming too heavy while keeping HR, payroll, and audit history available.
+                  </p>
+                </div>
+              </Card>
+
+              <Card title="Archive status">
+                {lastArchiveResult ? (
+                  <div className="archiveResult">
+                    <Info label="Status" value={lastArchiveResult.success ? "Completed" : "Failed"} />
+                    <Info label="Cutoff Date" value={lastArchiveResult.cutoffDate || "N/A"} />
+                    <Info label="Message" value={lastArchiveResult.message || "Archive finished."} />
+                    <Info label="Files Created" value={Array.isArray(lastArchiveResult.files) ? lastArchiveResult.files.length : 0} />
+                  </div>
+                ) : (
+                  <p className="muted">No archive backup has been run from this browser session yet.</p>
+                )}
+              </Card>
+            </section>
+
+            {lastArchiveResult?.files?.length ? (
+              <Card title="Last archive file summary">
+                <Table
+                  headers={["Source Tab", "Archive Tab", "Rows", "Status", "File"]}
+                  rows={lastArchiveResult.files.map((file) => [
+                    file.tab || "N/A",
+                    file.archiveTab || "N/A",
+                    file.rowsArchived ?? 0,
+                    <Badge danger={!String(file.status || "").toLowerCase().includes("archive") && safeNumber(file.rowsArchived, 0) === 0}>{file.status || "Completed"}</Badge>,
+                    file.fileUrl ? <a href={file.fileUrl} target="_blank" rel="noreferrer">Open backup</a> : "No file",
+                  ])}
+                />
+              </Card>
+            ) : null}
           </section>
         )}
 
@@ -1883,7 +1834,7 @@ User can now log into the Agent Portal.`
                   rows={rules.map((rule) => {
                     const usage = getRuleUsage(rule);
                     const exceeds = usage.pto > rule.max_pto_out || usage.vto > rule.max_vto_out || usage.sick > rule.max_sick_out || usage.available < rule.min_staff_required;
-                    return [rule.lob, rule.department, formatTimeRange(rule.shift_start, rule.shift_end), usage.scheduled, usage.out, usage.available, `PTO ${usage.pto}/${rule.max_pto_out} · VTO ${usage.vto}/${rule.max_vto_out} · Sick ${usage.sick}/${rule.max_sick_out} · Min ${rule.min_staff_required}`, <Badge danger={exceeds}>{exceeds ? "Risk" : "Within Rule"}</Badge>, <button onClick={() => deleteRule(rule.id)}>Delete</button>];
+                    return [rule.lob, rule.department, `${rule.shift_start}-${rule.shift_end}`, usage.scheduled, usage.out, usage.available, `PTO ${usage.pto}/${rule.max_pto_out} · VTO ${usage.vto}/${rule.max_vto_out} · Sick ${usage.sick}/${rule.max_sick_out} · Min ${rule.min_staff_required}`, <Badge danger={exceeds}>{exceeds ? "Risk" : "Within Rule"}</Badge>, <button onClick={() => deleteRule(rule.id)}>Delete</button>];
                   })}
                 />
               </Card>
@@ -1893,59 +1844,6 @@ User can now log into the Agent Portal.`
 
         
       </main>
-    </div>
-    
-  );
-}
-
-function LoginScreen({ logo, email, password, setEmail, setPassword, onLogin, error, databaseStatus }) {
-  return (
-    <div className="loginPage">
-      <style>{styles}</style>
-      <section className="loginCard">
-        <div className="loginBrand">
-          <img src={logo} alt="CandoContact" />
-          <div>
-            <strong>CandoContact</strong>
-            <span>HR Workforce Portal</span>
-          </div>
-        </div>
-        <h1>Sign in</h1>
-        <p>
-          Access your HR portal, time tracking, PTO/VTO/OT requests, approvals,
-          payroll review, and reporting according to your assigned role.
-        </p>
-        <div className="loginForm">
-          <label>
-            Email
-            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@goday.ca" />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Enter password"
-              onKeyDown={(e) => e.key === "Enter" && onLogin()}
-            />
-          </label>
-          {error && <div className="loginError">{error}</div>}
-          <button className="primary wide" onClick={onLogin}>Login</button>
-        </div>
-        <div className="loginNote">
-          <strong>Access is role-based.</strong>
-          <span>
-            Employees see only their own portal. TL, Manager, HR, Payroll, Admin,
-            and Executive users can access admin areas based on their profile.
-          </span>
-        </div>
-        <div className="syncBox loginSync">
-          <Database size={16} />
-          <span>{databaseStatus}</span>
-        </div>
-        <DeveloperMark />
-      </section>
     </div>
   );
 }
@@ -1961,12 +1859,37 @@ function DeveloperMark({ sidebar = false }) {
 function Toast({ toast, onClose }) {
   return (
     <div className={`toast ${toast.type || "success"}`}>
-      <div className="toastIcon">{toast.type === "danger" ? "!" : toast.type === "warning" ? "!" : "✓"}</div>
+      <div className="toastIcon">{toast.type === "danger" ? "!" : toast.type === "warning" ? "!" : toast.type === "info" ? "…" : "✓"}</div>
       <section>
         <strong>{toast.title}</strong>
         {toast.message && <span>{toast.message}</span>}
       </section>
       <button type="button" onClick={onClose}>×</button>
+    </div>
+  );
+}
+
+function ProcessingModal({ modal, onClose }) {
+  const isProcessing = modal.status === "processing";
+  const isSuccess = modal.status === "success";
+  const isError = modal.status === "error";
+  const isWarning = modal.status === "warning";
+
+  return (
+    <div className="processOverlay" role="alert" aria-live="assertive">
+      <div className={`processModal ${modal.status}`}>
+        <div className="processIcon">
+          {isProcessing ? <span className="spinner" /> : isSuccess ? "✓" : isError ? "!" : isWarning ? "!" : "•"}
+        </div>
+        <h2>{modal.title || "Processing"}</h2>
+        <p>{modal.message || "Please wait while the system updates the database."}</p>
+        {modal.details && <small>{modal.details}</small>}
+        {!isProcessing && (
+          <button type="button" className="primary" onClick={onClose}>
+            Close
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -1982,55 +1905,14 @@ function FormGrid({ children }) { return <div className="formGrid">{children}</d
 function Badge({ children, muted, danger }) { return <span className={`badge ${muted ? "muted" : ""} ${danger ? "danger" : ""}`}>{children}</span>; }
 function Progress({ label, value, percent }) { return <div className="progress"><div><span>{label}</span><strong>{value}</strong></div><i><b style={{ width: `${Math.max(4, percent)}%` }} /></i></div>; }
 function Approval({ title, detail, approve, deny }) { return <div className="approval"><section><strong>{title}</strong><span>{detail}</span></section><div><button className="approve" onClick={approve}><CheckCircle size={18} /></button><button className="deny" onClick={deny}><XCircle size={18} /></button></div></div>; }
-function ActivityList({ activities }) {
-  if (!activities.length) return <p className="muted">No activity logged yet today.</p>;
-  return (
-    <div className="activityList">
-      {activities.map((a) => (
-        <div className="activityItem" key={a.id}>
-          <div>
-            <span>Action</span>
-            <strong>{a.action}</strong>
-          </div>
-          <div>
-            <span>Status</span>
-            <Badge muted>{a.status}</Badge>
-          </div>
-          <div>
-            <span>Time</span>
-            <strong>{formatMilitaryTime(a.time)}</strong>
-          </div>
-          <div>
-            <span>Date</span>
-            <strong>{formatDateOnly(a.date)}</strong>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 const styles = `
 * { box-sizing: border-box; }
-:root { --green: #047857; --dark: #10251c; --deep: #062e23; --soft: #f4faf7; --border: #dfeee7; --muted: #64756d; }
-html, body, #root { min-height: 100%; }\nbody { margin: 0; background: #f7faf8; color: var(--dark); font-family: Inter, Segoe UI, Roboto, Arial, sans-serif; }
-.loginPage { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at top left, #e8fff3, #f7faf8 42%, #ffffff); }
-.loginCard { width: min(520px, 100%); background: white; border: 1px solid var(--border); border-radius: 28px; padding: 28px; box-shadow: 0 28px 80px rgba(4,120,87,.14); overflow: hidden; }
-.loginBrand { display: flex; align-items: center; gap: 12px; margin-bottom: 22px; }
-.loginBrand img { width: 52px; height: 52px; max-width: 52px; max-height: 52px; object-fit: contain; border: 1px solid var(--border); border-radius: 14px; padding: 6px; background: white; flex: 0 0 52px; }
-.loginBrand strong { display: block; font-size: 18px; }
-.loginBrand span { display: block; color: var(--muted); font-size: 13px; margin-top: 2px; }
-.loginCard h1 { margin: 0; font-size: 38px; }
-.loginCard p { color: var(--muted); line-height: 1.55; margin: 10px 0 20px; }
-.loginForm { display: grid; gap: 12px; }
-.loginForm label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; font-weight: 800; }
-.loginError { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; border-radius: 14px; padding: 10px 12px; font-size: 13px; }
-.loginNote { margin-top: 16px; background: #f5fbf8; border: 1px solid var(--border); border-radius: 16px; padding: 14px; display: grid; gap: 5px; color: var(--muted); line-height: 1.45; }
-.loginNote strong { color: var(--dark); }
-.loginSync { margin-top: 14px; background: #0d2018; }
+:root { --green: #047857; --dark: #10251c; --soft: #f4faf7; --border: #dfeee7; --muted: #64756d; }
+body { margin: 0; background: #f7faf8; color: var(--dark); font-family: Inter, Segoe UI, Roboto, Arial, sans-serif; }
 button, input, select { font: inherit; }
-.app { min-height: 100vh; display: grid; grid-template-columns: 280px minmax(0, 1fr); width: 100%; overflow-x: hidden; align-items: stretch; }
-.sidebar { background: linear-gradient(180deg, #063b2c 0%, #062e23 58%, #041c16 100%); color: white; padding: 22px; position: sticky; top: 0; min-height: 100vh; height: 100%; display: flex; flex-direction: column; gap: 22px; box-shadow: 18px 0 45px rgba(4, 37, 29, .12); }
+.app { min-height: 100vh; display: grid; grid-template-columns: 280px 1fr; }
+.sidebar { background: #0d2018; color: white; padding: 22px; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 22px; }
 .logoWrap { display: flex; align-items: center; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,.12); }
 .logoWrap img { width: 46px; height: 46px; object-fit: contain; border-radius: 12px; background: white; padding: 5px; flex: 0 0 auto; }
 .logoWrap strong { display: block; font-size: 16px; }
@@ -2039,8 +1921,8 @@ button, input, select { font: inherit; }
 .sidebar nav button { width: 100%; border: 0; background: transparent; color: #cce0d6; border-radius: 14px; padding: 12px; display: flex; align-items: center; gap: 10px; text-transform: capitalize; cursor: pointer; }
 .sidebar nav button:hover, .sidebar nav button.active { background: #123d2c; color: white; }
 .syncBox { margin-top: auto; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12); border-radius: 16px; padding: 12px; display: flex; align-items: center; gap: 8px; color: #bfe0d2; font-size: 13px; }
-main { padding: 26px 28px 18px; min-width: 0; width: 100%; overflow-x: hidden; }
-.topbar { background: linear-gradient(135deg, white, #edf8f2); border: 1px solid var(--border); border-radius: 26px; padding: 22px; display: flex; justify-content: space-between; gap: 18px; align-items: center; box-shadow: 0 18px 40px rgba(4,120,87,.08); max-width: 100%; overflow: hidden; }
+main { padding: 24px; min-width: 0; }
+.topbar { background: linear-gradient(135deg, white, #edf8f2); border: 1px solid var(--border); border-radius: 26px; padding: 22px; display: flex; justify-content: space-between; gap: 18px; align-items: center; box-shadow: 0 18px 40px rgba(4,120,87,.08); }
 h1 { margin: 0; font-size: clamp(28px, 3vw, 42px); letter-spacing: -1px; }
 .topbar p { margin: 8px 0 0; color: var(--muted); }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
@@ -2048,13 +1930,13 @@ button, .btn { border: 1px solid var(--border); background: white; color: var(--
 button:hover, .btn:hover { transform: translateY(-1px); box-shadow: 0 10px 22px rgba(0,0,0,.08); }
 .primary { background: var(--green); color: white; border-color: var(--green); }
 .btn input { display: none; }
-.filterPanel { margin-top: 18px; background: white; border: 1px solid var(--border); border-radius: 22px; padding: 16px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; max-width: 100%; overflow: hidden; }
+.filterPanel { margin-top: 18px; background: white; border: 1px solid var(--border); border-radius: 22px; padding: 16px; display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
 .field { display: grid; gap: 6px; }
 .field span { color: var(--muted); font-size: 12px; font-weight: 800; }
 input, select { width: 100%; border: 1px solid #d6e6de; background: white; color: var(--dark); border-radius: 12px; padding: 10px 11px; outline: none; min-height: 42px; }
 input:focus, select:focus { border-color: var(--green); box-shadow: 0 0 0 4px rgba(4,120,87,.10); }
-.metrics { margin-top: 18px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 14px; max-width: 100%; }
-.metric { background: white; border: 1px solid var(--border); border-radius: 22px; padding: 18px; display: flex; gap: 14px; align-items: center; box-shadow: 0 8px 22px rgba(0,0,0,.035); min-width: 0; overflow: hidden; }
+.metrics { margin-top: 18px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; }
+.metric { background: white; border: 1px solid var(--border); border-radius: 22px; padding: 18px; display: flex; gap: 14px; align-items: center; box-shadow: 0 8px 22px rgba(0,0,0,.035); }
 .metric > div { width: 46px; height: 46px; border-radius: 15px; background: #ecfdf5; color: var(--green); display: grid; place-items: center; }
 .metric span { color: var(--muted); font-size: 13px; }
 .metric strong { display: block; font-size: 30px; line-height: 1.05; margin: 4px 0; }
@@ -2062,16 +1944,16 @@ input:focus, select:focus { border-color: var(--green); box-shadow: 0 0 0 4px rg
 .grid { margin-top: 18px; display: grid; gap: 18px; }
 .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid.split { grid-template-columns: minmax(0, 2fr) 380px; }
-.grid.split.reverse { grid-template-columns: minmax(320px, 420px) minmax(0, 2fr); }
-.card { background: white; border: 1px solid var(--border); border-radius: 24px; padding: 18px; min-width: 0; max-width: 100%; overflow: hidden; box-shadow: 0 8px 22px rgba(0,0,0,.035); }
+.grid.split.reverse { grid-template-columns: 380px minmax(0, 2fr); }
+.card { background: white; border: 1px solid var(--border); border-radius: 24px; padding: 18px; min-width: 0; box-shadow: 0 8px 22px rgba(0,0,0,.035); }
 .card header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
 .card h2 { margin: 0; font-size: 20px; letter-spacing: -.2px; }
 .search { display: flex; align-items: center; gap: 8px; border: 1px solid #d6e6de; border-radius: 13px; padding-left: 10px; min-width: 250px; color: var(--muted); }
 .search input { border: 0; box-shadow: none; }
-.table { border: 1px solid #e6f0eb; border-radius: 16px; overflow: auto; max-width: 100%; }
-table { width: 100%; min-width: 860px; border-collapse: collapse; background: white; table-layout: auto; }
-th { background: #f3faf6; color: #64756d; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; text-align: left; padding: 14px 12px; position: sticky; top: 0; z-index: 1; }
-td { padding: 14px 12px; border-top: 1px solid #edf4f0; vertical-align: middle; max-width: 320px; overflow-wrap: break-word; word-break: normal; line-height: 1.45; }
+.table { border: 1px solid #e6f0eb; border-radius: 16px; overflow: auto; }
+table { width: 100%; min-width: 760px; border-collapse: collapse; background: white; }
+th { background: #f3faf6; color: #64756d; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; text-align: left; padding: 12px; }
+td { padding: 12px; border-top: 1px solid #edf4f0; vertical-align: middle; }
 td input, td select { min-width: 110px; }
 .textBtn { padding: 0; border: 0; box-shadow: none; background: transparent; display: block; text-align: left; color: #064e3b; }
 .textBtn small { display: block; color: #7b8b84; margin-top: 3px; }
@@ -2085,15 +1967,10 @@ td input, td select { min-width: 110px; }
 .progress i { display: block; height: 12px; background: #edf7f1; border-radius: 999px; overflow: hidden; }
 .progress b { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #58d68d, #047857); }
 .muted { color: var(--muted); }
-.approval { border: 1px solid #e6f0eb; border-radius: 18px; padding: 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 10px; max-width: 100%; overflow: hidden; }
+.approval { border: 1px solid #e6f0eb; border-radius: 18px; padding: 14px; display: flex; justify-content: space-between; gap: 10px; align-items: center; margin-bottom: 10px; }
 .approval strong { display: block; }
-.approval span { color: var(--muted); font-size: 13px; display: block; margin-top: 3px; line-height: 1.45; overflow-wrap: anywhere; }
+.approval span { color: var(--muted); font-size: 13px; display: block; margin-top: 3px; }
 .approval button { width: 38px; height: 38px; padding: 0; justify-content: center; }
-.activityList { display: grid; gap: 10px; max-width: 100%; overflow: hidden; }
-.activityItem { display: grid; grid-template-columns: minmax(160px, 1.4fr) minmax(120px, .9fr) minmax(80px, .6fr) minmax(110px, .8fr); gap: 10px; align-items: center; border: 1px solid #e6f0eb; border-radius: 16px; padding: 12px; background: #ffffff; max-width: 100%; }
-.activityItem div { min-width: 0; }
-.activityItem span { display: block; color: var(--muted); font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 4px; }
-.activityItem strong { display: block; font-size: 14px; overflow-wrap: anywhere; }
 .approve { color: #047857; }
 .deny { color: #b91c1c; }
 .employeeFooter { margin-top: 18px; background: white; border: 1px solid var(--border); border-radius: 22px; padding: 16px; display: flex; justify-content: space-between; align-items: center; gap: 14px; }
@@ -2101,30 +1978,30 @@ td input, td select { min-width: 110px; }
 .employeeFooter strong { display: block; font-size: 18px; margin: 4px 0; }
 .employeeFooter p { margin: 0; color: var(--muted); }
 .agentPortal { margin-top: 18px; }
-.agentHero { background: linear-gradient(135deg, #ffffff, #eafaf2); border: 1px solid var(--border); border-radius: 26px; padding: 22px; display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; box-shadow: 0 18px 40px rgba(4,120,87,.08); max-width: 100%; overflow: hidden; }
+.agentHero { background: linear-gradient(135deg, #ffffff, #eafaf2); border: 1px solid var(--border); border-radius: 26px; padding: 22px; display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; box-shadow: 0 18px 40px rgba(4,120,87,.08); }
 .agentHero span { color: var(--green); font-weight: 900; text-transform: uppercase; letter-spacing: .08em; font-size: 12px; }
 .agentHero h2 { margin: 4px 0; font-size: clamp(26px, 3vw, 38px); }
 .agentHero p { margin: 0; color: var(--muted); }
-.profileGrid, .requestPreview { margin-top: 16px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; max-width: 100%; }
+.profileGrid, .requestPreview { margin-top: 16px; display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 10px; }
 .info { background: white; border: 1px solid var(--border); border-radius: 16px; padding: 11px 12px; }
 .info span { display: block; color: var(--muted); font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .05em; }
 .info strong { display: block; color: var(--dark); font-size: 14px; margin-top: 4px; }
 .agentShiftCard { background: white; border: 1px solid var(--border); border-radius: 20px; padding: 16px; min-width: 260px; }
 .agentShiftCard strong { display: block; font-size: 24px; margin: 4px 0; }
 .agentShiftCard small { color: var(--muted); display: block; line-height: 1.5; }
-.agentGrid { margin-top: 18px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; max-width: 100%; }
+.agentGrid { margin-top: 18px; display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
 .agentActions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .currentStatus { margin-top: 14px; display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: end; }
 .currentStatus label { display: grid; gap: 6px; }
 .currentStatus span { color: var(--muted); font-size: 12px; font-weight: 800; }
-.balanceGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.balanceGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
 .balanceGrid div { background: #f5fbf8; border: 1px solid var(--border); border-radius: 18px; padding: 14px; }
 .balanceGrid span { display: block; color: var(--muted); font-size: 12px; font-weight: 800; }
 .balanceGrid strong { display: block; margin-top: 4px; font-size: 22px; }
 .schedulePage { margin-top: 18px; }
 .miniTimes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; min-width: 190px; }
-.rulesPage { margin-top: 18px; }\n.rulesPage .grid.split.reverse { grid-template-columns: minmax(320px, 430px) minmax(0, 1fr); align-items: start; }\n.rulesPage .table table { min-width: 980px; }
-.helperText { margin: 0 0 12px; color: var(--muted); line-height: 1.45; max-width: 100%; overflow-wrap: anywhere; }
+.rulesPage { margin-top: 18px; }
+.helperText { margin: 0 0 12px; color: var(--muted); line-height: 1.45; }
 .inlineForm { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
 .chipList { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .chip { display: inline-flex; align-items: center; gap: 8px; background: #ecfdf5; color: #047857; border-radius: 999px; padding: 7px 10px; font-size: 12px; font-weight: 800; }
@@ -2141,8 +2018,8 @@ td input, td select { min-width: 110px; }
 .reportHeader h2 { margin: 0; font-size: 26px; }
 .reportHeader p { margin: 6px 0 0; color: var(--muted); }
 .reportControls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.reportGrid { margin-top: 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 18px; max-width: 100%; }
-.reportCard { background: white; border: 1px solid var(--border); border-radius: 24px; padding: 18px; box-shadow: 0 8px 22px rgba(0,0,0,.035); min-width: 0; max-width: 100%; overflow: hidden; }
+.reportGrid { margin-top: 18px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.reportCard { background: white; border: 1px solid var(--border); border-radius: 24px; padding: 18px; box-shadow: 0 8px 22px rgba(0,0,0,.035); }
 .reportCardHead { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 12px; }
 .reportCardHead span { display: block; color: var(--muted); font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .05em; }
 .reportCardHead strong { display: block; font-size: 22px; margin-top: 3px; }
@@ -2151,21 +2028,6 @@ td input, td select { min-width: 110px; }
 .productivityHelp { margin: 0 0 16px; }
 .productivityHelp strong { display: block; color: var(--dark); margin-bottom: 6px; }
 .productivityHelp p { margin: 0; }
-
-.developerMark { color: #7b8b84; font-size: 11px; text-align: center; margin: 18px 0 0; letter-spacing: .02em; }
-.sidebarMark { color: rgba(255,255,255,.62); border-top: 1px solid rgba(255,255,255,.12); padding-top: 14px; margin-top: 0; }
-.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 9999; min-width: min(460px, calc(100vw - 32px)); max-width: 560px; background: #064e3b; color: white; border: 1px solid rgba(255,255,255,.14); border-radius: 16px; box-shadow: 0 24px 70px rgba(4, 78, 59, .35); display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 14px 16px; }
-.toast.info { background: #0f5132; }
-.toast.warning { background: #92400e; }
-.toast.danger { background: #991b1b; }
-.toastIcon { width: 34px; height: 34px; border-radius: 999px; background: rgba(255,255,255,.16); display: grid; place-items: center; font-weight: 900; }
-.toast section { min-width: 0; }
-.toast strong { display: block; font-size: 14px; }
-.toast span { display: block; margin-top: 3px; font-size: 12px; opacity: .9; line-height: 1.35; }
-.toast button { color: white; background: transparent; border: 0; box-shadow: none; padding: 6px; font-size: 22px; line-height: 1; }
-
-@media (max-width: 1280px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .filterPanel { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 1120px) { .app { grid-template-columns: 1fr; } .sidebar { position: static; min-height: auto; height: auto; } .sidebar nav { grid-template-columns: repeat(3, 1fr); } .syncBox { margin-top: 0; } .topbar, .reportHeader { flex-direction: column; align-items: stretch; } .actions { justify-content: flex-start; } .filterPanel { grid-template-columns: repeat(2, 1fr); } .agentHero { flex-direction: column; align-items: stretch; } .agentGrid, .reportGrid { grid-template-columns: 1fr; } .balanceGrid, .reportMiniGrid { grid-template-columns: repeat(2, 1fr); } .profileGrid, .requestPreview { grid-template-columns: repeat(2, 1fr); } .metrics, .grid.two, .grid.split, .grid.split.reverse { grid-template-columns: 1fr; } }
-@media (max-width: 760px) { .topbar, .agentHero, .reportHeader { padding: 16px; } .metrics { grid-template-columns: 1fr; } .filterPanel { grid-template-columns: 1fr; } .approval { grid-template-columns: 1fr; } .approval div { display: flex; gap: 8px; } .activityItem { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 640px) { main, .sidebar { padding: 14px; } .filterPanel, .metrics, .profileGrid, .requestPreview, .reportMiniGrid, .inlineForm, .describedField, .activityItem { grid-template-columns: 1fr; } .currentStatus, .agentActions, .balanceGrid { grid-template-columns: 1fr; } .sidebar nav { grid-template-columns: 1fr; } .employeeFooter { flex-direction: column; align-items: flex-start; } .search { min-width: 0; width: 100%; } .card header { flex-direction: column; align-items: stretch; } }
+@media (max-width: 1120px) { .app { grid-template-columns: 1fr; } .sidebar { position: static; height: auto; } .sidebar nav { grid-template-columns: repeat(3, 1fr); } .syncBox { margin-top: 0; } .topbar, .reportHeader { flex-direction: column; align-items: stretch; } .actions { justify-content: flex-start; } .filterPanel { grid-template-columns: repeat(2, 1fr); } .agentHero { flex-direction: column; align-items: stretch; } .agentGrid, .reportGrid { grid-template-columns: 1fr; } .balanceGrid, .reportMiniGrid { grid-template-columns: repeat(2, 1fr); } .profileGrid, .requestPreview { grid-template-columns: repeat(2, 1fr); } .metrics, .grid.two, .grid.split, .grid.split.reverse { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { main, .sidebar { padding: 14px; } .filterPanel, .metrics, .profileGrid, .requestPreview, .reportMiniGrid, .inlineForm, .describedField { grid-template-columns: 1fr; } .currentStatus, .agentActions, .balanceGrid { grid-template-columns: 1fr; } .sidebar nav { grid-template-columns: 1fr; } .employeeFooter { flex-direction: column; align-items: flex-start; } .search { min-width: 0; width: 100%; } .card header { flex-direction: column; align-items: stretch; } }
 `;
