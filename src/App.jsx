@@ -27,7 +27,8 @@ const LOGO = "/cando-logo.png";
 // GOOGLE SHEETS LIVE DATABASE API
 // Production setup: keep this URL in .env / Vercel Environment Variables.
 // Local .env example: VITE_GOOGLE_API_URL=https://script.google.com/a/macros/goday.ca/s/AKfycbyPzt5bsGY9z_4stWszBX1MQTSmuNSIJit5KP_NtzWu5RmWUSfSPMmM7a9rKqojsKNy/exec
-const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
+const GOOGLE_API_URL =
+  "https://script.google.com/a/macros/goday.ca/s/AKfycbyPzt5bsGY9z_4stWszBX1MQTSmuNSIJit5KP_NtzWu5RmWUSfSPMmM7a9rKqojsKNy/exec";
 
 // LOGIN + ROLE ACCESS
 // Production path: this uses the Employees database to identify the user and role.
