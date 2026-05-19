@@ -25,8 +25,6 @@ const today = new Date().toISOString().slice(0, 10);
 const LOGO = "/cando-logo.png";
 
 // GOOGLE SHEETS LIVE DATABASE API
-// Production setup: keep this URL in .env / Vercel Environment Variables.
-// Local .env example: VITE_GOOGLE_API_URL=https://script.google.com/a/macros/goday.ca/s/AKfycbyPzt5bsGY9z_4stWszBX1MQTSmuNSIJit5KP_NtzWu5RmWUSfSPMmM7a9rKqojsKNy/exec
 const GOOGLE_API_URL =
   "https://script.google.com/a/macros/goday.ca/s/AKfycbyPzt5bsGY9z_4stWszBX1MQTSmuNSIJit5KP_NtzWu5RmWUSfSPMmM7a9rKqojsKNy/exec";
 
@@ -489,8 +487,7 @@ function googleJsonp(params = {}) {
 async function googleGetDatabase() {
   if (!GOOGLE_API_URL || GOOGLE_API_URL.includes("PASTE_YOUR_WORKING")) return null;
   try {
-    const response = await fetch("/api/google?action=getAll");
-const result = await response.json();
+    const result = await googleJsonp({ action: "getAll" });
     console.log("Google Sheets GET result:", result);
     return result?.success ? result.data : null;
   } catch (error) {
@@ -1895,8 +1892,9 @@ User can now log into the Agent Portal.`
 
         
       </main>
+
+      {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
     </div>
-    
   );
 }
 
