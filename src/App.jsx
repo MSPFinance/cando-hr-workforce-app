@@ -489,7 +489,8 @@ function googleJsonp(params = {}) {
 async function googleGetDatabase() {
   if (!GOOGLE_API_URL || GOOGLE_API_URL.includes("PASTE_YOUR_WORKING")) return null;
   try {
-    const result = await googleJsonp({ action: "getAll" });
+    const response = await fetch("/api/google?action=getAll");
+const result = await response.json();
     console.log("Google Sheets GET result:", result);
     return result?.success ? result.data : null;
   } catch (error) {
