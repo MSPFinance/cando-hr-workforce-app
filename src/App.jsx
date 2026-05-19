@@ -24,15 +24,27 @@ const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPAB
 const today = new Date().toISOString().slice(0, 10);
 const LOGO = "/cando-logo.png";
 
-// GOOGLE SHEETS LIVE DATABASE API
-const GOOGLE_API_URL =
-  "https://script.google.com/a/macros/goday.ca/s/AKfycbyPzt5bsGY9z_4stWszBX1MQTSmuNSIJit5KP_NtzWu5RmWUSfSPMmM7a9rKqojsKNy/exec";
+// DEMO MODE CONFIGURATION
+// For demo/testing purposes this is intentionally blank so the app uses the built-in demo users below.
+// When you are ready to reconnect live Google Sheets, replace "" with your working /exec Apps Script URL.
+const GOOGLE_API_URL = "";
+
 // LOGIN + ROLE ACCESS
 // Production path: this uses the Employees database to identify the user and role.
 // For full enterprise security later, connect this to Google SSO or Supabase Auth.
 const DEFAULT_LOGIN_EMAIL = "agent1@goday.ca";
 const DEFAULT_LOGIN_PASSWORD = "Cando123!";
 const ADMIN_ACCESS_LEVELS = ["TL", "Manager", "HR", "Payroll", "Admin", "Executive"];
+
+const DEMO_ACCOUNTS = [
+  { label: "Agent", email: "agent1@goday.ca", password: "Cando123!", access: "Employee portal only" },
+  { label: "Team Lead", email: "tl@goday.ca", password: "Cando123!", access: "Team lead / admin access" },
+  { label: "Manager", email: "manager@goday.ca", password: "Cando123!", access: "Approvals, reporting, rules" },
+  { label: "HR", email: "hr@goday.ca", password: "Cando123!", access: "Employee records and HR review" },
+  { label: "Payroll", email: "payroll@goday.ca", password: "Cando123!", access: "Payroll review and exceptions" },
+  { label: "Admin", email: "admin@goday.ca", password: "Cando123!", access: "Full admin access" },
+  { label: "Executive", email: "executive@goday.ca", password: "Cando123!", access: "Executive reporting view" },
+];
 
 const lobSeed = ["GoDay", "Lending Creative"];
 const departmentSeed = ["Operations", "Customer Service", "Collections", "QA", "Training", "Compliance", "HR", "Payroll"];
@@ -66,6 +78,7 @@ const employeesSeed = [
     pto_balance: 40,
     sick_balance: 16,
     vto_balance: 0,
+    temp_password: "Cando123!",
   },
   {
     id: "EMP-002",
@@ -95,6 +108,7 @@ const employeesSeed = [
     pto_balance: 80,
     sick_balance: 24,
     vto_balance: 0,
+    temp_password: "Cando123!",
   },
   {
     id: "EMP-003",
@@ -124,6 +138,157 @@ const employeesSeed = [
     pto_balance: 56,
     sick_balance: 24,
     vto_balance: 0,
+    temp_password: "Cando123!",
+  },
+  {
+    id: "EMP-004",
+    full_name: "Sample Manager",
+    email: "manager@goday.ca",
+    country: "Canada",
+    department: "Operations",
+    lob: "GoDay",
+    role: "Manager",
+    access_level: "Manager",
+    supervisor: "Director of Operations",
+    manager: "Executive Team",
+    hire_date: "2021-05-03",
+    birthday: "1988-04-15",
+    employment_status: "Active",
+    employment_type: "Full-Time",
+    shift_start: "08:00",
+    shift_end: "17:00",
+    break_start: "10:00",
+    break_end: "10:15",
+    lunch_start: "12:00",
+    lunch_end: "13:00",
+    second_break_start: "15:00",
+    second_break_end: "15:15",
+    lunch_minutes: 60,
+    break_minutes: 30,
+    pto_balance: 96,
+    sick_balance: 32,
+    vto_balance: 0,
+    temp_password: "Cando123!",
+  },
+  {
+    id: "EMP-005",
+    full_name: "Sample HR",
+    email: "hr@goday.ca",
+    country: "Costa Rica",
+    department: "HR",
+    lob: "GoDay",
+    role: "HR",
+    access_level: "HR",
+    supervisor: "Executive Team",
+    manager: "Executive Team",
+    hire_date: "2020-02-10",
+    birthday: "1987-09-18",
+    employment_status: "Active",
+    employment_type: "Full-Time",
+    shift_start: "08:00",
+    shift_end: "17:00",
+    break_start: "10:00",
+    break_end: "10:15",
+    lunch_start: "12:00",
+    lunch_end: "13:00",
+    second_break_start: "15:00",
+    second_break_end: "15:15",
+    lunch_minutes: 60,
+    break_minutes: 30,
+    pto_balance: 120,
+    sick_balance: 40,
+    vto_balance: 0,
+    temp_password: "Cando123!",
+  },
+  {
+    id: "EMP-006",
+    full_name: "Sample Payroll",
+    email: "payroll@goday.ca",
+    country: "Canada",
+    department: "Payroll",
+    lob: "Lending Creative",
+    role: "Payroll",
+    access_level: "Payroll",
+    supervisor: "Finance Manager",
+    manager: "Executive Team",
+    hire_date: "2019-07-22",
+    birthday: "1985-12-05",
+    employment_status: "Active",
+    employment_type: "Full-Time",
+    shift_start: "09:00",
+    shift_end: "18:00",
+    break_start: "11:00",
+    break_end: "11:15",
+    lunch_start: "13:00",
+    lunch_end: "14:00",
+    second_break_start: "16:00",
+    second_break_end: "16:15",
+    lunch_minutes: 60,
+    break_minutes: 30,
+    pto_balance: 88,
+    sick_balance: 24,
+    vto_balance: 0,
+    temp_password: "Cando123!",
+  },
+  {
+    id: "EMP-007",
+    full_name: "System Admin",
+    email: "admin@goday.ca",
+    country: "Costa Rica",
+    department: "Compliance",
+    lob: "GoDay",
+    role: "Admin",
+    access_level: "Admin",
+    supervisor: "Executive Team",
+    manager: "Executive Team",
+    hire_date: "2018-01-08",
+    birthday: "1984-03-30",
+    employment_status: "Active",
+    employment_type: "Full-Time",
+    shift_start: "08:00",
+    shift_end: "17:00",
+    break_start: "10:00",
+    break_end: "10:15",
+    lunch_start: "12:00",
+    lunch_end: "13:00",
+    second_break_start: "15:00",
+    second_break_end: "15:15",
+    lunch_minutes: 60,
+    break_minutes: 30,
+    pto_balance: 120,
+    sick_balance: 40,
+    vto_balance: 0,
+    temp_password: "Cando123!",
+  },
+  {
+    id: "EMP-008",
+    full_name: "Executive User",
+    email: "executive@goday.ca",
+    country: "Canada",
+    department: "Executive",
+    lob: "Lending Creative",
+    role: "Executive",
+    access_level: "Executive",
+    supervisor: "Board",
+    manager: "Board",
+    hire_date: "2017-11-01",
+    birthday: "1980-01-22",
+    employment_status: "Active",
+    employment_type: "Full-Time",
+    shift_start: "09:00",
+    shift_end: "18:00",
+    break_start: "11:00",
+    break_end: "11:15",
+    lunch_start: "13:00",
+    lunch_end: "14:00",
+    second_break_start: "16:00",
+    second_break_end: "16:15",
+    lunch_minutes: 60,
+    break_minutes: 30,
+    pto_balance: 160,
+    sick_balance: 40,
+    vto_balance: 0,
+    temp_password: "Cando123!",
   },
 ];
 
@@ -487,6 +652,7 @@ async function googleGetDatabase() {
   if (!GOOGLE_API_URL || GOOGLE_API_URL.includes("PASTE_YOUR_WORKING")) return null;
   try {
     const result = await googleJsonp({ action: "getAll" });
+
     console.log("Google Sheets GET result:", result);
     return result?.success ? result.data : null;
   } catch (error) {
@@ -829,7 +995,7 @@ export default function App() {
     sick_balance: 0,
     vto_balance: 0,
   });
-  const [databaseStatus, setDatabaseStatus] = useState("Loading Google Sheets database...");
+  const [databaseStatus, setDatabaseStatus] = useState("Demo mode active. Using built-in demo users and sample HR data.");
   const [sessionUserEmail, setSessionUserEmail] = useState(localStorage.getItem("candoHrUserEmail") || "");
   const [loginEmail, setLoginEmail] = useState(DEFAULT_LOGIN_EMAIL);
   const [loginPassword, setLoginPassword] = useState("");
@@ -844,7 +1010,7 @@ export default function App() {
       const database = await googleGetDatabase();
 
       if (!database) {
-        setDatabaseStatus("Local demo mode. Add your working Google Apps Script URL to enable live sync.");
+        setDatabaseStatus("Demo mode active. Using built-in demo users and sample HR data.");
         return;
       }
 
@@ -1557,6 +1723,7 @@ User can now log into the Agent Portal.`
         onLogin={login}
         error={authError}
         databaseStatus={databaseStatus}
+        demoAccounts={DEMO_ACCOUNTS}
       />
     );
   }
@@ -1891,13 +2058,12 @@ User can now log into the Agent Portal.`
 
         
       </main>
-
-      {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
     </div>
+    
   );
 }
 
-function LoginScreen({ logo, email, password, setEmail, setPassword, onLogin, error, databaseStatus }) {
+function LoginScreen({ logo, email, password, setEmail, setPassword, onLogin, error, databaseStatus, demoAccounts = [] }) {
   return (
     <div className="loginPage">
       <style>{styles}</style>
@@ -1938,6 +2104,26 @@ function LoginScreen({ logo, email, password, setEmail, setPassword, onLogin, er
             Employees see only their own portal. TL, Manager, HR, Payroll, Admin,
             and Executive users can access admin areas based on their profile.
           </span>
+        </div>
+        <div className="demoAccounts">
+          <strong>Demo accounts for testing</strong>
+          <span className="demoHint">Use password <b>Cando123!</b> for all demo users.</span>
+          <div>
+            {demoAccounts.map((account) => (
+              <button
+                key={account.email}
+                type="button"
+                onClick={() => {
+                  setEmail(account.email);
+                  setPassword(account.password);
+                }}
+              >
+                <b>{account.label}</b>
+                <small>{account.email}</small>
+                <em>{account.access}</em>
+              </button>
+            ))}
+          </div>
         </div>
         <div className="syncBox loginSync">
           <Database size={16} />
@@ -2026,6 +2212,14 @@ html, body, #root { min-height: 100%; }\nbody { margin: 0; background: #f7faf8; 
 .loginError { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; border-radius: 14px; padding: 10px 12px; font-size: 13px; }
 .loginNote { margin-top: 16px; background: #f5fbf8; border: 1px solid var(--border); border-radius: 16px; padding: 14px; display: grid; gap: 5px; color: var(--muted); line-height: 1.45; }
 .loginNote strong { color: var(--dark); }
+.demoAccounts { margin-top: 16px; background: #ffffff; border: 1px solid var(--border); border-radius: 16px; padding: 14px; display: grid; gap: 8px; }
+.demoAccounts > strong { color: var(--dark); font-size: 14px; }
+.demoHint { color: var(--muted); font-size: 12px; }
+.demoAccounts > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.demoAccounts button { text-align: left; display: grid; gap: 2px; align-items: start; padding: 9px 10px; border-radius: 12px; background: #f8fcfa; }
+.demoAccounts button b { font-size: 12px; color: var(--dark); }
+.demoAccounts button small { color: #047857; font-size: 11px; overflow-wrap: anywhere; }
+.demoAccounts button em { color: var(--muted); font-size: 10px; font-style: normal; line-height: 1.25; }
 .loginSync { margin-top: 14px; background: #0d2018; }
 button, input, select { font: inherit; }
 .app { min-height: 100vh; display: grid; grid-template-columns: 280px minmax(0, 1fr); width: 100%; overflow-x: hidden; align-items: stretch; }
@@ -2166,5 +2360,5 @@ td input, td select { min-width: 110px; }
 @media (max-width: 1280px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .filterPanel { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 1120px) { .app { grid-template-columns: 1fr; } .sidebar { position: static; min-height: auto; height: auto; } .sidebar nav { grid-template-columns: repeat(3, 1fr); } .syncBox { margin-top: 0; } .topbar, .reportHeader { flex-direction: column; align-items: stretch; } .actions { justify-content: flex-start; } .filterPanel { grid-template-columns: repeat(2, 1fr); } .agentHero { flex-direction: column; align-items: stretch; } .agentGrid, .reportGrid { grid-template-columns: 1fr; } .balanceGrid, .reportMiniGrid { grid-template-columns: repeat(2, 1fr); } .profileGrid, .requestPreview { grid-template-columns: repeat(2, 1fr); } .metrics, .grid.two, .grid.split, .grid.split.reverse { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .topbar, .agentHero, .reportHeader { padding: 16px; } .metrics { grid-template-columns: 1fr; } .filterPanel { grid-template-columns: 1fr; } .approval { grid-template-columns: 1fr; } .approval div { display: flex; gap: 8px; } .activityItem { grid-template-columns: 1fr 1fr; } }
-@media (max-width: 640px) { main, .sidebar { padding: 14px; } .filterPanel, .metrics, .profileGrid, .requestPreview, .reportMiniGrid, .inlineForm, .describedField, .activityItem { grid-template-columns: 1fr; } .currentStatus, .agentActions, .balanceGrid { grid-template-columns: 1fr; } .sidebar nav { grid-template-columns: 1fr; } .employeeFooter { flex-direction: column; align-items: flex-start; } .search { min-width: 0; width: 100%; } .card header { flex-direction: column; align-items: stretch; } }
+@media (max-width: 640px) { .demoAccounts > div { grid-template-columns: 1fr; } main, .sidebar { padding: 14px; } .filterPanel, .metrics, .profileGrid, .requestPreview, .reportMiniGrid, .inlineForm, .describedField, .activityItem { grid-template-columns: 1fr; } .currentStatus, .agentActions, .balanceGrid { grid-template-columns: 1fr; } .sidebar nav { grid-template-columns: 1fr; } .employeeFooter { flex-direction: column; align-items: flex-start; } .search { min-width: 0; width: 100%; } .card header { flex-direction: column; align-items: stretch; } }
 `;
