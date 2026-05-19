@@ -26,7 +26,7 @@ const LOGO = "/cando-logo.png";
 
 // GOOGLE SHEETS LIVE DATABASE API
 const GOOGLE_API_URL =
-  "https://script.google.com/a/macros/goday.ca/s/AKfycbyPzt5bsGY9z_4stWszBX1MQTSmuNSIJit5KP_NtzWu5RmWUSfSPMmM7a9rKqojsKNy/exec";
+  "https://script.google.com/macros/s/AKfycbx8EWS51BrOXpEmUmTIYWEpLHRPZxfEhH1OUAXBAru5CtjsiTEGknl6SDuF--wnf_M6Fw/exec";
 
 // LOGIN + ROLE ACCESS
 // Production path: this uses the Employees database to identify the user and role.
