@@ -352,6 +352,8 @@ const timeCategories = [
   "VTO",
   "Other",
   "Overtime",
+  "Early Unscheduled",
+  "Off-Day Unscheduled",
 ];
 
 const timeSeed = [
@@ -618,6 +620,63 @@ function todayDayName() {
 function isTodayOffDay(employee) {
   const todayName = todayDayName().toLowerCase();
   return normalizeOffDays(employee?.off_days).some((day) => day.toLowerCase() === todayName);
+}
+
+function getAutoWorkClassification(employee, currentTime) {
+  if (!employee) {
+    return { category: "Working", approval: "Auto Logged", payableStatus: "Regular", locked: false, reason: "No employee selected" };
+  }
+
+  const nowMinutes = timeToMinutes(currentTime);
+  const shiftStart = timeToMinutes(employee.shift_start);
+  const shiftEnd = timeToMinutes(employee.shift_end);
+
+  if (isTodayOffDay(employee)) {
+    return {
+      category: "Off-Day Unscheduled",
+      approval: "Pending Approval",
+      payableStatus: "Pending Manager Approval",
+      locked: true,
+      reason: "Employee is scheduled off today",
+    };
+  }
+
+  if (nowMinutes !== null && shiftStart !== null && nowMinutes < shiftStart) {
+    return {
+      category: "Early Unscheduled",
+      approval: "Pending Approval",
+      payableStatus: "Pending Manager Approval",
+      locked: true,
+      reason: "Employee started before scheduled shift",
+    };
+  }
+
+  if (nowMinutes !== null && shiftEnd !== null && nowMinutes > shiftEnd) {
+    return {
+      category: "Overtime",
+      approval: "Pending",
+      payableStatus: "Pending Manager Approval",
+      locked: false,
+      reason: "Auto overtime after scheduled shift end",
+    };
+  }
+
+  return { category: "Working", approval: "Auto Logged", payableStatus: "Regular", locked: false, reason: "Within scheduled shift" };
+}
+
+function shouldSplitAutoOvertime(employee, endTime) {
+  if (!employee || isTodayOffDay(employee)) return false;
+  const endMinutes = timeToMinutes(endTime);
+  const shiftEnd = timeToMinutes(employee.shift_end);
+  return endMinutes !== null && shiftEnd !== null && endMinutes > shiftEnd;
+}
+
+function getShiftStartOrNow(employee, time) {
+  if (!employee) return time;
+  const nowMinutes = timeToMinutes(time);
+  const shiftStart = timeToMinutes(employee.shift_start);
+  if (nowMinutes !== null && shiftStart !== null && nowMinutes < shiftStart) return time;
+  return employee.shift_start || time;
 }
 
 function getTodayShiftSummary(employee) {
@@ -905,6 +964,9 @@ function mapTimeFromSheet(row) {
     category_start: row.Category_Start || "08:00",
     category_end: row.Category_End || "08:00",
     approved: row.Approved || "Pending",
+    payable_status: row.Payable_Status || "",
+    locked: String(row.Locked || "").toLowerCase() === "true",
+    auto_rule: row.Auto_Rule || "",
     notes: row.Notes || "",
     scheduled_start: row.Scheduled_Start || row.Shift_Start || "08:00",
     scheduled_end: row.Scheduled_End || row.Shift_End || "17:00",
@@ -928,6 +990,9 @@ function mapTimeToSheet(item) {
     Duration_Minutes: minutesBetween(item.category_start, item.category_end),
     Approved: item.approved,
     Approved_By: item.approved_by || "",
+    Payable_Status: item.payable_status || "",
+    Locked: item.locked ? "TRUE" : "FALSE",
+    Auto_Rule: item.auto_rule || "",
     Notes: item.notes,
   };
 }
@@ -1485,16 +1550,33 @@ User can now log into the Agent Portal.`
   }
 
   async function agentAction(action, status = agentStatus) {
-    const key = `agent-action-${selectedEmployee.id}-${action}-${status}`;
-    return runProtectedAction(key, action, async () => {
-      const now = new Date();
-      const time = now.toTimeString().slice(0, 5);
+    const now = new Date();
+    const time = now.toTimeString().slice(0, 5);
+    const autoClass = getAutoWorkClassification(selectedEmployee, time);
 
+    const resolvedStatus =
+      action === "Shift Ended" && shouldSplitAutoOvertime(selectedEmployee, time)
+        ? "Overtime"
+        : action === "Shift Started" || action === "Status Changed"
+          ? autoClass.category === "Working" ? status : autoClass.category
+          : status;
+
+    const approvalStatus =
+      resolvedStatus === "Off-Day Unscheduled" || resolvedStatus === "Early Unscheduled"
+        ? "Pending Approval"
+        : resolvedStatus === "Overtime"
+          ? "Pending"
+          : action.includes("Shift")
+            ? "Pending"
+            : "Auto Logged";
+
+    const key = `agent-action-${selectedEmployee.id}-${action}-${resolvedStatus}-${time}`;
+    return runProtectedAction(key, action, async () => {
       const duplicate = timeEntries.some(
         (entry) =>
           entry.employee_id === selectedEmployee.id &&
           entry.date === today &&
-          entry.category === status &&
+          entry.category === resolvedStatus &&
           entry.category_start === time &&
           entry.notes === action
       );
@@ -1511,32 +1593,76 @@ User can now log into the Agent Portal.`
         date: today,
         action,
         time,
-        status,
+        status: resolvedStatus,
         lob: selectedEmployee.lob,
         department: selectedEmployee.department,
+        sub_department: selectedEmployee.sub_department || "",
       };
-      const timeEntry = {
+
+      const baseTimeEntry = {
         id: `TIME-${Date.now().toString().slice(-6)}`,
         employee_id: selectedEmployee.id,
         employee_name: selectedEmployee.full_name,
         date: today,
         scheduled_start: selectedEmployee.shift_start,
         scheduled_end: selectedEmployee.shift_end,
-        clock_in: action === "Shift Started" ? time : selectedEmployee.shift_start,
+        clock_in: action === "Shift Started" ? time : getShiftStartOrNow(selectedEmployee, time),
         clock_out: action === "Shift Ended" ? time : selectedEmployee.shift_end,
-        category: status,
+        category: resolvedStatus,
         category_start: time,
         category_end: time,
-        approved: status === "Overtime" || action.includes("Shift") ? "Pending" : "Auto Logged",
+        approved: approvalStatus,
+        payable_status: approvalStatus === "Pending Approval" || resolvedStatus === "Overtime" ? "Pending Manager Approval" : "Regular",
+        locked: approvalStatus === "Pending Approval",
+        auto_rule: autoClass.reason,
         lob: selectedEmployee.lob,
         department: selectedEmployee.department,
         sub_department: selectedEmployee.sub_department || "",
         notes: action,
       };
-      if (supabase) await supabase.from("time_entries").insert(timeEntry);
-      await googleAddRow("timeLogs", mapTimeToSheet(timeEntry));
+
+      const entriesToSave = [];
+
+      if (action === "Shift Ended" && shouldSplitAutoOvertime(selectedEmployee, time)) {
+        const regularEntry = {
+          ...baseTimeEntry,
+          id: cleanId("TIME"),
+          category: "Working",
+          category_start: selectedEmployee.shift_start,
+          category_end: selectedEmployee.shift_end,
+          approved: "Auto Logged",
+          payable_status: "Regular",
+          locked: false,
+          auto_rule: "Regular scheduled shift completed before auto overtime",
+          notes: "Regular shift completed",
+        };
+
+        const overtimeEntry = {
+          ...baseTimeEntry,
+          id: cleanId("TIME"),
+          category: "Overtime",
+          category_start: selectedEmployee.shift_end,
+          category_end: time,
+          approved: "Pending",
+          payable_status: "Pending Manager Approval",
+          locked: false,
+          auto_rule: "Auto overtime after scheduled shift end",
+          notes: "Auto overtime created at shift end",
+        };
+
+        entriesToSave.push(regularEntry, overtimeEntry);
+        showToast("Auto overtime created", `Time after ${selectedEmployee.shift_end} was moved to overtime pending review.`, "info");
+      } else {
+        entriesToSave.push(baseTimeEntry);
+      }
+
+      if (supabase) await supabase.from("time_entries").insert(entriesToSave);
+      for (const entry of entriesToSave) {
+        await googleAddRow("timeLogs", mapTimeToSheet(entry));
+      }
+
       setActivityLog((current) => [activity, ...current]);
-      setTimeEntries((current) => [timeEntry, ...current]);
+      setTimeEntries((current) => [...entriesToSave, ...current]);
     });
   }
 
@@ -1559,6 +1685,10 @@ User can now log into the Agent Portal.`
         return "silent";
       }
 
+      const manualClass = getAutoWorkClassification(selectedEmployee, newTime.category_start);
+      const manualCategory = newTime.category === "Working" && manualClass.category !== "Working" ? manualClass.category : newTime.category;
+      const manualApproval = ["Off-Day Unscheduled", "Early Unscheduled"].includes(manualCategory) ? "Pending Approval" : "Pending";
+
       const item = {
         id: `TIME-${Date.now().toString().slice(-6)}`,
         employee_id: selectedEmployee.id,
@@ -1568,11 +1698,15 @@ User can now log into the Agent Portal.`
         scheduled_end: selectedEmployee.shift_end,
         clock_in: selectedEmployee.shift_start,
         clock_out: selectedEmployee.shift_end,
-        approved: "Pending",
+        approved: manualApproval,
+        payable_status: manualApproval === "Pending Approval" || manualCategory === "Overtime" ? "Pending Manager Approval" : "Pending Review",
+        locked: manualApproval === "Pending Approval",
+        auto_rule: manualClass.reason,
         lob: selectedEmployee.lob,
         department: selectedEmployee.department,
         sub_department: selectedEmployee.sub_department || "",
         ...newTime,
+        category: manualCategory,
       };
       if (supabase) await supabase.from("time_entries").insert(item);
       await googleAddRow("timeLogs", mapTimeToSheet(item));
@@ -1765,6 +1899,8 @@ User can now log into the Agent Portal.`
       ...timeEntry,
       approved,
       approved_by: currentUser.email,
+      payable_status: approved === "Approved" ? "Approved Payable" : approved === "Denied" ? "Denied / Not Payable" : timeEntry.payable_status,
+      locked: false,
     };
 
     if (supabase) await supabase.from("time_entries").update({ approved }).eq("id", id);
@@ -2190,7 +2326,7 @@ User can now log into the Agent Portal.`
         {!isAgentOnly && tab === "time" && (
           <section className="grid split reverse">
             <Card title="Log time category"><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newTime.category} onChange={(e) => setNewTime({ ...newTime, category: e.target.value })}>{timeCategories.map((x) => <option key={x}>{x}</option>)}</select><input type="time" value={newTime.category_start} onChange={(e) => setNewTime({ ...newTime, category_start: e.target.value })} /><input type="time" value={newTime.category_end} onChange={(e) => setNewTime({ ...newTime, category_end: e.target.value })} /><input placeholder="Notes" value={newTime.notes} onChange={(e) => setNewTime({ ...newTime, notes: e.target.value })} /><button className="primary wide" onClick={saveTime}>Add time entry</button></FormGrid></Card>
-            <Card title="Daily time utilization"><Table headers={["Employee", "Date", "LOB", "Category", "Time", "Duration", "Approval"]} rows={filteredTime.map((t) => [t.employee_name, t.date, t.lob, <Badge muted>{t.category}</Badge>, formatTimeRange(t.category_start, t.category_end), formatHours(minutesBetween(t.category_start, t.category_end)), t.approved])} /></Card>
+            <Card title="Daily time utilization"><Table headers={["Employee", "Date", "LOB", "Category", "Time", "Duration", "Approval", "Payable"]} rows={filteredTime.map((t) => [t.employee_name, t.date, t.lob, <Badge muted={t.locked} danger={t.approved === "Pending Approval"}>{t.category}</Badge>, formatTimeRange(t.category_start, t.category_end), formatHours(minutesBetween(t.category_start, t.category_end)), <Badge danger={t.approved === "Pending Approval"}>{t.approved}</Badge>, t.payable_status || "Regular"]) } /></Card>
           </section>
         )}
 
@@ -2209,7 +2345,7 @@ User can now log into the Agent Portal.`
             </Card>
             <Card title="Time Log & Overtime Exception Review">
               <p className="helperText">Use this queue for time entries that require manager review, such as overtime logged from the agent portal, late/early shift exceptions, manual time corrections, or unusual dispositions. Approval updates the Time_Logs tab and creates an Approvals audit record.</p>
-              {timeEntries.filter((t) => t.approved === "Pending").length ? timeEntries.filter((t) => t.approved === "Pending").map((t) => <Approval key={t.id} title={t.employee_name} detail={`${t.category} · ${formatDateOnly(t.date)} · ${formatTimeRange(t.category_start, t.category_end)}`} approve={() => setTimeStatus(t.id, "Approved")} deny={() => setTimeStatus(t.id, "Denied")} />) : <p className="muted">No pending time or overtime exceptions at this time.</p>}
+              {timeEntries.filter((t) => t.approved === "Pending").length ? timeEntries.filter((t) => t.approved === "Pending").map((t) => <Approval key={t.id} title={t.employee_name} detail={`${t.category} · ${formatDateOnly(t.date)} · ${formatTimeRange(t.category_start, t.category_end)} · ${t.payable_status || "Pending Review"}`} approve={() => setTimeStatus(t.id, "Approved")} deny={() => setTimeStatus(t.id, "Denied")} />) : <p className="muted">No pending time or overtime exceptions at this time.</p>}
             </Card>
           </section>
         )}
