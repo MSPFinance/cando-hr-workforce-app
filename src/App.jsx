@@ -27,7 +27,7 @@ const LOGO = "/cando-logo.png";
 // DEMO MODE CONFIGURATION
 // For demo/testing purposes this is intentionally blank so the app uses the built-in demo users below.
 // When you are ready to reconnect live Google Sheets, replace "" with your working /exec Apps Script URL.
-const GOOGLE_API_URL = "https://script.google.com/macros/s/AKfycbyPzt5bsGY9z_4stWszBX1MQTSmuNSIJit5KP_NtzWu5RmWUSfSPMmM7a9rKqojsKNy/exec";
+const GOOGLE_API_URL = "";
 
 // LOGIN + ROLE ACCESS
 // Production path: this uses the Employees database to identify the user and role.
@@ -2821,7 +2821,7 @@ td input, td select { min-width: 110px; }
 
 .developerMark { color: #7b8b84; font-size: 11px; text-align: center; margin: 18px 0 0; letter-spacing: .02em; }
 .sidebarMark { color: rgba(255,255,255,.62); border-top: 1px solid rgba(255,255,255,.12); padding-top: 14px; margin-top: 0; }
-.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 9999; min-width: min(460px, calc(100vw - 32px)); max-width: 560px; background: #064e3b; color: white; border: 1px solid rgba(255,255,255,.14); border-radius: 16px; box-shadow: 0 24px 70px rgba(4, 78, 59, .35); display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 14px 16px; }
+.toast { position: fixed; left: 50%; top: 50%; bottom: auto; transform: translate(-50%, -50%); z-index: 9999; min-width: min(460px, calc(100vw - 32px)); max-width: 560px; background: #064e3b; color: white; border: 1px solid rgba(255,255,255,.14); border-radius: 16px; box-shadow: 0 24px 70px rgba(4, 78, 59, .35); display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 14px 16px; }
 .toast.info { background: #0f5132; }
 .toast.warning { background: #92400e; }
 .toast.danger { background: #991b1b; }
