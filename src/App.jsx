@@ -2050,9 +2050,21 @@ User can now log into the Agent Portal.`
                 </div>
               </div>
               <div className={`agentShiftCard ${isTodayOffDay(selectedEmployee) ? "offDay" : ""}`}>
-                <span>Today’s Shift</span>
-                <strong>{getTodayShiftSummary(selectedEmployee).label}</strong>
-                <small>{getTodayShiftSummary(selectedEmployee).detail}</small>
+                <span>{isTodayOffDay(selectedEmployee) ? "Today’s Status" : "Today’s Shift"}</span>
+                <strong>{isTodayOffDay(selectedEmployee) ? `OFF · ${todayDayName()}` : formatTimeRange(selectedEmployee.shift_start, selectedEmployee.shift_end)}</strong>
+                {isTodayOffDay(selectedEmployee) ? (
+                  <small className="shiftDetails offDetails">
+                    <b>Scheduled off today</b>
+                    <em>Assigned off days: {formatOffDays(selectedEmployee.off_days)}</em>
+                  </small>
+                ) : (
+                  <small className="shiftDetails">
+                    <b>Break 1: {formatTimeRange(selectedEmployee.break_start, selectedEmployee.break_end)}</b>
+                    <b>Lunch: {formatTimeRange(selectedEmployee.lunch_start, selectedEmployee.lunch_end)}</b>
+                    <b>Break 2: {formatTimeRange(selectedEmployee.second_break_start, selectedEmployee.second_break_end)}</b>
+                    <em>Off days: {formatOffDays(selectedEmployee.off_days)}</em>
+                  </small>
+                )}
               </div>
             </div>
 
@@ -2611,11 +2623,17 @@ td input, td select { min-width: 110px; }
 .info { background: white; border: 1px solid var(--border); border-radius: 16px; padding: 11px 12px; }
 .info span { display: block; color: var(--muted); font-size: 11px; font-weight: 900; text-transform: uppercase; letter-spacing: .05em; }
 .info strong { display: block; color: var(--dark); font-size: 14px; margin-top: 4px; }
-.agentShiftCard { background: white; border: 1px solid var(--border); border-radius: 20px; padding: 16px; min-width: 260px; }
-.agentShiftCard strong { display: block; font-size: 24px; margin: 4px 0; }
+.agentShiftCard { background: white; border: 1px solid var(--border); border-radius: 20px; padding: 16px; min-width: 280px; transition: background .2s ease, border-color .2s ease, box-shadow .2s ease; }
+.agentShiftCard strong { display: block; font-size: 24px; margin: 4px 0 8px; }
 .agentShiftCard small { color: var(--muted); display: block; line-height: 1.5; }
-.agentShiftCard.offDay { background: #fff7ed; border-color: #fed7aa; }
-.agentShiftCard.offDay strong { color: #9a3412; }
+.shiftDetails { display: grid !important; gap: 4px; }
+.shiftDetails b { display: block; color: #425249; font-weight: 700; }
+.shiftDetails em { display: block; color: var(--muted); font-style: normal; margin-top: 2px; }
+.agentShiftCard.offDay { background: #fef2f2; border-color: #fecaca; box-shadow: 0 12px 28px rgba(185, 28, 28, .08); }
+.agentShiftCard.offDay span { color: #b91c1c; }
+.agentShiftCard.offDay strong { color: #991b1b; }
+.agentShiftCard.offDay .shiftDetails b { color: #991b1b; }
+.agentShiftCard.offDay .shiftDetails em { color: #b91c1c; }
 .agentGrid { margin-top: 18px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; max-width: 100%; }
 .agentActions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .currentStatus { margin-top: 14px; display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: end; }
