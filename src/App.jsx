@@ -27,7 +27,7 @@ const LOGO = "/cando-logo.png";
 // DEMO MODE CONFIGURATION
 // For demo/testing purposes this is intentionally blank so the app uses the built-in demo users below.
 // When you are ready to reconnect live Google Sheets, replace "" with your working /exec Apps Script URL.
-const GOOGLE_API_URL = "";
+const GOOGLE_API_URL = "https://script.google.com/macros/s/AKfycbyPzt5bsGY9z_4stWszBX1MQTSmuNSIJit5KP_NtzWu5RmWUSfSPMmM7a9rKqojsKNy/exec";
 
 // LOGIN + ROLE ACCESS
 // Production path: this uses the Employees database to identify the user and role.
