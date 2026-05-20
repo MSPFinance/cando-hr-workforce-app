@@ -23,7 +23,7 @@ const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPAB
 
 const today = new Date().toISOString().slice(0, 10);
 const LOGO = "/cando-logo.png";
-// staging deployment test
+
 // DEMO MODE CONFIGURATION
 // For demo/testing purposes this is intentionally blank so the app uses the built-in demo users below.
 // When you are ready to reconnect live Google Sheets, replace "" with your working /exec Apps Script URL.
@@ -48,6 +48,8 @@ const DEMO_ACCOUNTS = [
 
 const lobSeed = ["GoDay", "Lending Creative"];
 const departmentSeed = ["Operations", "Customer Service", "Collections", "QA", "Training", "Compliance", "HR", "Payroll"];
+const operationsSubDepartmentSeed = ["Customer Service", "Collections", "CLS", "Documents", "SME"];
+const defaultOffDays = "Saturday, Sunday";
 
 const employeesSeed = [
   {
@@ -56,6 +58,7 @@ const employeesSeed = [
     email: "agent1@goday.ca",
     country: "Costa Rica",
     department: "Operations",
+    sub_department: "Customer Service",
     lob: "GoDay",
     role: "Agent",
     access_level: "Employee",
@@ -65,6 +68,7 @@ const employeesSeed = [
     birthday: "1995-06-12",
     employment_status: "Active",
     employment_type: "Full-Time",
+    off_days: defaultOffDays,
     shift_start: "08:00",
     shift_end: "17:00",
     break_start: "10:00",
@@ -86,6 +90,7 @@ const employeesSeed = [
     email: "tl@goday.ca",
     country: "Canada",
     department: "Operations",
+    sub_department: "Collections",
     lob: "Lending Creative",
     role: "Team Lead",
     access_level: "TL",
@@ -95,6 +100,7 @@ const employeesSeed = [
     birthday: "1990-11-02",
     employment_status: "Active",
     employment_type: "Full-Time",
+    off_days: defaultOffDays,
     shift_start: "09:00",
     shift_end: "18:00",
     break_start: "11:00",
@@ -115,7 +121,8 @@ const employeesSeed = [
     full_name: "Sample Agent Two",
     email: "agent2@goday.ca",
     country: "Costa Rica",
-    department: "Customer Service",
+    department: "Operations",
+    sub_department: "Customer Service",
     lob: "GoDay",
     role: "Agent",
     access_level: "Employee",
@@ -125,6 +132,7 @@ const employeesSeed = [
     birthday: "1994-08-20",
     employment_status: "Active",
     employment_type: "Full-Time",
+    off_days: defaultOffDays,
     shift_start: "08:00",
     shift_end: "17:00",
     break_start: "10:15",
@@ -146,6 +154,7 @@ const employeesSeed = [
     email: "manager@goday.ca",
     country: "Canada",
     department: "Operations",
+    sub_department: "Customer Service",
     lob: "GoDay",
     role: "Manager",
     access_level: "Manager",
@@ -155,6 +164,7 @@ const employeesSeed = [
     birthday: "1988-04-15",
     employment_status: "Active",
     employment_type: "Full-Time",
+    off_days: defaultOffDays,
     shift_start: "08:00",
     shift_end: "17:00",
     break_start: "10:00",
@@ -176,6 +186,7 @@ const employeesSeed = [
     email: "hr@goday.ca",
     country: "Costa Rica",
     department: "HR",
+    sub_department: "HR",
     lob: "GoDay",
     role: "HR",
     access_level: "HR",
@@ -185,6 +196,7 @@ const employeesSeed = [
     birthday: "1987-09-18",
     employment_status: "Active",
     employment_type: "Full-Time",
+    off_days: defaultOffDays,
     shift_start: "08:00",
     shift_end: "17:00",
     break_start: "10:00",
@@ -206,6 +218,7 @@ const employeesSeed = [
     email: "payroll@goday.ca",
     country: "Canada",
     department: "Payroll",
+    sub_department: "Payroll",
     lob: "Lending Creative",
     role: "Payroll",
     access_level: "Payroll",
@@ -215,6 +228,7 @@ const employeesSeed = [
     birthday: "1985-12-05",
     employment_status: "Active",
     employment_type: "Full-Time",
+    off_days: defaultOffDays,
     shift_start: "09:00",
     shift_end: "18:00",
     break_start: "11:00",
@@ -236,6 +250,7 @@ const employeesSeed = [
     email: "admin@goday.ca",
     country: "Costa Rica",
     department: "Compliance",
+    sub_department: "Compliance",
     lob: "GoDay",
     role: "Admin",
     access_level: "Admin",
@@ -245,6 +260,7 @@ const employeesSeed = [
     birthday: "1984-03-30",
     employment_status: "Active",
     employment_type: "Full-Time",
+    off_days: defaultOffDays,
     shift_start: "08:00",
     shift_end: "17:00",
     break_start: "10:00",
@@ -266,6 +282,7 @@ const employeesSeed = [
     email: "executive@goday.ca",
     country: "Canada",
     department: "Executive",
+    sub_department: "Executive",
     lob: "Lending Creative",
     role: "Executive",
     access_level: "Executive",
@@ -275,6 +292,7 @@ const employeesSeed = [
     birthday: "1980-01-22",
     employment_status: "Active",
     employment_type: "Full-Time",
+    off_days: defaultOffDays,
     shift_start: "09:00",
     shift_end: "18:00",
     break_start: "11:00",
@@ -296,6 +314,7 @@ const rulesSeed = [
   {
     id: "RULE-001",
     department: "Operations",
+    sub_department: "Customer Service",
     lob: "GoDay",
     shift_start: "08:00",
     shift_end: "17:00",
@@ -308,6 +327,7 @@ const rulesSeed = [
   {
     id: "RULE-002",
     department: "Operations",
+    sub_department: "Collections",
     lob: "Lending Creative",
     shift_start: "09:00",
     shift_end: "18:00",
@@ -576,6 +596,46 @@ function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+const WEEK_DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+function normalizeOffDays(value) {
+  if (Array.isArray(value)) return value.map((item) => String(item || "").trim()).filter(Boolean);
+  return String(value || "")
+    .split(/[,|;]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function formatOffDays(value) {
+  const days = normalizeOffDays(value);
+  return days.length ? days.join(", ") : "None assigned";
+}
+
+function todayDayName() {
+  return WEEK_DAYS[new Date().getDay()];
+}
+
+function isTodayOffDay(employee) {
+  const todayName = todayDayName().toLowerCase();
+  return normalizeOffDays(employee?.off_days).some((day) => day.toLowerCase() === todayName);
+}
+
+function getTodayShiftSummary(employee) {
+  if (!employee) return { isOff: false, label: "No schedule", detail: "No employee selected." };
+  if (isTodayOffDay(employee)) {
+    return {
+      isOff: true,
+      label: `OFF · ${todayDayName()}`,
+      detail: `Assigned off days: ${formatOffDays(employee.off_days)}`,
+    };
+  }
+  return {
+    isOff: false,
+    label: formatTimeRange(employee.shift_start, employee.shift_end),
+    detail: `Break: ${formatTimeRange(employee.break_start, employee.break_end)} · Lunch: ${formatTimeRange(employee.lunch_start, employee.lunch_end)} · Off days: ${formatOffDays(employee.off_days)}`,
+  };
+}
+
 function hasAdminAccess(employee) {
   return ADMIN_ACCESS_LEVELS.includes(employee?.access_level || employee?.role || "");
 }
@@ -648,13 +708,28 @@ function googleJsonp(params = {}) {
   });
 }
 
+async function googleJsonpWithRetry(params = {}, attempts = 2) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await googleJsonp(params);
+    } catch (error) {
+      lastError = error;
+      console.warn(`Google Sheets attempt ${attempt} failed:`, error?.message || error);
+      if (attempt < attempts) {
+        await new Promise((resolve) => setTimeout(resolve, 900 * attempt));
+      }
+    }
+  }
+  throw lastError || new Error("Google Sheets request failed.");
+}
+
 async function googleGetDatabase() {
   if (!GOOGLE_API_URL || GOOGLE_API_URL.includes("PASTE_YOUR_WORKING")) return null;
   try {
-    const result = await googleJsonp({ action: "getAll" });
-
-    console.log("Google Sheets GET result:", result);
-    return result?.success ? result.data : null;
+    const responseData = await googleJsonpWithRetry({ action: "getAll" }, 2);
+    console.log("Google Sheets GET result:", responseData);
+    return responseData?.success ? responseData.data : null;
   } catch (error) {
     console.error("Google Sheets GET error:", error);
     return null;
@@ -753,6 +828,7 @@ function mapEmployeeFromSheet(row) {
     country: row.Country || "Costa Rica",
     lob: row.LOB || "GoDay",
     department: row.Department || "Operations",
+    sub_department: row.Sub_Department || row.SubDepartment || row.Sub_Department_Name || "",
     role: row.Role || "Agent",
     access_level: row.Access_Level || "Employee",
     supervisor: row.Supervisor || "",
@@ -761,6 +837,7 @@ function mapEmployeeFromSheet(row) {
     birthday: row.Birthday || "",
     employment_status: row.Employment_Status || "Active",
     employment_type: row.Employment_Type || "Full-Time",
+    off_days: row.Off_Days || row.OffDays || defaultOffDays,
     shift_start: row.Shift_Start || "08:00",
     shift_end: row.Shift_End || "17:00",
     break_start: row.Break_1_Start || "10:00",
@@ -787,6 +864,7 @@ function mapEmployeeToSheet(employee) {
     Country: employee.country,
     LOB: employee.lob,
     Department: employee.department,
+    Sub_Department: employee.sub_department || "",
     Role: employee.role,
     Access_Level: employee.access_level,
     Supervisor: employee.supervisor,
@@ -795,6 +873,7 @@ function mapEmployeeToSheet(employee) {
     Birthday: employee.birthday,
     Employment_Status: employee.employment_status,
     Employment_Type: employee.employment_type,
+    Off_Days: formatOffDays(employee.off_days),
     Shift_Start: employee.shift_start,
     Shift_End: employee.shift_end,
     Break_1_Start: employee.break_start,
@@ -820,6 +899,7 @@ function mapTimeFromSheet(row) {
     employee_name: row.Employee_Name || "",
     lob: row.LOB || "",
     department: row.Department || "",
+    sub_department: row.Sub_Department || "",
     date: row.Date || today,
     category: row.Disposition || "Working",
     category_start: row.Category_Start || "08:00",
@@ -840,6 +920,7 @@ function mapTimeToSheet(item) {
     Employee_Name: item.employee_name,
     LOB: item.lob,
     Department: item.department,
+    Sub_Department: item.sub_department || "",
     Date: item.date,
     Disposition: item.category,
     Category_Start: item.category_start,
@@ -938,7 +1019,40 @@ function mapApprovalToSheet(item) {
   };
 }
 
-export default function App() {
+class AppErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, message: "" };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, message: error?.message || "Unexpected application error." };
+  }
+
+  componentDidCatch(error, info) {
+    console.error("HR Workforce app error:", error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="errorPage">
+          <style>{styles}</style>
+          <section className="errorCard">
+            <h1>Something needs attention</h1>
+            <p>The app did not load this section correctly. This prevents a blank screen during testing.</p>
+            <pre>{this.state.message}</pre>
+            <button className="primary" onClick={() => window.location.reload()}>Reload app</button>
+          </section>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+function HRWorkforceApp() {
   const [employees, setEmployees] = useState(employeesSeed);
   const [timeEntries, setTimeEntries] = useState(timeSeed);
   const [requests, setRequests] = useState(requestsSeed);
@@ -946,13 +1060,14 @@ export default function App() {
   const [rules, setRules] = useState(rulesSeed);
   const [lobs, setLobs] = useState(lobSeed);
   const [departments, setDepartments] = useState(departmentSeed);
+  const [subDepartments, setSubDepartments] = useState(operationsSubDepartmentSeed);
   const [newLob, setNewLob] = useState("");
   const [newDepartment, setNewDepartment] = useState("");
   const [tab, setTab] = useState("agent");
   const [adminMode, setAdminMode] = useState(false);
   const [search, setSearch] = useState("");
   const [reportView, setReportView] = useState("LOB");
-  const [filters, setFilters] = useState({ lob: "All", department: "All", employee: "All", category: "All", startDate: "", endDate: "" });
+  const [filters, setFilters] = useState({ lob: "All", department: "All", subDepartment: "All", employee: "All", category: "All", startDate: "", endDate: "" });
   const [agentStatus, setAgentStatus] = useState("Working");
   const [newTime, setNewTime] = useState({ category: "Working", category_start: "08:00", category_end: "09:00", notes: "" });
   const [newRequest, setNewRequest] = useState({ type: "PTO", start_date: today, end_date: today, hours: 8, reason: "" });
@@ -972,6 +1087,7 @@ export default function App() {
     email: "",
     country: "Costa Rica",
     department: "Operations",
+    sub_department: "Customer Service",
     lob: "GoDay",
     role: "Agent",
     access_level: "Employee",
@@ -981,6 +1097,7 @@ export default function App() {
     birthday: "",
     employment_status: "Active",
     employment_type: "Full-Time",
+    off_days: defaultOffDays,
     shift_start: "08:00",
     shift_end: "17:00",
     break_start: "10:00",
@@ -1001,8 +1118,11 @@ export default function App() {
   const [loginPassword, setLoginPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [toast, setToast] = useState(null);
+  const [processingModal, setProcessingModal] = useState(null);
+  const [managerOverrideModal, setManagerOverrideModal] = useState(null);
   const actionLockRef = useRef(new Set());
   const toastTimerRef = useRef(null);
+  const overrideResolverRef = useRef(null);
 
 
   useEffect(() => {
@@ -1020,6 +1140,7 @@ export default function App() {
       const sheetRules = (database.staffingRules || []).map(mapRuleFromSheet);
       const sheetLobs = (database.lobs || []).map((row) => row.LOB_Name).filter(Boolean);
       const sheetDepartments = (database.departments || []).map((row) => row.Department_Name).filter(Boolean);
+      const sheetSubDepartments = (database.subDepartments || database.sub_departments || []).map((row) => row.Sub_Department_Name || row.Sub_Department || row.Name).filter(Boolean);
 
       if (sheetEmployees.length) setEmployees(sheetEmployees);
       if (sheetTime.length) setTimeEntries(sheetTime);
@@ -1027,6 +1148,7 @@ export default function App() {
       if (sheetRules.length) setRules(sheetRules);
       if (sheetLobs.length) setLobs([...new Set(sheetLobs)]);
       if (sheetDepartments.length) setDepartments([...new Set(sheetDepartments)]);
+      if (sheetSubDepartments.length) setSubDepartments([...new Set(sheetSubDepartments)]);
 
       setDatabaseStatus("Google Sheets database connected live");
     }
@@ -1047,6 +1169,7 @@ export default function App() {
     }
 
     actionLockRef.current.add(key);
+    setProcessingModal({ title: "Processing", message: `${title} is being saved. Please do not click again.` });
     showToast("Processing", `${title} is being saved. Please do not click again.`, "info");
 
     try {
@@ -1061,7 +1184,26 @@ export default function App() {
       return null;
     } finally {
       actionLockRef.current.delete(key);
+      setProcessingModal(null);
     }
+  }
+
+  function requestManagerOverride(message) {
+    return new Promise((resolve) => {
+      overrideResolverRef.current = resolve;
+      setManagerOverrideModal({
+        title: "Manager override required",
+        message,
+      });
+    });
+  }
+
+  function resolveManagerOverride(approved) {
+    if (overrideResolverRef.current) {
+      overrideResolverRef.current(approved);
+      overrideResolverRef.current = null;
+    }
+    setManagerOverrideModal(null);
   }
 
   const currentUser = employees.find((e) => normalizeEmail(e.email) === normalizeEmail(sessionUserEmail)) || employees.find((e) => normalizeEmail(e.email) === normalizeEmail(DEFAULT_LOGIN_EMAIL)) || employees[0];
@@ -1078,6 +1220,7 @@ export default function App() {
 
   const lobOptions = ["All", ...new Set([...lobs, ...visibleEmployees.map((e) => e.lob).filter(Boolean)])];
   const departmentOptions = ["All", ...new Set([...departments, ...visibleEmployees.map((e) => e.department).filter(Boolean)])];
+  const subDepartmentOptions = ["All", ...new Set([...subDepartments, ...visibleEmployees.map((e) => e.sub_department).filter(Boolean)])];
   const employeeOptions = ["All", ...visibleEmployees.map((e) => e.full_name)];
   const categoryOptions = ["All", ...timeCategories, "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change"];
 
@@ -1087,6 +1230,7 @@ export default function App() {
       dateOk &&
       (filters.lob === "All" || t.lob === filters.lob) &&
       (filters.department === "All" || t.department === filters.department) &&
+      (filters.subDepartment === "All" || (t.sub_department || employees.find((e) => e.id === t.employee_id)?.sub_department || "") === filters.subDepartment) &&
       (filters.employee === "All" || t.employee_name === filters.employee) &&
       (filters.category === "All" || t.category === filters.category)
     );
@@ -1099,13 +1243,14 @@ export default function App() {
       dateOk &&
       (filters.lob === "All" || employee?.lob === filters.lob) &&
       (filters.department === "All" || employee?.department === filters.department) &&
+      (filters.subDepartment === "All" || employee?.sub_department === filters.subDepartment) &&
       (filters.employee === "All" || r.employee_name === filters.employee) &&
       (filters.category === "All" || r.type === filters.category)
     );
   });
 
   const filteredEmployees = visibleEmployees.filter((e) =>
-    [e.full_name, e.email, e.lob, e.department, e.role, e.country, e.supervisor, e.manager]
+    [e.full_name, e.email, e.lob, e.department, e.sub_department, e.role, e.country, e.supervisor, e.manager]
       .join(" ")
       .toLowerCase()
       .includes(search.toLowerCase())
@@ -1244,6 +1389,17 @@ export default function App() {
     setDepartments(departments.filter((department) => department !== value));
   }
 
+  function addSubDepartment(value) {
+    const cleanValue = String(value || "").trim();
+    if (!cleanValue) return;
+    if (!subDepartments.includes(cleanValue)) setSubDepartments([...subDepartments, cleanValue]);
+    googleAddRow("subDepartments", { Sub_Department_ID: cleanId("SUBDEPT"), Sub_Department_Name: cleanValue, Status: "Active", Created_Date: new Date() });
+  }
+
+  function deleteSubDepartment(value) {
+    setSubDepartments(subDepartments.filter((subDepartment) => subDepartment !== value));
+  }
+
   async function saveEmployee() {
     if (isAgentOnly) return;
 
@@ -1374,6 +1530,7 @@ User can now log into the Agent Portal.`
         approved: status === "Overtime" || action.includes("Shift") ? "Pending" : "Auto Logged",
         lob: selectedEmployee.lob,
         department: selectedEmployee.department,
+        sub_department: selectedEmployee.sub_department || "",
         notes: action,
       };
       if (supabase) await supabase.from("time_entries").insert(timeEntry);
@@ -1414,6 +1571,7 @@ User can now log into the Agent Portal.`
         approved: "Pending",
         lob: selectedEmployee.lob,
         department: selectedEmployee.department,
+        sub_department: selectedEmployee.sub_department || "",
         ...newTime,
       };
       if (supabase) await supabase.from("time_entries").insert(item);
@@ -1458,11 +1616,58 @@ User can now log into the Agent Portal.`
     });
   }
 
+  function getApprovalRiskMessage(request) {
+    const employee = employees.find((e) => e.id === request.employee_id);
+    if (!employee) return "Employee profile was not found. Please confirm before approving.";
+
+    const balance = getBalance(employee, request.type);
+    if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
+      return `${request.employee_name} is requesting ${request.hours}h of ${request.type}, but the available balance is ${balance}h. Manager override is required to continue.`;
+    }
+
+    const rule = rules.find(
+      (r) =>
+        r.lob === employee.lob &&
+        r.department === employee.department &&
+        r.shift_start === employee.shift_start &&
+        r.shift_end === employee.shift_end
+    );
+
+    if (!rule) return null;
+
+    const usage = getRuleUsage(rule);
+    const nextPto = usage.pto + (request.type === "PTO" ? 1 : 0);
+    const nextVto = usage.vto + (request.type === "VTO" ? 1 : 0);
+    const nextSick = usage.sick + (request.type === "Sick Leave" ? 1 : 0);
+    const nextAvailable = usage.scheduled - (nextPto + nextVto + nextSick);
+
+    const exceedsRule =
+      nextPto > safeNumber(rule.max_pto_out, 0) ||
+      nextVto > safeNumber(rule.max_vto_out, 0) ||
+      nextSick > safeNumber(rule.max_sick_out, 0) ||
+      nextAvailable < safeNumber(rule.min_staff_required, 0);
+
+    if (!exceedsRule) return null;
+
+    return `Approving this ${request.type} may exceed the staffing rule for ${employee.lob} / ${employee.department}. Current after approval: PTO ${nextPto}/${rule.max_pto_out}, VTO ${nextVto}/${rule.max_vto_out}, Sick ${nextSick}/${rule.max_sick_out}, Available ${nextAvailable}, Minimum required ${rule.min_staff_required}. Manager override is required.`;
+  }
+
   async function setRequestStatus(id, status) {
     if (isAgentOnly) return;
 
     const request = requests.find((r) => r.id === id);
     if (!request) return;
+
+    if (status === "Approved") {
+      const riskMessage = getApprovalRiskMessage(request);
+      if (riskMessage) {
+        const approvedOverride = await requestManagerOverride(riskMessage);
+        if (!approvedOverride) {
+          showToast("Approval cancelled", "The request was not approved because the override was cancelled.", "warning");
+          return;
+        }
+      }
+    }
 
     const key = `request-approval-${id}-${status}`;
     if (actionLockRef.current.has(key)) {
@@ -1668,6 +1873,40 @@ User can now log into the Agent Portal.`
     doc.save("cando-hr-report.pdf");
   }
 
+  async function createArchiveBackup() {
+    return runProtectedAction("archive-backup", "Archive backup", async () => {
+      const archive = {
+        archive_id: cleanId("ARCHIVE"),
+        generated_at: new Date().toISOString(),
+        generated_by: currentUser?.email || "demo-user",
+        environment: GOOGLE_API_URL ? "google-sheets-enabled" : "demo-mode",
+        employees,
+        timeEntries,
+        requests,
+        activityLog,
+        rules,
+        lobs,
+        departments,
+      };
+
+      downloadFile(
+        `cando-hr-archive-${today}.json`,
+        JSON.stringify(archive, null, 2),
+        "application/json"
+      );
+
+      await googleAddRow("archiveActivity", {
+        Archive_ID: archive.archive_id,
+        Generated_At: archive.generated_at,
+        Generated_By: archive.generated_by,
+        Employees: employees.length,
+        Time_Logs: timeEntries.length,
+        Requests: requests.length,
+        Notes: "Manual archive backup generated from HR Workforce staging/demo app.",
+      });
+    });
+  }
+
   function login() {
     const employee = employees.find((e) => normalizeEmail(e.email) === normalizeEmail(loginEmail));
     const expectedPassword = employee?.temp_password || DEFAULT_LOGIN_PASSWORD;
@@ -1744,6 +1983,14 @@ User can now log into the Agent Portal.`
             </button>
           ))}
         </nav>
+        {isAuthenticated && (
+          <div className="sessionBox">
+            <span>Signed in as</span>
+            <strong>{currentUser.full_name}</strong>
+            <small>{currentUser.email}</small>
+            <button onClick={logout}>Logout</button>
+          </div>
+        )}
         <div className="syncBox"><Database size={16} /><span>{databaseStatus}</span></div>
         <DeveloperMark sidebar />
       </aside>
@@ -1768,6 +2015,7 @@ User can now log into the Agent Portal.`
               <button onClick={exportTimeCsv}><Download size={16} /> Time CSV</button>
               <button onClick={exportRequestsCsv}><Download size={16} /> Requests CSV</button>
               <button className="primary" onClick={exportPdf}><Download size={16} /> PDF</button>
+              <button onClick={createArchiveBackup}><Download size={16} /> Archive Backup</button>
             </div>
           )}
         </header>
@@ -1776,6 +2024,7 @@ User can now log into the Agent Portal.`
           <section className="filterPanel">
             <Field label="LOB"><select value={filters.lob} onChange={(e) => setFilters({ ...filters, lob: e.target.value })}>{lobOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Department"><select value={filters.department} onChange={(e) => setFilters({ ...filters, department: e.target.value })}>{departmentOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
+            <Field label="Sub-Department"><select value={filters.subDepartment} onChange={(e) => setFilters({ ...filters, subDepartment: e.target.value })}>{subDepartmentOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Employee"><select value={filters.employee} onChange={(e) => setFilters({ ...filters, employee: e.target.value })}>{employeeOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Type"><select value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })}>{categoryOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Start"><input type="date" value={filters.startDate} onChange={(e) => setFilters({ ...filters, startDate: e.target.value })} /></Field>
@@ -1789,20 +2038,21 @@ User can now log into the Agent Portal.`
               <div>
                 <span>Agent Portal</span>
                 <h2>Welcome, {selectedEmployee.full_name}</h2>
-                <p>{selectedEmployee.role} · {selectedEmployee.lob} · {selectedEmployee.department}</p>
+                <p>{selectedEmployee.role} · {selectedEmployee.lob} · {selectedEmployee.department}{selectedEmployee.sub_department ? ` · ${selectedEmployee.sub_department}` : ""}</p>
                 <div className="profileGrid">
                   <Info label="LOB" value={selectedEmployee.lob} />
                   <Info label="Department" value={selectedEmployee.department} />
+                  <Info label="Sub-Department" value={selectedEmployee.sub_department || "N/A"} />
                   <Info label="Role" value={selectedEmployee.role} />
                   <Info label="Supervisor" value={selectedEmployee.supervisor || "Not assigned"} />
                   <Info label="Country" value={selectedEmployee.country} />
                   <Info label="Employment Status" value={selectedEmployee.employment_status} />
                 </div>
               </div>
-              <div className="agentShiftCard">
+              <div className={`agentShiftCard ${isTodayOffDay(selectedEmployee) ? "offDay" : ""}`}>
                 <span>Today’s Shift</span>
-                <strong>{formatTimeRange(selectedEmployee.shift_start, selectedEmployee.shift_end)}</strong>
-                <small>Break: {formatTimeRange(selectedEmployee.break_start, selectedEmployee.break_end)} · Lunch: {formatTimeRange(selectedEmployee.lunch_start, selectedEmployee.lunch_end)}</small>
+                <strong>{getTodayShiftSummary(selectedEmployee).label}</strong>
+                <small>{getTodayShiftSummary(selectedEmployee).detail}</small>
               </div>
             </div>
 
@@ -1879,7 +2129,7 @@ User can now log into the Agent Portal.`
         {!isAgentOnly && tab === "employees" && (
           <section className="grid split">
             <Card title="Employee master database" action={<SearchBox value={search} onChange={setSearch} />}>
-              <Table headers={["Employee", "LOB", "Department", "Role", "Country", "Shift", "Status"]} rows={filteredEmployees.map((e) => [<button className="textBtn" onClick={() => setSelectedEmployeeId(e.id)}>{e.full_name}<small>{e.email}</small></button>, e.lob, e.department, e.role, e.country, formatTimeRange(e.shift_start, e.shift_end), <Badge>{e.employment_status}</Badge>])} />
+              <Table headers={["Employee", "LOB", "Department", "Sub-Department", "Role", "Country", "Shift", "Off Days", "Status"]} rows={filteredEmployees.map((e) => [<button className="textBtn" onClick={() => setSelectedEmployeeId(e.id)}>{e.full_name}<small>{e.email}</small></button>, e.lob, e.department, e.sub_department || "N/A", e.role, e.country, formatTimeRange(e.shift_start, e.shift_end), formatOffDays(e.off_days), <Badge>{e.employment_status}</Badge>])} />
             </Card>
             <Card title="Add employee">
               <FormGrid>
@@ -1888,9 +2138,11 @@ User can now log into the Agent Portal.`
                 <input placeholder="Country" value={newEmployee.country} onChange={(e) => setNewEmployee({ ...newEmployee, country: e.target.value })} />
                 <select value={newEmployee.lob} onChange={(e) => setNewEmployee({ ...newEmployee, lob: e.target.value })}>{lobs.map((lob) => <option key={lob}>{lob}</option>)}</select>
                 <select value={newEmployee.department} onChange={(e) => setNewEmployee({ ...newEmployee, department: e.target.value })}>{departments.map((department) => <option key={department}>{department}</option>)}</select>
+                <select value={newEmployee.sub_department} onChange={(e) => setNewEmployee({ ...newEmployee, sub_department: e.target.value })}>{subDepartments.map((subDepartment) => <option key={subDepartment}>{subDepartment}</option>)}</select>
                 <input placeholder="Role" value={newEmployee.role} onChange={(e) => setNewEmployee({ ...newEmployee, role: e.target.value })} />
                 <input type="time" value={newEmployee.shift_start} onChange={(e) => setNewEmployee({ ...newEmployee, shift_start: e.target.value })} />
                 <input type="time" value={newEmployee.shift_end} onChange={(e) => setNewEmployee({ ...newEmployee, shift_end: e.target.value })} />
+                <input placeholder="Off days, example: Saturday, Sunday" value={newEmployee.off_days} onChange={(e) => setNewEmployee({ ...newEmployee, off_days: e.target.value })} />
                 <button className="primary wide" onClick={saveEmployee}>Save employee</button>
               </FormGrid>
             </Card>
@@ -1900,13 +2152,16 @@ User can now log into the Agent Portal.`
         {!isAgentOnly && tab === "schedule" && (
           <section className="schedulePage">
             <Card title="Employee schedule management">
-              <p className="helperText">Edit each employee’s assigned shift, break, lunch, second break, LOB, and department. Updates are reflected live in the Agent Portal, reporting, payroll review, and staffing rules.</p>
+              <p className="helperText">Edit each employee’s assigned shift, break, lunch, second break, off days, LOB, department, and sub-department. Updates are reflected in the Agent Portal, reporting, payroll review, staffing rules, and Google Sheets when live sync is connected.</p>
               <Table
-                headers={["Employee", "LOB", "Department", "Shift Start", "Shift End", "Break 1", "Lunch", "Break 2", "Break Min", "Lunch Min"]}
+                headers={["Employee", "LOB", "Department", "Sub-Department", "Off Days", "Today", "Shift Start", "Shift End", "Break 1", "Lunch", "Break 2", "Break Min", "Lunch Min"]}
                 rows={employees.map((e) => [
                   <strong>{e.full_name}</strong>,
                   <select value={e.lob} onChange={(event) => updateEmployeeSchedule(e.id, "lob", event.target.value)}>{lobs.map((lob) => <option key={lob}>{lob}</option>)}</select>,
                   <select value={e.department} onChange={(event) => updateEmployeeSchedule(e.id, "department", event.target.value)}>{departments.map((department) => <option key={department}>{department}</option>)}</select>,
+                  <select value={e.sub_department || ""} onChange={(event) => updateEmployeeSchedule(e.id, "sub_department", event.target.value)}>{subDepartments.map((subDepartment) => <option key={subDepartment}>{subDepartment}</option>)}</select>,
+                  <input value={e.off_days || ""} onChange={(event) => updateEmployeeSchedule(e.id, "off_days", event.target.value)} placeholder="Saturday, Sunday" />,
+                  <Badge danger={isTodayOffDay(e)} muted={!isTodayOffDay(e)}>{isTodayOffDay(e) ? "Off Today" : "Scheduled"}</Badge>,
                   <input type="time" value={e.shift_start} onChange={(event) => updateEmployeeSchedule(e.id, "shift_start", event.target.value)} />,
                   <input type="time" value={e.shift_end} onChange={(event) => updateEmployeeSchedule(e.id, "shift_end", event.target.value)} />,
                   <div className="miniTimes"><input type="time" value={e.break_start} onChange={(event) => updateEmployeeSchedule(e.id, "break_start", event.target.value)} /><input type="time" value={e.break_end} onChange={(event) => updateEmployeeSchedule(e.id, "break_end", event.target.value)} /></div>,
@@ -1990,8 +2245,8 @@ User can now log into the Agent Portal.`
             <section className="grid two">
               <Card title="Agent-level adherence detail">
                 <Table
-                  headers={["Employee", "LOB", "Department", "Productivity", "Late", "Break Used", "Scheduled Break", "Variance", "OT"]}
-                  rows={agentReporting.map((e) => [e.full_name, e.lob, e.department, `${e.productivity}%`, formatMinutes(e.lateMinutes), formatMinutes(e.breakMinutes), formatMinutes(e.scheduledBreakLunch), <Badge danger={e.variance > 0} muted={e.variance <= 0}>{e.variance > 0 ? "+" : ""}{formatMinutes(e.variance)}</Badge>, formatHours(e.otMinutes)])}
+                  headers={["Employee", "LOB", "Department", "Sub-Department", "Productivity", "Late", "Break Used", "Scheduled Break", "Variance", "OT"]}
+                  rows={agentReporting.map((e) => [e.full_name, e.lob, e.department, e.sub_department || "N/A", `${e.productivity}%`, formatMinutes(e.lateMinutes), formatMinutes(e.breakMinutes), formatMinutes(e.scheduledBreakLunch), <Badge danger={e.variance > 0} muted={e.variance <= 0}>{e.variance > 0 ? "+" : ""}{formatMinutes(e.variance)}</Badge>, formatHours(e.otMinutes)])}
                 />
               </Card>
               <Card title="Category utilization summary">
@@ -2016,10 +2271,18 @@ User can now log into the Agent Portal.`
               <Card title="Manage Departments">
                 <p className="helperText">Add departments used for scheduling, reporting, productivity review, PTO/VTO limits, and payroll tracking.</p>
                 <div className="inlineForm">
-                  <input placeholder="Example: Collections, QA, Training, HR" value={newDepartment} onChange={(e) => setNewDepartment(e.target.value)} />
+                  <input placeholder="Example: Operations, QA, Training, HR" value={newDepartment} onChange={(e) => setNewDepartment(e.target.value)} />
                   <button className="primary" onClick={addDepartment}>Add Department</button>
                 </div>
                 <div className="chipList">{departments.map((department) => <span className="chip" key={department}>{department}<button onClick={() => deleteDepartment(department)}>×</button></span>)}</div>
+              </Card>
+              <Card title="Manage Operations Sub-Departments">
+                <p className="helperText">Use sub-departments to filter agents within Operations, such as Customer Service, Collections, CLS, Documents, and SME.</p>
+                <div className="inlineForm">
+                  <input placeholder="Example: CLS, Documents, SME" onKeyDown={(e) => { if (e.key === "Enter") { addSubDepartment(e.currentTarget.value); e.currentTarget.value = ""; } }} />
+                  <button className="primary" onClick={(e) => { const input = e.currentTarget.parentElement.querySelector("input"); addSubDepartment(input.value); input.value = ""; }}>Add Sub-Department</button>
+                </div>
+                <div className="chipList">{subDepartments.map((subDepartment) => <span className="chip" key={subDepartment}>{subDepartment}<button onClick={() => deleteSubDepartment(subDepartment)}>×</button></span>)}</div>
               </Card>
             </section>
 
@@ -2058,8 +2321,27 @@ User can now log into the Agent Portal.`
 
         
       </main>
+
+      {processingModal && <ProcessingOverlay title={processingModal.title} message={processingModal.message} />}
+      {managerOverrideModal && (
+        <ManagerOverrideModal
+          title={managerOverrideModal.title}
+          message={managerOverrideModal.message}
+          onCancel={() => resolveManagerOverride(false)}
+          onConfirm={() => resolveManagerOverride(true)}
+        />
+      )}
+      {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
     </div>
     
+  );
+}
+
+export default function App() {
+  return (
+    <AppErrorBoundary>
+      <HRWorkforceApp />
+    </AppErrorBoundary>
   );
 }
 
@@ -2152,6 +2434,33 @@ function Toast({ toast, onClose }) {
         {toast.message && <span>{toast.message}</span>}
       </section>
       <button type="button" onClick={onClose}>×</button>
+    </div>
+  );
+}
+
+function ProcessingOverlay({ title, message }) {
+  return (
+    <div className="modalBackdrop">
+      <section className="processingCard">
+        <div className="spinner" />
+        <h2>{title}</h2>
+        <p>{message}</p>
+      </section>
+    </div>
+  );
+}
+
+function ManagerOverrideModal({ title, message, onCancel, onConfirm }) {
+  return (
+    <div className="modalBackdrop">
+      <section className="overrideCard">
+        <h2>{title}</h2>
+        <p>{message}</p>
+        <div className="overrideActions">
+          <button onClick={onCancel}>Cancel</button>
+          <button className="primary" onClick={onConfirm}>Approve Override</button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -2305,6 +2614,8 @@ td input, td select { min-width: 110px; }
 .agentShiftCard { background: white; border: 1px solid var(--border); border-radius: 20px; padding: 16px; min-width: 260px; }
 .agentShiftCard strong { display: block; font-size: 24px; margin: 4px 0; }
 .agentShiftCard small { color: var(--muted); display: block; line-height: 1.5; }
+.agentShiftCard.offDay { background: #fff7ed; border-color: #fed7aa; }
+.agentShiftCard.offDay strong { color: #9a3412; }
 .agentGrid { margin-top: 18px; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; max-width: 100%; }
 .agentActions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .currentStatus { margin-top: 14px; display: grid; grid-template-columns: 1fr auto auto; gap: 10px; align-items: end; }
@@ -2356,6 +2667,25 @@ td input, td select { min-width: 110px; }
 .toast strong { display: block; font-size: 14px; }
 .toast span { display: block; margin-top: 3px; font-size: 12px; opacity: .9; line-height: 1.35; }
 .toast button { color: white; background: transparent; border: 0; box-shadow: none; padding: 6px; font-size: 22px; line-height: 1; }
+
+.errorPage { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #f7faf8; }
+.errorCard { width: min(560px, 100%); background: white; border: 1px solid var(--border); border-radius: 24px; padding: 24px; box-shadow: 0 24px 70px rgba(4,120,87,.12); }
+.errorCard h1 { margin: 0 0 8px; }
+.errorCard p { color: var(--muted); line-height: 1.5; }
+.errorCard pre { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px; white-space: pre-wrap; color: #991b1b; }
+.sessionBox { background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12); border-radius: 16px; padding: 12px; display: grid; gap: 4px; color: #d9f4e8; }
+.sessionBox span { font-size: 11px; color: #a8c7b9; text-transform: uppercase; letter-spacing: .05em; font-weight: 900; }
+.sessionBox strong { font-size: 14px; overflow-wrap: anywhere; }
+.sessionBox small { color: #a8c7b9; overflow-wrap: anywhere; }
+.sessionBox button { margin-top: 8px; justify-content: center; background: rgba(255,255,255,.12); border-color: rgba(255,255,255,.16); color: white; }
+.modalBackdrop { position: fixed; inset: 0; z-index: 9998; background: rgba(4, 28, 22, .55); backdrop-filter: blur(4px); display: grid; place-items: center; padding: 22px; }
+.processingCard, .overrideCard { width: min(520px, 100%); background: white; border: 1px solid var(--border); border-radius: 24px; padding: 24px; box-shadow: 0 28px 90px rgba(4, 37, 29, .28); text-align: center; }
+.processingCard h2, .overrideCard h2 { margin: 10px 0 8px; font-size: 24px; }
+.processingCard p, .overrideCard p { color: var(--muted); line-height: 1.5; margin: 0; }
+.spinner { width: 44px; height: 44px; border-radius: 999px; border: 4px solid #dceee6; border-top-color: var(--green); margin: 0 auto; animation: spin .8s linear infinite; }
+.overrideCard { text-align: left; }
+.overrideActions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
 @media (max-width: 1280px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .filterPanel { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 1120px) { .app { grid-template-columns: 1fr; } .sidebar { position: static; min-height: auto; height: auto; } .sidebar nav { grid-template-columns: repeat(3, 1fr); } .syncBox { margin-top: 0; } .topbar, .reportHeader { flex-direction: column; align-items: stretch; } .actions { justify-content: flex-start; } .filterPanel { grid-template-columns: repeat(2, 1fr); } .agentHero { flex-direction: column; align-items: stretch; } .agentGrid, .reportGrid { grid-template-columns: 1fr; } .balanceGrid, .reportMiniGrid { grid-template-columns: repeat(2, 1fr); } .profileGrid, .requestPreview { grid-template-columns: repeat(2, 1fr); } .metrics, .grid.two, .grid.split, .grid.split.reverse { grid-template-columns: 1fr; } }
