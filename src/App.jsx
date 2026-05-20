@@ -36,6 +36,21 @@ const DEFAULT_LOGIN_EMAIL = "agent1@goday.ca";
 const DEFAULT_LOGIN_PASSWORD = "Cando123!";
 const ADMIN_ACCESS_LEVELS = ["TL", "Manager", "HR", "Payroll", "Admin", "Executive"];
 
+// Schedule fields are treated as the employee's fixed master schedule.
+// Agent clicks can create actual time logs, but they must never overwrite these fields.
+const SCHEDULE_FIELDS = [
+  "shift_start",
+  "shift_end",
+  "break_start",
+  "break_end",
+  "lunch_start",
+  "lunch_end",
+  "second_break_start",
+  "second_break_end",
+  "off_days",
+  "sub_department",
+];
+
 const DEMO_ACCOUNTS = [
   { label: "Agent", email: "agent1@goday.ca", password: "Cando123!", access: "Employee portal only" },
   { label: "Team Lead", email: "tl@goday.ca", password: "Cando123!", access: "Team lead / admin access" },
@@ -613,6 +628,32 @@ function formatOffDays(value) {
   return days.length ? days.join(", ") : "None assigned";
 }
 
+function getStableSchedule(employee) {
+  return {
+    shift_start: formatMilitaryTime(employee?.shift_start || "08:00"),
+    shift_end: formatMilitaryTime(employee?.shift_end || "17:00"),
+    break_start: formatMilitaryTime(employee?.break_start || "10:00"),
+    break_end: formatMilitaryTime(employee?.break_end || "10:15"),
+    lunch_start: formatMilitaryTime(employee?.lunch_start || "12:00"),
+    lunch_end: formatMilitaryTime(employee?.lunch_end || "13:00"),
+    second_break_start: formatMilitaryTime(employee?.second_break_start || "15:00"),
+    second_break_end: formatMilitaryTime(employee?.second_break_end || "15:15"),
+    off_days: employee?.off_days || "",
+    sub_department: employee?.sub_department || "",
+  };
+}
+
+function getScheduleChangePayload(request) {
+  if (!request || request.type !== "Schedule Change") return {};
+
+  // Future-proofing: if a schedule-change request is later submitted with explicit
+  // schedule fields, only these approved fields can update the employee master schedule.
+  return SCHEDULE_FIELDS.reduce((payload, field) => {
+    if (request[field] !== undefined && request[field] !== "") payload[field] = request[field];
+    return payload;
+  }, {});
+}
+
 function todayDayName() {
   return WEEK_DAYS[new Date().getDay()];
 }
@@ -681,17 +722,18 @@ function getShiftStartOrNow(employee, time) {
 
 function getTodayShiftSummary(employee) {
   if (!employee) return { isOff: false, label: "No schedule", detail: "No employee selected." };
+  const schedule = getStableSchedule(employee);
   if (isTodayOffDay(employee)) {
     return {
       isOff: true,
       label: `OFF · ${todayDayName()}`,
-      detail: `Assigned off days: ${formatOffDays(employee.off_days)}`,
+      detail: `Assigned off days: ${formatOffDays(schedule.off_days)}`,
     };
   }
   return {
     isOff: false,
-    label: formatTimeRange(employee.shift_start, employee.shift_end),
-    detail: `Break: ${formatTimeRange(employee.break_start, employee.break_end)} · Lunch: ${formatTimeRange(employee.lunch_start, employee.lunch_end)} · Off days: ${formatOffDays(employee.off_days)}`,
+    label: formatTimeRange(schedule.shift_start, schedule.shift_end),
+    detail: `Break 1: ${formatTimeRange(schedule.break_start, schedule.break_end)} · Lunch: ${formatTimeRange(schedule.lunch_start, schedule.lunch_end)} · Break 2: ${formatTimeRange(schedule.second_break_start, schedule.second_break_end)} · Off days: ${formatOffDays(schedule.off_days)}`,
   };
 }
 
@@ -970,6 +1012,11 @@ function mapTimeFromSheet(row) {
     notes: row.Notes || "",
     scheduled_start: row.Scheduled_Start || row.Shift_Start || "08:00",
     scheduled_end: row.Scheduled_End || row.Shift_End || "17:00",
+    schedule_break_1: row.Schedule_Break_1 || "",
+    schedule_lunch: row.Schedule_Lunch || "",
+    schedule_break_2: row.Schedule_Break_2 || "",
+    schedule_off_days: row.Schedule_Off_Days || "",
+    schedule_source: row.Schedule_Source || "Employee Master Schedule",
     clock_in: row.Clock_In || row.Category_Start || "08:00",
     clock_out: row.Clock_Out || row.Category_End || "17:00",
   };
@@ -984,6 +1031,15 @@ function mapTimeToSheet(item) {
     Department: item.department,
     Sub_Department: item.sub_department || "",
     Date: item.date,
+    Scheduled_Start: item.scheduled_start || "",
+    Scheduled_End: item.scheduled_end || "",
+    Schedule_Break_1: item.schedule_break_1 || "",
+    Schedule_Lunch: item.schedule_lunch || "",
+    Schedule_Break_2: item.schedule_break_2 || "",
+    Schedule_Off_Days: item.schedule_off_days || "",
+    Schedule_Source: item.schedule_source || "Employee Master Schedule",
+    Clock_In: item.clock_in || "",
+    Clock_Out: item.clock_out || "",
     Disposition: item.category,
     Category_Start: item.category_start,
     Category_End: item.category_end,
@@ -1583,6 +1639,7 @@ User can now log into the Agent Portal.`
   async function agentAction(action, status = agentStatus) {
     const now = new Date();
     const time = now.toTimeString().slice(0, 5);
+    const schedule = getStableSchedule(selectedEmployee);
     const autoClass = getAutoWorkClassification(selectedEmployee, time);
 
     const resolvedStatus =
@@ -1635,10 +1692,15 @@ User can now log into the Agent Portal.`
         employee_id: selectedEmployee.id,
         employee_name: selectedEmployee.full_name,
         date: today,
-        scheduled_start: selectedEmployee.shift_start,
-        scheduled_end: selectedEmployee.shift_end,
-        clock_in: action === "Shift Started" ? time : getShiftStartOrNow(selectedEmployee, time),
-        clock_out: action === "Shift Ended" ? time : selectedEmployee.shift_end,
+        scheduled_start: schedule.shift_start,
+        scheduled_end: schedule.shift_end,
+        schedule_break_1: formatTimeRange(schedule.break_start, schedule.break_end),
+        schedule_lunch: formatTimeRange(schedule.lunch_start, schedule.lunch_end),
+        schedule_break_2: formatTimeRange(schedule.second_break_start, schedule.second_break_end),
+        schedule_off_days: schedule.off_days,
+        schedule_source: "Employee Master Schedule",
+        clock_in: action === "Shift Started" ? time : schedule.shift_start,
+        clock_out: action === "Shift Ended" ? time : schedule.shift_end,
         category: resolvedStatus,
         category_start: time,
         category_end: time,
@@ -1659,8 +1721,8 @@ User can now log into the Agent Portal.`
           ...baseTimeEntry,
           id: cleanId("TIME"),
           category: "Working",
-          category_start: selectedEmployee.shift_start,
-          category_end: selectedEmployee.shift_end,
+          category_start: schedule.shift_start,
+          category_end: schedule.shift_end,
           approved: "Auto Logged",
           payable_status: "Regular",
           locked: false,
@@ -1672,7 +1734,7 @@ User can now log into the Agent Portal.`
           ...baseTimeEntry,
           id: cleanId("TIME"),
           category: "Overtime",
-          category_start: selectedEmployee.shift_end,
+          category_start: schedule.shift_end,
           category_end: time,
           approved: "Pending",
           payable_status: "Pending Manager Approval",
@@ -1682,7 +1744,7 @@ User can now log into the Agent Portal.`
         };
 
         entriesToSave.push(regularEntry, overtimeEntry);
-        showToast("Auto overtime created", `Time after ${selectedEmployee.shift_end} was moved to overtime pending review.`, "info");
+        showToast("Auto overtime created", `Time after ${schedule.shift_end} was moved to overtime pending review.`, "info");
       } else {
         entriesToSave.push(baseTimeEntry);
       }
@@ -1699,6 +1761,7 @@ User can now log into the Agent Portal.`
 
   async function saveTime() {
     if (isAgentOnly) return;
+    const schedule = getStableSchedule(selectedEmployee);
     const key = `manual-time-${selectedEmployee.id}-${newTime.category}-${newTime.category_start}-${newTime.category_end}`;
     return runProtectedAction(key, "Manual time entry", async () => {
       const duplicate = timeEntries.some(
@@ -1725,10 +1788,15 @@ User can now log into the Agent Portal.`
         employee_id: selectedEmployee.id,
         employee_name: selectedEmployee.full_name,
         date: today,
-        scheduled_start: selectedEmployee.shift_start,
-        scheduled_end: selectedEmployee.shift_end,
-        clock_in: selectedEmployee.shift_start,
-        clock_out: selectedEmployee.shift_end,
+        scheduled_start: schedule.shift_start,
+        scheduled_end: schedule.shift_end,
+        schedule_break_1: formatTimeRange(schedule.break_start, schedule.break_end),
+        schedule_lunch: formatTimeRange(schedule.lunch_start, schedule.lunch_end),
+        schedule_break_2: formatTimeRange(schedule.second_break_start, schedule.second_break_end),
+        schedule_off_days: schedule.off_days,
+        schedule_source: "Employee Master Schedule",
+        clock_in: schedule.shift_start,
+        clock_out: schedule.shift_end,
         approved: manualApproval,
         payable_status: manualApproval === "Pending Approval" || manualCategory === "Overtime" ? "Pending Manager Approval" : "Pending Review",
         locked: manualApproval === "Pending Approval",
@@ -1861,6 +1929,26 @@ User can now log into the Agent Portal.`
 
           if (updatedEmployee) {
             await googleUpdateRow("employees", "Employee_ID", latestRequest.employee_id, mapEmployeeToSheet(updatedEmployee));
+          }
+        }
+
+        if (latestRequest.type === "Schedule Change" && updatedEmployee) {
+          const schedulePayload = getScheduleChangePayload(latestRequest);
+
+          if (Object.keys(schedulePayload).length) {
+            updatedEmployees = updatedEmployees.map((employee) => {
+              if (employee.id !== latestRequest.employee_id) return employee;
+              const next = { ...employee, ...schedulePayload };
+              next.break_minutes = minutesBetween(next.break_start, next.break_end) + minutesBetween(next.second_break_start, next.second_break_end);
+              next.lunch_minutes = minutesBetween(next.lunch_start, next.lunch_end);
+              return next;
+            });
+
+            updatedEmployee = updatedEmployees.find((employee) => employee.id === latestRequest.employee_id);
+
+            if (updatedEmployee) {
+              await googleUpdateRow("employees", "Employee_ID", latestRequest.employee_id, mapEmployeeToSheet(updatedEmployee));
+            }
           }
         }
       }
