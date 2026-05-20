@@ -23,7 +23,7 @@ const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPAB
 
 const today = new Date().toISOString().slice(0, 10);
 const LOGO = "/cando-logo.png";
-
+// staging deployment test
 // DEMO MODE CONFIGURATION
 // For demo/testing purposes this is intentionally blank so the app uses the built-in demo users below.
 // When you are ready to reconnect live Google Sheets, replace "" with your working /exec Apps Script URL.
