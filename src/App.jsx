@@ -2946,3 +2946,37 @@ td input, td select { min-width: 110px; }
 @media (max-width: 760px) { .topbar, .agentHero, .reportHeader { padding: 16px; } .metrics { grid-template-columns: 1fr; } .filterPanel { grid-template-columns: 1fr; } .approval { grid-template-columns: 1fr; } .approval div { display: flex; gap: 8px; } .activityItem { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 640px) { .demoAccounts > div { grid-template-columns: 1fr; } main, .sidebar { padding: 14px; } .filterPanel, .metrics, .profileGrid, .requestPreview, .reportMiniGrid, .inlineForm, .describedField, .activityItem { grid-template-columns: 1fr; } .currentStatus, .agentActions, .balanceGrid { grid-template-columns: 1fr; } .sidebar nav { grid-template-columns: 1fr; } .employeeFooter { flex-direction: column; align-items: flex-start; } .search { min-width: 0; width: 100%; } .card header { flex-direction: column; align-items: stretch; } }
 `;
+// App_fixed_schedule_time_parser.jsx
+// Google Sheets stable schedule time parser fix
+
+function parseSheetTime(value) {
+  if (!value) return "";
+
+  // Handle HH:mm strings directly
+  if (typeof value === "string" && value.includes(":")) {
+    return value.slice(0,5);
+  }
+
+  // Handle Google Sheets serialized dates
+  const parsed = new Date(value);
+
+  if (!isNaN(parsed.getTime())) {
+    const hours = String(parsed.getUTCHours()).padStart(2, "0");
+    const minutes = String(parsed.getUTCMinutes()).padStart(2, "0");
+    return `${hours}:${minutes}`;
+  }
+
+  return "";
+}
+
+// Example usage:
+const employeeSchedule = {
+  shift_start: parseSheetTime(employee?.Shift_Start),
+  shift_end: parseSheetTime(employee?.Shift_End),
+  break1_start: parseSheetTime(employee?.Break_1_Start),
+  break1_end: parseSheetTime(employee?.Break_1_End),
+  lunch_start: parseSheetTime(employee?.Lunch_Start),
+  lunch_end: parseSheetTime(employee?.Lunch_End),
+  break2_start: parseSheetTime(employee?.Break_2_Start),
+  break2_end: parseSheetTime(employee?.Break_2_End),
+};
