@@ -1229,27 +1229,50 @@ function HRWorkforceApp() {
 
   async function runProtectedAction(key, title, handler) {
     if (actionLockRef.current.has(key)) {
+      setProcessingModal({
+        status: "warning",
+        title: "Already processing",
+        message: `${title} is already processing. Please wait a moment.`,
+      });
       showToast("Duplicate click prevented", `${title} is already processing. Please wait a moment.`, "warning");
+      setTimeout(() => setProcessingModal(null), 1800);
       return null;
     }
 
     actionLockRef.current.add(key);
-    setProcessingModal({ title: "Processing", message: `${title} is being saved. Please do not click again.` });
+    setProcessingModal({
+      status: "processing",
+      title: "Processing",
+      message: `${title} is being saved. Please do not click again.`,
+    });
     showToast("Processing", `${title} is being saved. Please do not click again.`, "info");
 
     try {
       const result = await handler();
       if (result !== "silent") {
+        setProcessingModal({
+          status: "success",
+          title: "Saved successfully",
+          message: `${title} was completed successfully.`,
+        });
         showToast("Saved successfully", `${title} was completed.`, "success");
+        setTimeout(() => setProcessingModal(null), 1600);
+      } else {
+        setProcessingModal(null);
       }
       return result;
     } catch (error) {
       console.error(error);
+      setProcessingModal({
+        status: "danger",
+        title: "Action failed",
+        message: error?.message || "The update was not saved. Please review and try again.",
+      });
       showToast("Action failed", error?.message || "Please review the console or try again.", "danger");
+      setTimeout(() => setProcessingModal(null), 2600);
       return null;
     } finally {
       actionLockRef.current.delete(key);
-      setProcessingModal(null);
     }
   }
 
@@ -1469,61 +1492,69 @@ function HRWorkforceApp() {
     if (isAgentOnly) return;
 
     if (!newEmployee.full_name || !newEmployee.email) {
-      return alert("Name and email are required.");
+      showToast("Missing employee information", "Name and email are required before saving.", "warning");
+      return;
     }
 
-    const generatedPassword = Math.random().toString(36).slice(-8) + "A1!";
-    let authUserId = null;
+    return runProtectedAction("save-employee-" + normalizeEmail(newEmployee.email), "Employee profile", async () => {
+      const generatedPassword = Math.random().toString(36).slice(-8) + "A1!";
+      let authUserId = null;
 
-    if (supabase) {
-      const { data, error } = await supabase.auth.signUp({
-        email: newEmployee.email,
-        password: generatedPassword,
-      });
+      if (supabase) {
+        const { data, error } = await supabase.auth.signUp({
+          email: newEmployee.email,
+          password: generatedPassword,
+        });
 
-      if (error) {
-        console.error(error);
-        return alert(error.message);
+        if (error) {
+          console.error(error);
+          throw new Error(error.message);
+        }
+
+        authUserId = data?.user?.id;
       }
 
-      authUserId = data?.user?.id;
-    }
+      const item = {
+        ...newEmployee,
+        id: authUserId || cleanId("EMP"),
+        temp_password: generatedPassword,
+      };
 
-    const item = {
-      ...newEmployee,
-      id: authUserId || cleanId("EMP"),
-      temp_password: generatedPassword,
-    };
+      if (supabase) await supabase.from("employees").upsert(item);
+      await googleAddRow("employees", mapEmployeeToSheet(item));
 
-    if (supabase) await supabase.from("employees").upsert(item);
-    await googleAddRow("employees", mapEmployeeToSheet(item));
+      setEmployees([item, ...employees]);
+      setSelectedEmployeeId(item.id);
+      setNewEmployee({ ...newEmployee, full_name: "", email: "" });
 
-    setEmployees([item, ...employees]);
-    setSelectedEmployeeId(item.id);
+      setTimeout(() => {
+        alert(
+          `User created successfully.
 
-    alert(
-      `User created successfully.
-
-Email: ${newEmployee.email}
+Email: ${item.email}
 Temporary Password: ${generatedPassword}
 
 User can now log into the Agent Portal.`
-    );
-
-    setNewEmployee({ ...newEmployee, full_name: "", email: "" });
+        );
+      }, 250);
+    });
   }
 
-  function saveRule() {
-    const item = {
-      ...newRule,
-      id: `RULE-${Date.now().toString().slice(-6)}`,
-      max_pto_out: safeNumber(newRule.max_pto_out, 0),
-      max_vto_out: safeNumber(newRule.max_vto_out, 0),
-      max_sick_out: safeNumber(newRule.max_sick_out, 0),
-      min_staff_required: safeNumber(newRule.min_staff_required, 0),
-    };
-    setRules([item, ...rules]);
-    googleAddRow("staffingRules", mapRuleToSheet(item));
+  async function saveRule() {
+    if (isAgentOnly) return;
+
+    return runProtectedAction("save-staffing-rule", "Staffing rule", async () => {
+      const item = {
+        ...newRule,
+        id: `RULE-${Date.now().toString().slice(-6)}`,
+        max_pto_out: safeNumber(newRule.max_pto_out, 0),
+        max_vto_out: safeNumber(newRule.max_vto_out, 0),
+        max_sick_out: safeNumber(newRule.max_sick_out, 0),
+        min_staff_required: safeNumber(newRule.min_staff_required, 0),
+      };
+      setRules([item, ...rules]);
+      await googleAddRow("staffingRules", mapRuleToSheet(item));
+    });
   }
 
   function deleteRule(id) {
@@ -1804,78 +1835,74 @@ User can now log into the Agent Portal.`
     }
 
     const key = `request-approval-${id}-${status}`;
-    if (actionLockRef.current.has(key)) {
-      showToast("Duplicate approval prevented", `Request ${status} is already processing.`, "warning");
-      return;
-    }
     if (request.status === status) {
       showToast("Duplicate approval prevented", `This request is already marked as ${status}.`, "warning");
       return;
     }
-    actionLockRef.current.add(key);
 
-    let updatedEmployees = employees;
-    let updatedEmployee = employees.find((e) => e.id === request.employee_id);
+    return runProtectedAction(key, `Request ${status}`, async () => {
+      const latestRequest = requests.find((r) => r.id === id) || request;
+      let updatedEmployees = employees;
+      let updatedEmployee = employees.find((e) => e.id === latestRequest.employee_id);
 
-    if (status === "Approved") {
-      const field = balanceField(request.type);
-      if (field) {
-        updatedEmployees = employees.map((e) => {
-          if (e.id !== request.employee_id) return e;
-          const newBalance = Math.max(0, safeNumber(e[field], 0) - safeNumber(request.hours, 0));
-          return { ...e, [field]: newBalance };
-        });
-        updatedEmployee = updatedEmployees.find((e) => e.id === request.employee_id);
+      if (status === "Approved") {
+        const field = balanceField(latestRequest.type);
+        if (field) {
+          updatedEmployees = employees.map((e) => {
+            if (e.id !== latestRequest.employee_id) return e;
+            const newBalance = Math.max(0, safeNumber(e[field], 0) - safeNumber(latestRequest.hours, 0));
+            return { ...e, [field]: newBalance };
+          });
+          updatedEmployee = updatedEmployees.find((e) => e.id === latestRequest.employee_id);
 
-        if (supabase && updatedEmployee) {
-          await supabase.from("employees").update({ [field]: updatedEmployee[field] }).eq("id", request.employee_id);
-        }
+          if (supabase && updatedEmployee) {
+            await supabase.from("employees").update({ [field]: updatedEmployee[field] }).eq("id", latestRequest.employee_id);
+          }
 
-        if (updatedEmployee) {
-          await googleUpdateRow("employees", "Employee_ID", request.employee_id, mapEmployeeToSheet(updatedEmployee));
+          if (updatedEmployee) {
+            await googleUpdateRow("employees", "Employee_ID", latestRequest.employee_id, mapEmployeeToSheet(updatedEmployee));
+          }
         }
       }
-    }
 
-    const updatedRequest = {
-      ...request,
-      status,
-      manager: currentUser.email,
-      projected_balance:
-        status === "Approved" && updatedEmployee && balanceField(request.type)
-          ? updatedEmployee[balanceField(request.type)]
-          : request.projected_balance,
-    };
+      const updatedRequest = {
+        ...latestRequest,
+        status,
+        manager: currentUser.email,
+        projected_balance:
+          status === "Approved" && updatedEmployee && balanceField(latestRequest.type)
+            ? updatedEmployee[balanceField(latestRequest.type)]
+            : latestRequest.projected_balance,
+      };
 
-    if (supabase) await supabase.from("time_off_requests").update({ status }).eq("id", id);
+      if (supabase) await supabase.from("time_off_requests").update({ status }).eq("id", id);
 
-    await googleUpdateRow("requests", "Request_ID", id, mapRequestToSheet(updatedRequest));
+      await googleUpdateRow("requests", "Request_ID", id, mapRequestToSheet(updatedRequest));
 
-    await googleAddRow(
-      "approvals",
-      mapApprovalToSheet({
-        id: cleanId("APPROVAL"),
-        employee_id: request.employee_id,
-        employee_name: request.employee_name,
-        approval_type: "Time Off / Request",
-        related_record_id: request.id,
-        request_type: request.type,
-        decision: status,
-        previous_status: request.status,
-        new_status: status,
-        approved_by: currentUser.email,
-        approved_date: new Date(),
-        hours: request.hours,
-        current_balance: request.current_balance,
-        projected_balance: updatedRequest.projected_balance,
-        notes: `Manager decision recorded for ${request.type}`,
-      })
-    );
+      await googleAddRow(
+        "approvals",
+        mapApprovalToSheet({
+          id: cleanId("APPROVAL"),
+          employee_id: latestRequest.employee_id,
+          employee_name: latestRequest.employee_name,
+          approval_type: "Time Off / Request",
+          related_record_id: latestRequest.id,
+          request_type: latestRequest.type,
+          decision: status,
+          previous_status: latestRequest.status,
+          new_status: status,
+          approved_by: currentUser.email,
+          approved_date: new Date(),
+          hours: latestRequest.hours,
+          current_balance: latestRequest.current_balance,
+          projected_balance: updatedRequest.projected_balance,
+          notes: `Manager decision recorded for ${latestRequest.type}`,
+        })
+      );
 
-    setEmployees(updatedEmployees);
-    setRequests((current) => current.map((r) => (r.id === id ? updatedRequest : r)));
-    actionLockRef.current.delete(key);
-    showToast("Approval saved", `Request marked as ${status}.`, "success");
+      setEmployees(updatedEmployees);
+      setRequests((current) => current.map((r) => (r.id === id ? updatedRequest : r)));
+    });
   }
 
   async function setTimeStatus(id, approved) {
@@ -1885,50 +1912,46 @@ User can now log into the Agent Portal.`
     if (!timeEntry) return;
 
     const key = `time-approval-${id}-${approved}`;
-    if (actionLockRef.current.has(key)) {
-      showToast("Duplicate approval prevented", `Time status ${approved} is already processing.`, "warning");
-      return;
-    }
     if (timeEntry.approved === approved) {
       showToast("Duplicate approval prevented", `This time entry is already marked as ${approved}.`, "warning");
       return;
     }
-    actionLockRef.current.add(key);
 
-    const updatedTimeEntry = {
-      ...timeEntry,
-      approved,
-      approved_by: currentUser.email,
-      payable_status: approved === "Approved" ? "Approved Payable" : approved === "Denied" ? "Denied / Not Payable" : timeEntry.payable_status,
-      locked: false,
-    };
-
-    if (supabase) await supabase.from("time_entries").update({ approved }).eq("id", id);
-
-    await googleUpdateRow("timeLogs", "Log_ID", id, mapTimeToSheet(updatedTimeEntry));
-
-    await googleAddRow(
-      "approvals",
-      mapApprovalToSheet({
-        id: cleanId("APPROVAL"),
-        employee_id: timeEntry.employee_id,
-        employee_name: timeEntry.employee_name,
-        approval_type: "Time Log / Overtime / Disposition",
-        related_record_id: timeEntry.id,
-        request_type: timeEntry.category,
-        decision: approved,
-        previous_status: timeEntry.approved,
-        new_status: approved,
+    return runProtectedAction(key, `Time entry ${approved}`, async () => {
+      const latestTimeEntry = timeEntries.find((t) => t.id === id) || timeEntry;
+      const updatedTimeEntry = {
+        ...latestTimeEntry,
+        approved,
         approved_by: currentUser.email,
-        approved_date: new Date(),
-        hours: (minutesBetween(timeEntry.category_start, timeEntry.category_end) / 60).toFixed(2),
-        notes: `Manager decision recorded for ${timeEntry.category}`,
-      })
-    );
+        payable_status: approved === "Approved" ? "Approved Payable" : approved === "Denied" ? "Denied / Not Payable" : latestTimeEntry.payable_status,
+        locked: false,
+      };
 
-    setTimeEntries((current) => current.map((t) => (t.id === id ? updatedTimeEntry : t)));
-    actionLockRef.current.delete(key);
-    showToast("Approval saved", `Time entry marked as ${approved}.`, "success");
+      if (supabase) await supabase.from("time_entries").update({ approved }).eq("id", id);
+
+      await googleUpdateRow("timeLogs", "Log_ID", id, mapTimeToSheet(updatedTimeEntry));
+
+      await googleAddRow(
+        "approvals",
+        mapApprovalToSheet({
+          id: cleanId("APPROVAL"),
+          employee_id: latestTimeEntry.employee_id,
+          employee_name: latestTimeEntry.employee_name,
+          approval_type: "Time Log / Overtime / Disposition",
+          related_record_id: latestTimeEntry.id,
+          request_type: latestTimeEntry.category,
+          decision: approved,
+          previous_status: latestTimeEntry.approved,
+          new_status: approved,
+          approved_by: currentUser.email,
+          approved_date: new Date(),
+          hours: (minutesBetween(latestTimeEntry.category_start, latestTimeEntry.category_end) / 60).toFixed(2),
+          notes: `Manager decision recorded for ${latestTimeEntry.category}`,
+        })
+      );
+
+      setTimeEntries((current) => current.map((t) => (t.id === id ? updatedTimeEntry : t)));
+    });
   }
 
   function importEmployees(event) {
@@ -2470,7 +2493,7 @@ User can now log into the Agent Portal.`
         
       </main>
 
-      {processingModal && <ProcessingOverlay title={processingModal.title} message={processingModal.message} />}
+      {processingModal && <ProcessingOverlay status={processingModal.status} title={processingModal.title} message={processingModal.message} />}
       {managerOverrideModal && (
         <ManagerOverrideModal
           title={managerOverrideModal.title}
@@ -2586,28 +2609,14 @@ function Toast({ toast, onClose }) {
   );
 }
 
-function ProcessingOverlay({ title, message }) {
+function ProcessingOverlay({ status = "processing", title, message }) {
+  const icon = status === "success" ? "✓" : status === "danger" ? "!" : status === "warning" ? "!" : "⏳";
   return (
-    <div className="modalBackdrop">
-      <section className="processingCard">
-        <div className="spinner" />
+    <div className="modalOverlay">
+      <section className={`processingCard ${status}`}>
+        <div className="processingSpinner">{icon}</div>
         <h2>{title}</h2>
         <p>{message}</p>
-      </section>
-    </div>
-  );
-}
-
-function ManagerOverrideModal({ title, message, onCancel, onConfirm }) {
-  return (
-    <div className="modalBackdrop">
-      <section className="overrideCard">
-        <h2>{title}</h2>
-        <p>{message}</p>
-        <div className="overrideActions">
-          <button onClick={onCancel}>Cancel</button>
-          <button className="primary" onClick={onConfirm}>Approve Override</button>
-        </div>
       </section>
     </div>
   );
@@ -2835,6 +2844,9 @@ td input, td select { min-width: 110px; }
 .modalBackdrop { position: fixed; inset: 0; z-index: 9998; background: rgba(4, 28, 22, .55); backdrop-filter: blur(4px); display: grid; place-items: center; padding: 22px; }
 .processingCard, .overrideCard { width: min(520px, 100%); background: white; border: 1px solid var(--border); border-radius: 24px; padding: 24px; box-shadow: 0 28px 90px rgba(4, 37, 29, .28); text-align: center; }
 .processingCard h2, .overrideCard h2 { margin: 10px 0 8px; font-size: 24px; }
+.processingCard.success .processingSpinner { background: #dcfce7; color: #047857; }
+.processingCard.danger .processingSpinner { background: #fee2e2; color: #b91c1c; }
+.processingCard.warning .processingSpinner { background: #fef3c7; color: #92400e; }
 .processingCard p, .overrideCard p { color: var(--muted); line-height: 1.5; margin: 0; }
 .spinner { width: 44px; height: 44px; border-radius: 999px; border: 4px solid #dceee6; border-top-color: var(--green); margin: 0 auto; animation: spin .8s linear infinite; }
 .overrideCard { text-align: left; }
