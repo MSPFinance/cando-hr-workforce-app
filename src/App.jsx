@@ -1482,9 +1482,9 @@ function HRWorkforceApp() {
   }
 
   const currentUser = employees.find((e) => normalizeEmail(e.email) === normalizeEmail(sessionUserEmail)) || employees.find((e) => normalizeEmail(e.email) === normalizeEmail(DEFAULT_LOGIN_EMAIL)) || employees[0];
-  const canAccessAdmin = hasAdminDashboardAccess(selectedEmployee);
+  const canAccessAdmin = hasAdminAccess(currentUser);
   const isAuthenticated = Boolean(sessionUserEmail && currentUser);
-  const isAgentOnly = !hasAdminDashboardAccess(selectedEmployee);
+  const isAgentOnly = !adminMode || !canAccessAdmin;
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(currentUser.id);
   const selectedEmployee = isAgentOnly ? currentUser : employees.find((e) => e.id === selectedEmployeeId) || currentUser;
 
