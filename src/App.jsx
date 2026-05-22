@@ -393,6 +393,7 @@ const timeCategories = [
 const SYSTEM_MANAGED_TIME_CATEGORIES = ["Overtime", "Early Unscheduled", "Off-Day Unscheduled"];
 
 const ROLE_ACCESS = {
+  Employee: ["portal"],
   Agent: ["portal"],
   Supervisor: ["portal", "dashboard", "requests", "approvals", "reporting"],
   "Team Lead": ["portal", "dashboard", "requests", "approvals", "reporting"],
@@ -1757,6 +1758,59 @@ User can now log into the Agent Portal.`
     }
   }
 
+  async function updateEmployeeRole(employeeId, newAccessLevel) {
+    if (!["Manager", "HR", "Admin"].includes(currentUser?.access_level || currentUser?.role || "")) {
+      showToast("Access denied", "Only Manager, HR, or Admin users can update employee role access.", "danger");
+      return;
+    }
+
+    const target = employees.find((employee) => employee.id === employeeId);
+    if (!target) {
+      showToast("Employee not found", "The selected employee profile could not be found.", "danger");
+      return;
+    }
+
+    if (target.access_level === newAccessLevel) {
+      showToast("No change needed", `${target.full_name} already has ${newAccessLevel} access.`, "info");
+      return;
+    }
+
+    const key = `role-update-${employeeId}-${newAccessLevel}`;
+
+    return runProtectedAction(key, "Employee role access update", async () => {
+      const updatedEmployee = {
+        ...target,
+        access_level: newAccessLevel,
+        role: newAccessLevel === "Employee" ? "Agent" : newAccessLevel,
+      };
+
+      setEmployees((current) =>
+        current.map((employee) => (employee.id === employeeId ? updatedEmployee : employee))
+      );
+
+      await googleUpdateRow("employees", "Employee_ID", employeeId, mapEmployeeToSheet(updatedEmployee));
+
+      await googleAddRow("approvals", mapApprovalToSheet({
+        id: cleanId("ROLE"),
+        employee_id: updatedEmployee.id,
+        employee_name: updatedEmployee.full_name,
+        approval_type: "Employee Role / Access",
+        related_record_id: updatedEmployee.id,
+        request_type: "Role Update",
+        decision: "Updated",
+        previous_status: target.access_level,
+        new_status: newAccessLevel,
+        approved_by: currentUser.email,
+        approved_date: new Date(),
+        notes: `Role access changed from ${target.access_level} to ${newAccessLevel}.`,
+      }));
+
+      if (sessionUserEmail && normalizeEmail(sessionUserEmail) === normalizeEmail(updatedEmployee.email)) {
+        localStorage.setItem("candoHrUserEmail", updatedEmployee.email);
+      }
+    });
+  }
+
   async function agentAction(action, status = agentStatus) {
     if (status === "Overtime" && action !== "Shift Ended") {
       showToast("Manual overtime disabled", "Overtime is created automatically after the scheduled shift end.", "warning");
@@ -2578,6 +2632,28 @@ User can now log into the Agent Portal.`
             <Card title="Employee master database" action={<SearchBox value={search} onChange={setSearch} />}>
               <Table headers={["Employee", "LOB", "Department", "Sub-Department", "Role", "Country", "Shift", "Off Days", "Status"]} rows={filteredEmployees.map((e) => [<button className="textBtn" onClick={() => setSelectedEmployeeId(e.id)}>{e.full_name}<small>{e.email}</small></button>, e.lob, e.department, e.sub_department || "N/A", e.role, e.country, formatTimeRange(e.shift_start, e.shift_end), formatOffDays(e.off_days), <Badge>{e.employment_status}</Badge>])} />
             </Card>
+            <Card title="Employee role access management">
+              <p className="helperText">Update existing user role profiles without changing their schedule or employee data. Role changes control which tabs and actions are available to the user.</p>
+              <Table
+                headers={["Employee", "Email", "Current Role", "Access Level", "Update Access"]}
+                rows={filteredEmployees.map((employee) => [
+                  <strong>{employee.full_name}</strong>,
+                  employee.email,
+                  employee.role,
+                  <Badge>{employee.access_level}</Badge>,
+                  <select
+                    value={employee.access_level || "Employee"}
+                    disabled={!["Manager", "HR", "Admin"].includes(currentUser?.access_level || currentUser?.role || "")}
+                    onChange={(event) => updateEmployeeRole(employee.id, event.target.value)}
+                  >
+                    {ROLE_PROFILE_OPTIONS.map((roleOption) => (
+                      <option key={roleOption} value={roleOption}>{roleOption}</option>
+                    ))}
+                  </select>,
+                ])}
+              />
+            </Card>
+
             <Card title="Add employee">
               <FormGrid>
                 <input placeholder="Full name" value={newEmployee.full_name} onChange={(e) => setNewEmployee({ ...newEmployee, full_name: e.target.value })} />
@@ -3086,6 +3162,9 @@ td input, td select { min-width: 110px; }
 .miniTimes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; min-width: 190px; }
 .rulesPage { margin-top: 18px; }\n.rulesPage .grid.split.reverse { grid-template-columns: minmax(320px, 430px) minmax(0, 1fr); align-items: start; }\n.rulesPage .table table { min-width: 980px; }
 .helperText { margin: 0 0 12px; color: var(--muted); line-height: 1.45; max-width: 100%; overflow-wrap: anywhere; }
+.roleAccessNote { color: var(--muted); font-size: 12px; line-height: 1.4; }
+select:disabled { opacity: .55; cursor: not-allowed; background: #f1f5f9; }
+
 .inlineForm { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
 .chipList { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .chip { display: inline-flex; align-items: center; gap: 8px; background: #ecfdf5; color: #047857; border-radius: 999px; padding: 7px 10px; font-size: 12px; font-weight: 800; }
