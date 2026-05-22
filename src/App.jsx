@@ -383,10 +383,24 @@ const timeCategories = [
   "PTO",
   "VTO",
   "Other",
+  // System-managed categories below are intentionally kept in code for reporting and automation,
+  // but disabled from manual selection in the UI.
   "Overtime",
   "Early Unscheduled",
   "Off-Day Unscheduled",
 ];
+
+const SYSTEM_MANAGED_TIME_CATEGORIES = ["Overtime", "Early Unscheduled", "Off-Day Unscheduled"];
+function isSystemManagedTimeCategory(category) {
+  return SYSTEM_MANAGED_TIME_CATEGORIES.includes(category);
+}
+function TimeCategoryOptions() {
+  return timeCategories.map((category) => (
+    <option key={category} value={category} disabled={isSystemManagedTimeCategory(category)}>
+      {isSystemManagedTimeCategory(category) ? `${category} (Automatic only)` : category}
+    </option>
+  ));
+}
 
 const timeSeed = [
   {
@@ -2447,9 +2461,9 @@ User can now log into the Agent Portal.`
                   <button onClick={() => agentAction("Shift Ended", "Working")}>End Shift</button>
                 </div>
                 <div className="currentStatus">
-                  <label><span>Current Status / Disposition</span><select value={agentStatus} onChange={(e) => setAgentStatus(e.target.value)}>{timeCategories.map((x) => <option key={x}>{x}</option>)}</select></label>
+                  <label><span>Current Status / Disposition</span><select value={agentStatus} onChange={(e) => setAgentStatus(e.target.value)}><TimeCategoryOptions /></select></label>
                   <button className="primary" onClick={() => agentAction("Status Changed", agentStatus)}>Log Status</button>
-                  <button onClick={() => { setAgentStatus("Overtime"); agentAction("Overtime Logged", "Overtime"); }}>Log Overtime</button>
+                  <button disabled title="Overtime is automatic after scheduled shift end." className="disabledBtn">Log Overtime Disabled</button>
                 </div>
               </Card>
 
@@ -2484,16 +2498,6 @@ User can now log into the Agent Portal.`
                 <ActivityList activities={visibleActivity} />
               </Card>
             </div>
-          </section>
-        )}
-
-        {!isAgentOnly && tab !== "agent" && (
-          <section className="metrics">
-            <Metric icon={Users} label="Active Employees" value={stats.active} hint="Current headcount" />
-            <Metric icon={FileCheck} label="Pending Requests" value={stats.pendingRequests} hint="Awaiting approval" />
-            <Metric icon={Clock} label="Payroll Exceptions" value={stats.payrollExceptions} hint="Pending review" />
-            <Metric icon={Clock} label="Overtime" value={formatHours(stats.overtimeMinutes)} hint="Tracked OT" />
-            <Metric icon={BarChart3} label="Productivity" value={`${stats.productivity}%`} hint="Working vs tracked" />
           </section>
         )}
 
@@ -2587,7 +2591,7 @@ User can now log into the Agent Portal.`
 
         {!isAgentOnly && tab === "time" && (
           <section className="grid split reverse">
-            <Card title="Log time category"><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newTime.category} onChange={(e) => setNewTime({ ...newTime, category: e.target.value })}>{timeCategories.map((x) => <option key={x}>{x}</option>)}</select><input type="time" value={newTime.category_start} onChange={(e) => setNewTime({ ...newTime, category_start: e.target.value })} /><input type="time" value={newTime.category_end} onChange={(e) => setNewTime({ ...newTime, category_end: e.target.value })} /><input placeholder="Notes" value={newTime.notes} onChange={(e) => setNewTime({ ...newTime, notes: e.target.value })} /><button className="primary wide" onClick={saveTime}>Add time entry</button></FormGrid></Card>
+            <Card title="Log time category"><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newTime.category} onChange={(e) => setNewTime({ ...newTime, category: e.target.value })}><TimeCategoryOptions /></select><input type="time" value={newTime.category_start} onChange={(e) => setNewTime({ ...newTime, category_start: e.target.value })} /><input type="time" value={newTime.category_end} onChange={(e) => setNewTime({ ...newTime, category_end: e.target.value })} /><input placeholder="Notes" value={newTime.notes} onChange={(e) => setNewTime({ ...newTime, notes: e.target.value })} /><button className="primary wide" onClick={saveTime}>Add time entry</button></FormGrid></Card>
             <Card title="Daily time utilization"><Table headers={["Employee", "Date", "LOB", "Category", "Time", "Duration", "Approval", "Payable"]} rows={filteredTime.map((t) => [t.employee_name, t.date, t.lob, <Badge muted={t.locked} danger={t.approved === "Pending Approval"}>{t.category}</Badge>, formatTimeRange(t.category_start, t.category_end), formatHours(minutesBetween(t.category_start, t.category_end)), <Badge danger={t.approved === "Pending Approval"}>{t.approved}</Badge>, t.payable_status || "Regular"]) } /></Card>
           </section>
         )}
@@ -3109,6 +3113,8 @@ td input, td select { min-width: 110px; }
 .roleProfile span { color: var(--muted); font-size: 12px; line-height: 1.45; }
 option:disabled { color: #94a3b8; background: #f1f5f9; }
 
+.disabledBtn, button:disabled, select option:disabled { opacity: .45; cursor: not-allowed; filter: grayscale(.3); }
+button:disabled:hover { transform: none; box-shadow: none; }
 @media (max-width: 1280px) { .metrics, .tabMetrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .filterPanel { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 1120px) { .app { grid-template-columns: 1fr; } .sidebar { position: static; min-height: auto; height: auto; } .sidebar nav { grid-template-columns: repeat(3, 1fr); } .syncBox { margin-top: 0; } .topbar, .reportHeader { flex-direction: column; align-items: stretch; } .actions { justify-content: flex-start; } .filterPanel { grid-template-columns: repeat(2, 1fr); } .agentHero { flex-direction: column; align-items: stretch; } .agentGrid, .reportGrid { grid-template-columns: 1fr; } .balanceGrid, .reportMiniGrid { grid-template-columns: repeat(2, 1fr); } .profileGrid, .requestPreview { grid-template-columns: repeat(2, 1fr); } .metrics, .grid.two, .grid.split, .grid.split.reverse { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .topbar, .agentHero, .reportHeader { padding: 16px; } .metrics, .tabMetrics { grid-template-columns: 1fr; } .filterPanel { grid-template-columns: 1fr; } .approval { grid-template-columns: 1fr; } .approval div { display: flex; gap: 8px; } .activityItem { grid-template-columns: 1fr 1fr; } }
