@@ -100,6 +100,7 @@ const employeesSeed = [
     hire_date: "2024-03-15",
     birthday: "1995-06-12",
     employment_status: "Active",
+    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "08:00",
@@ -132,6 +133,7 @@ const employeesSeed = [
     hire_date: "2022-09-01",
     birthday: "1990-11-02",
     employment_status: "Active",
+    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "09:00",
@@ -164,6 +166,7 @@ const employeesSeed = [
     hire_date: "2023-01-10",
     birthday: "1994-08-20",
     employment_status: "Active",
+    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "08:00",
@@ -196,6 +199,7 @@ const employeesSeed = [
     hire_date: "2021-05-03",
     birthday: "1988-04-15",
     employment_status: "Active",
+    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "08:00",
@@ -228,6 +232,7 @@ const employeesSeed = [
     hire_date: "2020-02-10",
     birthday: "1987-09-18",
     employment_status: "Active",
+    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "08:00",
@@ -260,6 +265,7 @@ const employeesSeed = [
     hire_date: "2019-07-22",
     birthday: "1985-12-05",
     employment_status: "Active",
+    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "09:00",
@@ -292,6 +298,7 @@ const employeesSeed = [
     hire_date: "2018-01-08",
     birthday: "1984-03-30",
     employment_status: "Active",
+    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "08:00",
@@ -324,6 +331,7 @@ const employeesSeed = [
     hire_date: "2017-11-01",
     birthday: "1980-01-22",
     employment_status: "Active",
+    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "09:00",
@@ -1348,6 +1356,7 @@ function HRWorkforceApp() {
     hire_date: "",
     birthday: "",
     employment_status: "Active",
+    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "08:00",
@@ -1363,6 +1372,9 @@ function HRWorkforceApp() {
     pto_balance: 0,
     sick_balance: 0,
     vto_balance: 0,
+    pto_balance_days: 0,
+    sick_balance_days: 0,
+    vto_balance_days: 0,
   });
   const [databaseStatus, setDatabaseStatus] = useState("Demo mode active. Using built-in demo users and sample HR data.");
   const [sessionUserEmail, setSessionUserEmail] = useState(localStorage.getItem("candoHrUserEmail") || "");
@@ -1714,6 +1726,12 @@ const visibleEmployees = isAgentOnly ? [currentUser] : employees;
         ...newEmployee,
         id: authUserId || cleanId("EMP"),
         temp_password: generatedPassword,
+        break_minutes: minutesBetween(newEmployee.break_start, newEmployee.break_end) + minutesBetween(newEmployee.second_break_start, newEmployee.second_break_end),
+        lunch_minutes: minutesBetween(newEmployee.lunch_start, newEmployee.lunch_end),
+        pto_balance_days: newEmployee.pto_balance_days ?? safeNumber(newEmployee.pto_balance, 0) / 8,
+        sick_balance_days: newEmployee.sick_balance_days ?? safeNumber(newEmployee.sick_balance, 0) / 8,
+        vto_balance_days: newEmployee.vto_balance_days ?? safeNumber(newEmployee.vto_balance, 0) / 8,
+        termination_date: newEmployee.employment_status === "Inactive" ? (newEmployee.termination_date || today) : "",
       };
 
       if (supabase) await supabase.from("employees").upsert(item);
@@ -1721,7 +1739,13 @@ const visibleEmployees = isAgentOnly ? [currentUser] : employees;
 
       setEmployees([item, ...employees]);
       setSelectedEmployeeId(item.id);
-      setNewEmployee({ ...newEmployee, full_name: "", email: "" });
+      setNewEmployee({
+        ...newEmployee,
+        full_name: "",
+        email: "",
+        termination_date: "",
+        employment_status: "Active",
+      });
 
       setTimeout(() => {
         alert(
@@ -2710,20 +2734,68 @@ User can now log into the Agent Portal.`
               />
             </Card>
 
-            <Card title="Add employee">
-              <FormGrid>
-                <input placeholder="Full name" value={newEmployee.full_name} onChange={(e) => setNewEmployee({ ...newEmployee, full_name: e.target.value })} />
-                <input placeholder="Email" value={newEmployee.email} onChange={(e) => setNewEmployee({ ...newEmployee, email: e.target.value })} />
-                <input placeholder="Country" value={newEmployee.country} onChange={(e) => setNewEmployee({ ...newEmployee, country: e.target.value })} />
-                <select value={newEmployee.lob} onChange={(e) => setNewEmployee({ ...newEmployee, lob: e.target.value })}>{lobs.map((lob) => <option key={lob}>{lob}</option>)}</select>
-                <select value={newEmployee.department} onChange={(e) => setNewEmployee({ ...newEmployee, department: e.target.value })}>{departments.map((department) => <option key={department}>{department}</option>)}</select>
-                <select value={newEmployee.sub_department} onChange={(e) => setNewEmployee({ ...newEmployee, sub_department: e.target.value })}>{subDepartments.map((subDepartment) => <option key={subDepartment}>{subDepartment}</option>)}</select>
-                <input placeholder="Role" value={newEmployee.role} onChange={(e) => setNewEmployee({ ...newEmployee, role: e.target.value })} />
-                <input type="time" value={newEmployee.shift_start} onChange={(e) => setNewEmployee({ ...newEmployee, shift_start: e.target.value })} />
-                <input type="time" value={newEmployee.shift_end} onChange={(e) => setNewEmployee({ ...newEmployee, shift_end: e.target.value })} />
-                <input placeholder="Off days, example: Saturday, Sunday" value={newEmployee.off_days} onChange={(e) => setNewEmployee({ ...newEmployee, off_days: e.target.value })} />
-                <button className="primary wide" onClick={saveEmployee}>Save employee</button>
-              </FormGrid>
+            <Card title="Add employee with complete schedule">
+              <p className="helperText">Create the employee profile and assign the full master schedule at the same time. These fields feed the Agent Portal, Schedule tab, Time logs, Payroll, Reporting, and Google Sheets.</p>
+              <div className="employeeFormSections">
+                <section>
+                  <h3>Profile</h3>
+                  <FormGrid>
+                    <input placeholder="Full name" value={newEmployee.full_name} onChange={(e) => setNewEmployee({ ...newEmployee, full_name: e.target.value })} />
+                    <input placeholder="Email" value={newEmployee.email} onChange={(e) => setNewEmployee({ ...newEmployee, email: e.target.value })} />
+                    <input placeholder="Country" value={newEmployee.country} onChange={(e) => setNewEmployee({ ...newEmployee, country: e.target.value })} />
+                    <select value={newEmployee.lob} onChange={(e) => setNewEmployee({ ...newEmployee, lob: e.target.value })}>{lobs.map((lob) => <option key={lob}>{lob}</option>)}</select>
+                    <select value={newEmployee.department} onChange={(e) => setNewEmployee({ ...newEmployee, department: e.target.value })}>{departments.map((department) => <option key={department}>{department}</option>)}</select>
+                    <select value={newEmployee.sub_department} onChange={(e) => setNewEmployee({ ...newEmployee, sub_department: e.target.value })}>{subDepartments.map((subDepartment) => <option key={subDepartment}>{subDepartment}</option>)}</select>
+                    <select value={newEmployee.role} onChange={(e) => setNewEmployee({ ...newEmployee, role: e.target.value, access_level: e.target.value === "Agent" ? "Employee" : e.target.value })}>
+                      {["Agent", "Team Lead", "Supervisor", "Manager", "HR", "Payroll", "Admin", "Executive", "Reporting"].map((role) => <option key={role}>{role}</option>)}
+                    </select>
+                    <select value={newEmployee.access_level} onChange={(e) => setNewEmployee({ ...newEmployee, access_level: e.target.value })}>
+                      {ROLE_PROFILE_OPTIONS.map((roleOption) => <option key={roleOption} value={roleOption}>{roleOption}</option>)}
+                    </select>
+                    <input placeholder="Supervisor" value={newEmployee.supervisor} onChange={(e) => setNewEmployee({ ...newEmployee, supervisor: e.target.value })} />
+                    <input placeholder="Manager" value={newEmployee.manager} onChange={(e) => setNewEmployee({ ...newEmployee, manager: e.target.value })} />
+                    <input type="date" title="Hire Date" value={newEmployee.hire_date} onChange={(e) => setNewEmployee({ ...newEmployee, hire_date: e.target.value })} />
+                    <select value={newEmployee.employment_status} onChange={(e) => setNewEmployee({ ...newEmployee, employment_status: e.target.value, termination_date: e.target.value === "Inactive" ? today : "" })}>
+                      <option>Active</option>
+                      <option>Inactive</option>
+                    </select>
+                    <select value={newEmployee.employment_type} onChange={(e) => setNewEmployee({ ...newEmployee, employment_type: e.target.value })}>
+                      <option>Full-Time</option>
+                      <option>Part-Time</option>
+                      <option>Contractor</option>
+                      <option>Temporary</option>
+                    </select>
+                  </FormGrid>
+                </section>
+
+                <section>
+                  <h3>Master schedule</h3>
+                  <FormGrid>
+                    <label className="field"><span>Shift Start</span><input type="time" value={newEmployee.shift_start} onChange={(e) => setNewEmployee({ ...newEmployee, shift_start: e.target.value })} /></label>
+                    <label className="field"><span>Shift End</span><input type="time" value={newEmployee.shift_end} onChange={(e) => setNewEmployee({ ...newEmployee, shift_end: e.target.value })} /></label>
+                    <label className="field"><span>Break 1 Start</span><input type="time" value={newEmployee.break_start} onChange={(e) => setNewEmployee({ ...newEmployee, break_start: e.target.value, break_minutes: minutesBetween(e.target.value, newEmployee.break_end) + minutesBetween(newEmployee.second_break_start, newEmployee.second_break_end) })} /></label>
+                    <label className="field"><span>Break 1 End</span><input type="time" value={newEmployee.break_end} onChange={(e) => setNewEmployee({ ...newEmployee, break_end: e.target.value, break_minutes: minutesBetween(newEmployee.break_start, e.target.value) + minutesBetween(newEmployee.second_break_start, newEmployee.second_break_end) })} /></label>
+                    <label className="field"><span>Lunch Start</span><input type="time" value={newEmployee.lunch_start} onChange={(e) => setNewEmployee({ ...newEmployee, lunch_start: e.target.value, lunch_minutes: minutesBetween(e.target.value, newEmployee.lunch_end) })} /></label>
+                    <label className="field"><span>Lunch End</span><input type="time" value={newEmployee.lunch_end} onChange={(e) => setNewEmployee({ ...newEmployee, lunch_end: e.target.value, lunch_minutes: minutesBetween(newEmployee.lunch_start, e.target.value) })} /></label>
+                    <label className="field"><span>Break 2 Start</span><input type="time" value={newEmployee.second_break_start} onChange={(e) => setNewEmployee({ ...newEmployee, second_break_start: e.target.value, break_minutes: minutesBetween(newEmployee.break_start, newEmployee.break_end) + minutesBetween(e.target.value, newEmployee.second_break_end) })} /></label>
+                    <label className="field"><span>Break 2 End</span><input type="time" value={newEmployee.second_break_end} onChange={(e) => setNewEmployee({ ...newEmployee, second_break_end: e.target.value, break_minutes: minutesBetween(newEmployee.break_start, newEmployee.break_end) + minutesBetween(newEmployee.second_break_start, e.target.value) })} /></label>
+                    <input placeholder="Off days, example: Saturday, Sunday" value={newEmployee.off_days} onChange={(e) => setNewEmployee({ ...newEmployee, off_days: e.target.value })} />
+                    <input type="number" min="0" title="Total break minutes" value={newEmployee.break_minutes} onChange={(e) => setNewEmployee({ ...newEmployee, break_minutes: safeNumber(e.target.value, 0) })} />
+                    <input type="number" min="0" title="Lunch minutes" value={newEmployee.lunch_minutes} onChange={(e) => setNewEmployee({ ...newEmployee, lunch_minutes: safeNumber(e.target.value, 0) })} />
+                  </FormGrid>
+                </section>
+
+                <section>
+                  <h3>Balances</h3>
+                  <FormGrid>
+                    <label className="field"><span>PTO Days</span><input type="number" min="0" step="0.5" value={newEmployee.pto_balance_days ?? safeNumber(newEmployee.pto_balance, 0) / 8} onChange={(e) => setNewEmployee({ ...newEmployee, pto_balance_days: safeNumber(e.target.value, 0), pto_balance: safeNumber(e.target.value, 0) * 8 })} /></label>
+                    <label className="field"><span>Sick Days</span><input type="number" min="0" step="0.5" value={newEmployee.sick_balance_days ?? safeNumber(newEmployee.sick_balance, 0) / 8} onChange={(e) => setNewEmployee({ ...newEmployee, sick_balance_days: safeNumber(e.target.value, 0), sick_balance: safeNumber(e.target.value, 0) * 8 })} /></label>
+                    <label className="field"><span>VTO Days</span><input type="number" min="0" step="0.5" value={newEmployee.vto_balance_days ?? safeNumber(newEmployee.vto_balance, 0) / 8} onChange={(e) => setNewEmployee({ ...newEmployee, vto_balance_days: safeNumber(e.target.value, 0), vto_balance: safeNumber(e.target.value, 0) * 8 })} /></label>
+                  </FormGrid>
+                </section>
+
+                <button className="primary wide" onClick={saveEmployee}>Save employee with schedule</button>
+              </div>
             </Card>
           </section>
         )}
@@ -3403,6 +3475,38 @@ button:disabled:hover { transform: none; box-shadow: none; }
   .employeesPage table {
     min-width: 1400px;
   }
+}
+
+
+
+/* Complete employee add/edit schedule form */
+.employeeFormSections {
+  display: grid;
+  gap: 18px;
+}
+
+.employeeFormSections section {
+  border: 1px solid #e6f0eb;
+  border-radius: 18px;
+  padding: 16px;
+  background: #fbfefc;
+}
+
+.employeeFormSections h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.employeeFormSections .formGrid {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.employeeFormSections .field {
+  min-width: 0;
+}
+
+.employeeFormSections .wide {
+  grid-column: 1 / -1;
 }
 
 `;
