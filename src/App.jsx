@@ -2653,7 +2653,7 @@ User can now log into the Agent Portal.`
         )}
 
         {!isAgentOnly && tab === "employees" && (
-          <section className="grid split">
+          <section className="employeesPage">
             <Card title="Employee role access profiles reference">
               <div className="roleProfileGrid compactRoleProfiles">
                 {Object.entries(ROLE_ACCESS_PROFILES).map(([key, profile]) => (
@@ -2665,7 +2665,28 @@ User can now log into the Agent Portal.`
               </div>
             </Card>
             <Card title="Employee master database" action={<SearchBox value={search} onChange={setSearch} />}>
-              <Table headers={["Employee", "LOB", "Department", "Sub-Department", "Role", "Country", "Shift", "Off Days", "Status"]} rows={filteredEmployees.map((e) => [<button className="textBtn" onClick={() => setSelectedEmployeeId(e.id)}>{e.full_name}<small>{e.email}</small></button>, e.lob, e.department, e.sub_department || "N/A", e.role, e.country, formatTimeRange(e.shift_start, e.shift_end), formatOffDays(e.off_days), <Badge>{e.employment_status}</Badge>])} />
+              <p className="helperText">Review all employee profile details, assigned schedules, breaks, lunch, off days, role access, and reporting fields in one wider view. Use the horizontal scroll if your screen is smaller.</p>
+              <Table
+                headers={["Employee", "Email", "LOB", "Department", "Sub-Department", "Role", "Access", "Country", "Supervisor", "Manager", "Shift", "Break 1", "Lunch", "Break 2", "Off Days", "Status"]}
+                rows={filteredEmployees.map((e) => [
+                  <button className="textBtn" onClick={() => setSelectedEmployeeId(e.id)}>{e.full_name}<small>{e.id}</small></button>,
+                  e.email,
+                  e.lob,
+                  e.department,
+                  e.sub_department || "N/A",
+                  e.role,
+                  <Badge muted>{e.access_level}</Badge>,
+                  e.country,
+                  e.supervisor || "Not assigned",
+                  e.manager || "Not assigned",
+                  formatTimeRange(e.shift_start, e.shift_end),
+                  formatTimeRange(e.break_start, e.break_end),
+                  formatTimeRange(e.lunch_start, e.lunch_end),
+                  formatTimeRange(e.second_break_start, e.second_break_end),
+                  formatOffDays(e.off_days),
+                  <Badge>{e.employment_status}</Badge>,
+                ])}
+              />
             </Card>
             <Card title="Employee role access management">
               <p className="helperText">Update existing user role profiles without changing their schedule or employee data. Role changes control which tabs and actions are available to the user.</p>
@@ -3332,6 +3353,55 @@ button:disabled:hover { transform: none; box-shadow: none; }
 @media (min-width: 1280px) {
   .dashboardLayout {
     grid-template-columns: 1fr;
+  }
+}
+
+
+
+/* Employee tab full-width visibility fix */
+.employeesPage {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+  max-width: 100%;
+}
+
+.employeesPage .card {
+  width: 100%;
+  max-width: 100%;
+}
+
+.employeesPage .table {
+  max-height: none;
+  overflow: auto;
+}
+
+.employeesPage table {
+  min-width: 1600px;
+}
+
+.employeesPage th,
+.employeesPage td {
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.employeesPage .roleProfileGrid {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.employeesPage .formGrid {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.employeesPage .wide {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 1120px) {
+  .employeesPage table {
+    min-width: 1400px;
   }
 }
 
