@@ -3040,32 +3040,14 @@ html, body, #root { min-height: 100%; }\nbody { margin: 0; background: #f7faf8; 
 .demoAccounts button em { color: var(--muted); font-size: 10px; font-style: normal; line-height: 1.25; }
 .loginSync { margin-top: 14px; background: #0d2018; }
 button, input, select { font: inherit; }
-.app { min-height: 100vh; display: grid; grid-template-columns: 280px minmax(0, 1fr); width: 100%; overflow-x: hidden; align-items: stretch; }
-.sidebar { background: linear-gradient(180deg, #063b2c 0%, #062e23 58%, #041c16 100%); color: white; padding: 22px; position: sticky; top: 0; min-height: 100vh; height: 100%; display: flex; flex-direction: column; gap: 22px; box-shadow: 18px 0 45px rgba(4, 37, 29, .12); }
-.logoWrap { display: flex; align-items: center; gap: 12px; padding-bottom: 14px; border-bottom: 1px solid rgba(255,255,255,.12); }
-.logoWrap img { width: 46px; height: 46px; object-fit: contain; border-radius: 12px; background: white; padding: 5px; flex: 0 0 auto; }
-.logoWrap strong { display: block; font-size: 16px; }
-.logoWrap span { display: block; color: #a8c7b9; font-size: 12px; margin-top: 2px; }
-.sidebar nav { display: grid; gap: 8px; }
-.sidebar nav button { width: 100%; border: 0; background: transparent; color: #cce0d6; border-radius: 14px; padding: 12px; display: flex; align-items: center; gap: 10px; text-transform: capitalize; cursor: pointer; }
-.sidebar nav button:hover, .sidebar nav button.active { background: #123d2c; color: white; }
-.syncBox { margin-top: auto; background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.12); border-radius: 16px; padding: 12px; display: flex; align-items: center; gap: 8px; color: #bfe0d2; font-size: 13px; }
-main { padding: 26px 28px 18px; min-width: 0; width: 100%; overflow-x: hidden; }
-.topbar { background: linear-gradient(135deg, white, #edf8f2); border: 1px solid var(--border); border-radius: 26px; padding: 22px; display: flex; justify-content: space-between; gap: 18px; align-items: center; box-shadow: 0 18px 40px rgba(4,120,87,.08); max-width: 100%; overflow: hidden; }
-h1 { margin: 0; font-size: clamp(28px, 3vw, 42px); letter-spacing: -1px; }
-.topbar p { margin: 8px 0 0; color: var(--muted); }
-.actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
-button, .btn { border: 1px solid var(--border); background: white; color: var(--dark); border-radius: 13px; padding: 10px 12px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 700; text-decoration: none; }
-button:hover, .btn:hover { transform: translateY(-1px); box-shadow: 0 10px 22px rgba(0,0,0,.08); }
-.primary { background: var(--green); color: white; border-color: var(--green); }
-.disabledBtn, button:disabled, select option:disabled {
-  opacity: .46 !important;
-  cursor: not-allowed !important;
-  background: #d9d9d9 !important;
-  color: #666 !important;
-  border-color: #c9c9c9 !important;
-  box-shadow: none !important;
-  transform: none !important;
+.app {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  width: 100%;
+  overflow-x: hidden;
+  align-items: stretch;
+  background: #f4f8f6;
 }
 .restrictedField {
   opacity: .55;
@@ -3249,4 +3231,90 @@ button:disabled:hover { transform: none; box-shadow: none; }
 @media (max-width: 1120px) { .app { grid-template-columns: 1fr; } .sidebar { position: static; min-height: auto; height: auto; } .sidebar nav { grid-template-columns: repeat(3, 1fr); } .syncBox { margin-top: 0; } .topbar, .reportHeader { flex-direction: column; align-items: stretch; } .actions { justify-content: flex-start; } .filterPanel { grid-template-columns: repeat(2, 1fr); } .agentHero { flex-direction: column; align-items: stretch; } .agentGrid, .reportGrid { grid-template-columns: 1fr; } .balanceGrid, .reportMiniGrid { grid-template-columns: repeat(2, 1fr); } .profileGrid, .requestPreview { grid-template-columns: repeat(2, 1fr); } .metrics, .grid.two, .grid.split, .grid.split.reverse { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .topbar, .agentHero, .reportHeader { padding: 16px; } .metrics, .tabMetrics { grid-template-columns: 1fr; } .filterPanel { grid-template-columns: 1fr; } .approval { grid-template-columns: 1fr; } .approval div { display: flex; gap: 8px; } .activityItem { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 640px) { .demoAccounts > div { grid-template-columns: 1fr; } main, .sidebar { padding: 14px; } .filterPanel, .metrics, .profileGrid, .requestPreview, .reportMiniGrid, .inlineForm, .describedField, .activityItem { grid-template-columns: 1fr; } .currentStatus, .agentActions, .balanceGrid { grid-template-columns: 1fr; } .sidebar nav { grid-template-columns: 1fr; } .employeeFooter { flex-direction: column; align-items: flex-start; } .search { min-width: 0; width: 100%; } .card header { flex-direction: column; align-items: stretch; } }
+
+
+/* Layout optimization patch */
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+}
+
+.tableWrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.splitLayout {
+  display: grid;
+  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.payrollGrid,
+.reportingGrid,
+.requestsGrid,
+.timeGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+}
+
+.metricCard {
+  min-height: 110px;
+  padding: 18px;
+}
+
+.headerActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+@media (max-width: 1280px) {
+  .metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .splitLayout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 980px) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    width: 100%;
+    position: relative;
+    min-height: auto;
+  }
+
+  main {
+    padding: 12px;
+  }
+
+  .metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .filterPanel {
+    grid-template-columns: 1fr;
+  }
+
+  .topbar {
+    padding: 16px;
+  }
+}
+
 `;
