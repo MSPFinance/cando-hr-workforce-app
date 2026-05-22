@@ -1734,6 +1734,11 @@ User can now log into the Agent Portal.`
   }
 
   async function agentAction(action, status = agentStatus) {
+    if (status === "Overtime" && action !== "Shift Ended") {
+      showToast("Manual overtime disabled", "Overtime is created automatically after the scheduled shift end.", "warning");
+      return null;
+    }
+
     const now = new Date();
     const time = now.toTimeString().slice(0, 5);
     const schedule = getStableSchedule(selectedEmployee);
@@ -1864,6 +1869,10 @@ User can now log into the Agent Portal.`
 
   async function saveTime() {
     if (isAgentOnly) return;
+    if (newTime.category === "Overtime") {
+      showToast("Manual overtime disabled", "Overtime is created automatically after the scheduled shift end.", "warning");
+      return null;
+    }
     const schedule = getStableSchedule(selectedEmployee);
     const key = `manual-time-${selectedEmployee.id}-${newTime.category}-${newTime.category_start}-${newTime.category_end}`;
     return runProtectedAction(key, "Manual time entry", async () => {
@@ -2455,7 +2464,7 @@ User can now log into the Agent Portal.`
             </div>
 
             <div className="agentGrid">
-              <Card title="My shift actions / overtime">
+              <Card title="My shift actions">
                 <div className="agentActions">
                   <button className="primary" onClick={() => agentAction("Shift Started", "Working")}>Start Shift</button>
                   <button onClick={() => agentAction("Shift Ended", "Working")}>End Shift</button>
@@ -2463,7 +2472,7 @@ User can now log into the Agent Portal.`
                 <div className="currentStatus">
                   <label><span>Current Status / Disposition</span><select value={agentStatus} onChange={(e) => setAgentStatus(e.target.value)}><TimeCategoryOptions /></select></label>
                   <button className="primary" onClick={() => agentAction("Status Changed", agentStatus)}>Log Status</button>
-                  <button disabled title="Overtime is automatic after scheduled shift end." className="disabledBtn">Log Overtime Disabled</button>
+                  <button disabled className="disabledBtn otDisabledBtn" title="Manual overtime is disabled. Overtime is created automatically after the scheduled shift end.">Automatic OT Only</button>
                 </div>
               </Card>
 
@@ -2485,7 +2494,7 @@ User can now log into the Agent Portal.`
                   <Info label="After Approval" value={requestPreview.impactsBalance ? `${requestPreview.projectedBalance} day(s)` : "No deduction"} />
                 </div>
                 <FormGrid>
-                  <select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change", "Overtime"].map((x) => <option key={x} disabled={x === "Overtime" && !OT_REQUESTS_ENABLED}>{x === "Overtime" && !OT_REQUESTS_ENABLED ? "Overtime Request (Disabled)" : x}</option>)}</select>
+                  <select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change"].map((x) => <option key={x} disabled={x === "Overtime" && !OT_REQUESTS_ENABLED}>{x === "Overtime" && !OT_REQUESTS_ENABLED ? "Overtime Request (Disabled)" : x}</option>)}</select>
                   <input type="date" value={newRequest.start_date} onChange={(e) => setNewRequest({ ...newRequest, start_date: e.target.value })} />
                   <input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} />
                   <input type="number" min="0" step="0.25" title="Requests are now approved in full days." value={newRequest.start_date !== newRequest.end_date ? calculateRequestHours(newRequest) : newRequest.hours} disabled={true} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} />
@@ -2598,7 +2607,7 @@ User can now log into the Agent Portal.`
 
         {!isAgentOnly && tab === "requests" && (
           <section className="grid split reverse">
-            <Card title="Submit PTO / VTO / leave"><p className="helperText">PTO, VTO, and sick requests are approved in full days. Select the start and end dates and the app calculates the number of requested days automatically.</p><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change", "Overtime"].map((x) => <option key={x} disabled={x === "Overtime" && !OT_REQUESTS_ENABLED}>{x === "Overtime" && !OT_REQUESTS_ENABLED ? "Overtime Request (Disabled)" : x}</option>)}</select><input type="date" value={newRequest.start_date} onChange={(e) => setNewRequest({ ...newRequest, start_date: e.target.value })} /><input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} /><input type="number" min="0" step="0.25" title="Requests are now approved in full days." value={newRequest.start_date !== newRequest.end_date ? calculateRequestHours(newRequest) : newRequest.hours} disabled={true} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} /><input placeholder="Reason" value={newRequest.reason} onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })} /><button className="primary wide" onClick={saveRequest}>Submit request</button></FormGrid></Card>
+            <Card title="Submit PTO / VTO / leave"><p className="helperText">PTO, VTO, and sick requests are approved in full days. Select the start and end dates and the app calculates the number of requested days automatically.</p><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change"].map((x) => <option key={x} disabled={x === "Overtime" && !OT_REQUESTS_ENABLED}>{x === "Overtime" && !OT_REQUESTS_ENABLED ? "Overtime Request (Disabled)" : x}</option>)}</select><input type="date" value={newRequest.start_date} onChange={(e) => setNewRequest({ ...newRequest, start_date: e.target.value })} /><input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} /><input type="number" min="0" step="0.25" title="Requests are now approved in full days." value={newRequest.start_date !== newRequest.end_date ? calculateRequestHours(newRequest) : newRequest.hours} disabled={true} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} /><input placeholder="Reason" value={newRequest.reason} onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })} /><button className="primary wide" onClick={saveRequest}>Submit request</button></FormGrid></Card>
             <Card title="Request history"><Table headers={["Employee", "Type", "Dates", "Hours", "Days", "Current", "After", "Status"]} rows={filteredRequests.map((r) => [r.employee_name, r.type, `${r.start_date} to ${r.end_date}`, r.hours, Number(r.requested_days || r.hours / 8).toFixed(1), r.current_balance ?? "N/A", r.projected_balance ?? "N/A", <Badge>{r.status}</Badge>])} /></Card>
           </section>
         )}
@@ -2949,6 +2958,20 @@ h1 { margin: 0; font-size: clamp(28px, 3vw, 42px); letter-spacing: -1px; }
 button, .btn { border: 1px solid var(--border); background: white; color: var(--dark); border-radius: 13px; padding: 10px 12px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 700; text-decoration: none; }
 button:hover, .btn:hover { transform: translateY(-1px); box-shadow: 0 10px 22px rgba(0,0,0,.08); }
 .primary { background: var(--green); color: white; border-color: var(--green); }
+.disabledBtn, button:disabled, select option:disabled {
+  opacity: .46 !important;
+  cursor: not-allowed !important;
+  background: #d9d9d9 !important;
+  color: #666 !important;
+  border-color: #c9c9c9 !important;
+  box-shadow: none !important;
+  transform: none !important;
+}
+.otDisabledBtn {
+  justify-content: center;
+  min-width: 150px;
+}
+
 .btn input { display: none; }
 .filterPanel { margin-top: 18px; background: white; border: 1px solid var(--border); border-radius: 22px; padding: 16px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; max-width: 100%; overflow: hidden; }
 .field { display: grid; gap: 6px; }
