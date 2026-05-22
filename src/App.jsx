@@ -34,7 +34,7 @@ const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
 // For full enterprise security later, connect this to Google SSO or Supabase Auth.
 const DEFAULT_LOGIN_EMAIL = "agent1@goday.ca";
 const DEFAULT_LOGIN_PASSWORD = "Cando123!";
-const ADMIN_ACCESS_LEVELS = ["TL", "Supervisor", "Manager", "Approvals", "HR", "Payroll", "Admin", "Executive", "Reporting"];
+const ADMIN_ACCESS_LEVELS = ["TL", "Supervisor", "Team Lead", "Manager", "Approvals", "HR", "Payroll", "Admin", "Executive", "Reporting"];
 const OT_REQUESTS_ENABLED = false;
 
 const ROLE_ACCESS_PROFILES = {
@@ -797,15 +797,22 @@ function getTodayShiftSummary(employee) {
 }
 
 
-function getUserAccessLevel(employee) {
-  const raw = employee?.access_level || employee?.role || "Employee";
+function normalizeAccessValue(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
   if (raw === "Agent") return "Employee";
   if (raw === "Team Lead") return "TL";
   return raw;
 }
 
+function getUserAccessLevel(employee) {
+  return normalizeAccessValue(employee?.access_level || employee?.Access_Level || employee?.role || employee?.Role || "Employee") || "Employee";
+}
+
 function hasAdminAccess(employee) {
-  return ADMIN_ACCESS_LEVELS.includes(getUserAccessLevel(employee));
+  const accessLevel = normalizeAccessValue(employee?.access_level || employee?.Access_Level);
+  const role = normalizeAccessValue(employee?.role || employee?.Role);
+  return ADMIN_ACCESS_LEVELS.includes(accessLevel) || ADMIN_ACCESS_LEVELS.includes(role);
 }
 
 function getAccessProfile(employee) {
@@ -1308,7 +1315,7 @@ function HRWorkforceApp() {
   const [newLob, setNewLob] = useState("");
   const [newDepartment, setNewDepartment] = useState("");
   const [tab, setTab] = useState("agent");
-  const [adminMode, setAdminMode] = useState(false);
+  const [adminMode, setAdminMode] = useState(true);
   const [search, setSearch] = useState("");
   const [reportView, setReportView] = useState("LOB");
   const [filters, setFilters] = useState({ lob: "All", department: "All", subDepartment: "All", employee: "All", country: "All", category: "All", startDate: "", endDate: "" });
@@ -1479,15 +1486,7 @@ function HRWorkforceApp() {
   const isAgentOnly = !adminMode || !canAccessAdmin;
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(currentUser.id);
   const selectedEmployee = isAgentOnly ? currentUser : employees.find((e) => e.id === selectedEmployeeId) || currentUser;
-
-  useEffect(() => {
-    if (isAuthenticated && canAccessAdmin && !adminMode) {
-      setAdminMode(true);
-      setTab("dashboard");
-    }
-  }, [isAuthenticated, canAccessAdmin, adminMode]);
-
-  const visibleEmployees = isAgentOnly ? [currentUser] : employees;
+const visibleEmployees = isAgentOnly ? [currentUser] : employees;
   const visibleTime = isAgentOnly ? timeEntries.filter((t) => t.employee_id === currentUser.id) : timeEntries;
   const visibleRequests = isAgentOnly ? requests.filter((r) => r.employee_id === currentUser.id) : requests;
   const visibleActivity = isAgentOnly ? activityLog.filter((a) => a.employee_id === currentUser.id) : activityLog;
