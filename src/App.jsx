@@ -392,23 +392,6 @@ const timeCategories = [
 
 const SYSTEM_MANAGED_TIME_CATEGORIES = ["Overtime", "Early Unscheduled", "Off-Day Unscheduled"];
 
-
-function getUserAccessLevel(user = {}) {
-  const raw = user.access_level || user.Access_Level || user.role || user.Role || "";
-  const normalized = String(raw).trim();
-
-  if (["Employee", "Agent"].includes(normalized)) return "Employee";
-  if (["TL", "Supervisor", "Team Lead", "Manager", "HR", "Payroll", "Admin", "Executive", "Reporting"].includes(normalized)) {
-    return normalized === "Team Lead" ? "TL" : normalized;
-  }
-
-  return normalized || "Employee";
-}
-
-function hasAdminDashboardAccess(user = {}) {
-  return ["TL", "Supervisor", "Manager", "HR", "Payroll", "Admin", "Executive", "Reporting"].includes(getUserAccessLevel(user));
-}
-
 const ROLE_ACCESS = {
   Employee: ["portal"],
   Agent: ["portal"],
@@ -2494,7 +2477,7 @@ User can now log into the Agent Portal.`
               <button onClick={logout}>Logout</button>
             </div>
           )}
-          {hasAdminDashboardAccess(selectedEmployee) && (
+          {!isAgentOnly && (
             <div className="actions">
               <button onClick={() => { setAdminMode(false); setTab("agent"); }}>Return to Agent View</button>
               <button onClick={logout}>Logout</button>
@@ -2509,7 +2492,7 @@ User can now log into the Agent Portal.`
 
         <HeaderMetrics />
 
-        {hasAdminDashboardAccess(selectedEmployee) && (
+        {!isAgentOnly && (
           <section className="filterPanel">
             <Field label="LOB"><select value={filters.lob} onChange={(e) => setFilters({ ...filters, lob: e.target.value })}>{lobOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Department"><select value={filters.department} onChange={(e) => setFilters({ ...filters, department: e.target.value })}>{departmentOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
