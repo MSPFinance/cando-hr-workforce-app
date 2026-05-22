@@ -392,6 +392,23 @@ const timeCategories = [
 
 const SYSTEM_MANAGED_TIME_CATEGORIES = ["Overtime", "Early Unscheduled", "Off-Day Unscheduled"];
 
+
+function getUserAccessLevel(user = {}) {
+  const raw = user.access_level || user.Access_Level || user.role || user.Role || "";
+  const normalized = String(raw).trim();
+
+  if (["Employee", "Agent"].includes(normalized)) return "Employee";
+  if (["TL", "Supervisor", "Team Lead", "Manager", "HR", "Payroll", "Admin", "Executive", "Reporting"].includes(normalized)) {
+    return normalized === "Team Lead" ? "TL" : normalized;
+  }
+
+  return normalized || "Employee";
+}
+
+function hasAdminDashboardAccess(user = {}) {
+  return ["TL", "Supervisor", "Manager", "HR", "Payroll", "Admin", "Executive", "Reporting"].includes(getUserAccessLevel(user));
+}
+
 const ROLE_ACCESS = {
   Employee: ["portal"],
   Agent: ["portal"],
@@ -406,22 +423,6 @@ const ROLE_ACCESS = {
 
 function canAccess(role, area) {
   return (ROLE_ACCESS[role] || []).includes(area);
-}
-
-
-function getUserAccessLevel(user = {}) {
-  const raw = user.access_level || user.Access_Level || user.role || user.Role || "";
-  const normalized = String(raw).trim();
-
-  if (["Manager", "Admin", "HR", "Payroll", "Executive", "Reporting", "Supervisor", "TL"].includes(normalized)) return normalized;
-  if (normalized.toLowerCase() === "team lead") return "TL";
-  if (normalized.toLowerCase() === "employee" || normalized.toLowerCase() === "agent") return "Employee";
-
-  return normalized || "Employee";
-}
-
-function hasAdminDashboardAccess(user = {}) {
-  return ["TL", "Supervisor", "Manager", "HR", "Payroll", "Admin", "Executive", "Reporting"].includes(getUserAccessLevel(user));
 }
 
 function canEditSchedules(role) {
