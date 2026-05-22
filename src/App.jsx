@@ -408,6 +408,22 @@ function canAccess(role, area) {
   return (ROLE_ACCESS[role] || []).includes(area);
 }
 
+
+function getUserAccessLevel(user = {}) {
+  const raw = user.access_level || user.Access_Level || user.role || user.Role || "";
+  const normalized = String(raw).trim();
+
+  if (["Manager", "Admin", "HR", "Payroll", "Executive", "Reporting", "Supervisor", "TL"].includes(normalized)) return normalized;
+  if (normalized.toLowerCase() === "team lead") return "TL";
+  if (normalized.toLowerCase() === "employee" || normalized.toLowerCase() === "agent") return "Employee";
+
+  return normalized || "Employee";
+}
+
+function hasAdminDashboardAccess(user = {}) {
+  return ["TL", "Supervisor", "Manager", "HR", "Payroll", "Admin", "Executive", "Reporting"].includes(getUserAccessLevel(user));
+}
+
 function canEditSchedules(role) {
   return ["Manager", "Reporting", "HR", "Admin"].includes(role);
 }
@@ -1466,9 +1482,9 @@ function HRWorkforceApp() {
   }
 
   const currentUser = employees.find((e) => normalizeEmail(e.email) === normalizeEmail(sessionUserEmail)) || employees.find((e) => normalizeEmail(e.email) === normalizeEmail(DEFAULT_LOGIN_EMAIL)) || employees[0];
-  const canAccessAdmin = hasAdminAccess(currentUser);
+  const canAccessAdmin = hasAdminDashboardAccess(selectedEmployee);
   const isAuthenticated = Boolean(sessionUserEmail && currentUser);
-  const isAgentOnly = !adminMode || !canAccessAdmin;
+  const isAgentOnly = !hasAdminDashboardAccess(selectedEmployee);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(currentUser.id);
   const selectedEmployee = isAgentOnly ? currentUser : employees.find((e) => e.id === selectedEmployeeId) || currentUser;
 
@@ -2477,7 +2493,7 @@ User can now log into the Agent Portal.`
               <button onClick={logout}>Logout</button>
             </div>
           )}
-          {!isAgentOnly && (
+          {hasAdminDashboardAccess(selectedEmployee) && (
             <div className="actions">
               <button onClick={() => { setAdminMode(false); setTab("agent"); }}>Return to Agent View</button>
               <button onClick={logout}>Logout</button>
@@ -2492,7 +2508,7 @@ User can now log into the Agent Portal.`
 
         <HeaderMetrics />
 
-        {!isAgentOnly && (
+        {hasAdminDashboardAccess(selectedEmployee) && (
           <section className="filterPanel">
             <Field label="LOB"><select value={filters.lob} onChange={(e) => setFilters({ ...filters, lob: e.target.value })}>{lobOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Department"><select value={filters.department} onChange={(e) => setFilters({ ...filters, department: e.target.value })}>{departmentOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
