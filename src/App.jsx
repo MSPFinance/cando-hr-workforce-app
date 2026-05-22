@@ -35,6 +35,18 @@ const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
 const DEFAULT_LOGIN_EMAIL = "agent1@goday.ca";
 const DEFAULT_LOGIN_PASSWORD = "Cando123!";
 const ADMIN_ACCESS_LEVELS = ["TL", "Manager", "HR", "Payroll", "Admin", "Executive"];
+const OT_REQUESTS_ENABLED = false;
+
+const ROLE_ACCESS_PROFILES = {
+  Employee: { label: "Agent", tasks: ["My Portal", "Start/End Shift", "Status Logs", "PTO/VTO/Sick Requests"], tabs: ["agent"] },
+  TL: { label: "Supervisor / Team Lead", tasks: ["Team Review", "Approval Queue", "Live Floor View", "Basic Reporting"], tabs: ["agent", "dashboard", "requests", "manager", "reporting"] },
+  Manager: { label: "Manager", tasks: ["Approval Queue", "Schedule Review", "Payroll Review", "Reporting", "Rules"], tabs: ["agent", "dashboard", "employees", "schedule", "time", "requests", "manager", "payroll", "reporting", "rules"] },
+  HR: { label: "HR", tasks: ["Employee Records", "Status Review", "Reporting"], tabs: ["agent", "dashboard", "employees", "reporting"] },
+  Payroll: { label: "Payroll", tasks: ["Payroll Review", "Approved Time", "Country/Holiday Review"], tabs: ["agent", "dashboard", "payroll", "reporting"] },
+  Admin: { label: "Admin", tasks: ["Full Admin Access", "Settings", "Rules", "Schedules", "Approvals", "Payroll"], tabs: ["agent", "dashboard", "employees", "schedule", "time", "requests", "manager", "payroll", "reporting", "rules"] },
+  Executive: { label: "Executive", tasks: ["Executive Dashboard", "Reporting", "Productivity"], tabs: ["agent", "dashboard", "reporting"] },
+  Reporting: { label: "Reporting", tasks: ["Reports", "Payroll Planning", "Schedule Visibility"], tabs: ["agent", "dashboard", "payroll", "reporting", "schedule"] },
+};
 
 // Schedule fields are treated as the employee's fixed master schedule.
 // Agent clicks can create actual time logs, but they must never overwrite these fields.
@@ -64,6 +76,11 @@ const DEMO_ACCOUNTS = [
 const lobSeed = ["GoDay", "Lending Creative"];
 const departmentSeed = ["Operations", "Customer Service", "Collections", "QA", "Training", "Compliance", "HR", "Payroll"];
 const operationsSubDepartmentSeed = ["Customer Service", "Collections", "CLS", "Documents", "SME"];
+
+const countryHolidaySeed = [
+  { country: "Costa Rica", holiday_name: "New Year", holiday_date: `${new Date().getFullYear()}-01-01`, is_paid: true },
+  { country: "Canada", holiday_name: "New Year", holiday_date: `${new Date().getFullYear()}-01-01`, is_paid: true },
+];
 const defaultOffDays = "Saturday, Sunday";
 
 const employeesSeed = [
@@ -534,7 +551,6 @@ function tenure(hireDate) {
 function formatMilitaryTime(value) {
   if (value === null || value === undefined || value === "") return "";
 
-  // Google Sheets can return time-only cells as serial fractions.
   if (typeof value === "number") {
     const fraction = value >= 1 ? value % 1 : value;
     const totalMinutes = Math.round(fraction * 24 * 60);
@@ -544,16 +560,12 @@ function formatMilitaryTime(value) {
   }
 
   const raw = String(value).trim();
-
-  // Already a clean time value.
   const cleanTime = raw.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
   if (cleanTime) {
     const hours = String(Number(cleanTime[1])).padStart(2, "0");
     return `${hours}:${cleanTime[2]}`;
   }
 
-  // Google Sheets sometimes returns date/time strings like 1899-12-30T08:00:00.000Z.
-  // Use UTC fields so the browser timezone does not shift fixed schedule times.
   const date = new Date(raw);
   if (!Number.isNaN(date.getTime())) {
     const hours = String(date.getUTCHours()).padStart(2, "0");
@@ -587,20 +599,16 @@ function requestDaysInclusive(startDate, endDate) {
 }
 
 function calculateRequestHours(request) {
-  const sameDay = request.start_date === request.end_date;
-  const manualHours = safeNumber(request.hours, 0);
-
-  // Same-day requests may be partial-hour requests, so use the field the agent entered.
-  if (sameDay) return manualHours;
-
-  // Multi-day requests calculate automatically as full scheduled days.
-  return requestDaysInclusive(request.start_date, request.end_date) * 8;
+  // PTO/VTO/Sick approvals are tracked as full days.
+  // The existing Hours_Requested field is retained for Google Sheets compatibility,
+  // but the value now represents requested days in the UI and approval workflow.
+  return requestDaysInclusive(request.start_date, request.end_date);
 }
 
 function getBalance(employee, type) {
-  if (type === "PTO") return safeNumber(employee.pto_balance, 0);
-  if (type === "Sick Leave") return safeNumber(employee.sick_balance, 0);
-  if (type === "VTO") return safeNumber(employee.vto_balance, 0);
+  if (type === "PTO") return balanceDays(employee, "PTO");
+  if (type === "Sick Leave") return balanceDays(employee, "Sick Leave");
+  if (type === "VTO") return balanceDays(employee, "VTO");
   return null;
 }
 
@@ -755,6 +763,52 @@ function getTodayShiftSummary(employee) {
 
 function hasAdminAccess(employee) {
   return ADMIN_ACCESS_LEVELS.includes(employee?.access_level || employee?.role || "");
+}
+
+function getAccessProfile(employee) {
+  const key = employee?.access_level || employee?.role || "Employee";
+  return ROLE_ACCESS_PROFILES[key] || ROLE_ACCESS_PROFILES.Employee;
+}
+
+function balanceDays(employee, type) {
+  if (!employee) return 0;
+  if (type === "PTO") return safeNumber(employee.pto_balance_days ?? safeNumber(employee.pto_balance, 0) / 8, 0);
+  if (type === "Sick Leave") return safeNumber(employee.sick_balance_days ?? safeNumber(employee.sick_balance, 0) / 8, 0);
+  if (type === "VTO") return safeNumber(employee.vto_balance_days ?? safeNumber(employee.vto_balance, 0) / 8, 0);
+  return 0;
+}
+
+function balanceFieldDays(type) {
+  if (type === "PTO") return "pto_balance_days";
+  if (type === "Sick Leave") return "sick_balance_days";
+  if (type === "VTO") return "vto_balance_days";
+  return null;
+}
+
+function isHolidayForCountry(country, date, holidays = countryHolidaySeed) {
+  return holidays.find((holiday) => holiday.country === country && formatDateOnly(holiday.holiday_date) === formatDateOnly(date));
+}
+
+function employeeLiveStatus(employee, timeEntries = [], activityLog = []) {
+  const latestActivity = activityLog.find((a) => a.employee_id === employee.id);
+  const latestTime = timeEntries.find((t) => t.employee_id === employee.id);
+  const status = latestActivity?.status || latestTime?.category || "Offline";
+  const schedule = getStableSchedule(employee);
+  if (isTodayOffDay(employee)) return { status: "Off Day", color: "gray", note: "Scheduled off" };
+  if (status === "Working") return { status, color: "green", note: formatTimeRange(schedule.shift_start, schedule.shift_end) };
+  if (["Break", "Lunch"].includes(status)) return { status, color: "yellow", note: "Away from production" };
+  if (["Meeting", "Training", "Coaching"].includes(status)) return { status, color: "blue", note: "Scheduled task" };
+  if (["Overtime", "Early Unscheduled", "Off-Day Unscheduled"].includes(status)) return { status, color: "red", note: "Requires review" };
+  return { status, color: "gray", note: "No current status" };
+}
+
+function requestStatusSummary(requestsList = []) {
+  return {
+    total: requestsList.length,
+    pending: requestsList.filter((r) => r.status === "Pending").length,
+    approved: requestsList.filter((r) => r.status === "Approved").length,
+    denied: requestsList.filter((r) => r.status === "Denied").length,
+  };
 }
 
 function buildGoogleUrl(params = {}) {
@@ -953,6 +1007,7 @@ function mapEmployeeFromSheet(row) {
     hire_date: row.Hire_Date || "",
     birthday: row.Birthday || "",
     employment_status: row.Employment_Status || "Active",
+    termination_date: row.Termination_Date || "",
     employment_type: row.Employment_Type || "Full-Time",
     off_days: row.Off_Days || row.OffDays || defaultOffDays,
     shift_start: formatMilitaryTime(row.Shift_Start || "08:00"),
@@ -968,6 +1023,10 @@ function mapEmployeeFromSheet(row) {
     pto_balance: safeNumber(row.PTO_Balance, 0),
     sick_balance: safeNumber(row.Sick_Balance, 0),
     vto_balance: safeNumber(row.VTO_Balance, 0),
+    pto_balance_days: safeNumber(row.PTO_Balance_Days, safeNumber(row.PTO_Balance, 0) / 8),
+    sick_balance_days: safeNumber(row.Sick_Balance_Days, safeNumber(row.Sick_Balance, 0) / 8),
+    vto_balance_days: safeNumber(row.VTO_Balance_Days, safeNumber(row.VTO_Balance, 0) / 8),
+    off_day_approved: String(row.Off_Day_Approved || "").toLowerCase() === "true",
     notes: row.Notes || "",
     temp_password: row.Temp_Password || row.Auth_Password || DEFAULT_LOGIN_PASSWORD,
   };
@@ -989,6 +1048,7 @@ function mapEmployeeToSheet(employee) {
     Hire_Date: employee.hire_date,
     Birthday: employee.birthday,
     Employment_Status: employee.employment_status,
+    Termination_Date: employee.termination_date || "",
     Employment_Type: employee.employment_type,
     Off_Days: formatOffDays(employee.off_days),
     Shift_Start: employee.shift_start,
@@ -1004,6 +1064,10 @@ function mapEmployeeToSheet(employee) {
     PTO_Balance: employee.pto_balance,
     Sick_Balance: employee.sick_balance,
     VTO_Balance: employee.vto_balance,
+    PTO_Balance_Days: employee.pto_balance_days ?? safeNumber(employee.pto_balance, 0) / 8,
+    Sick_Balance_Days: employee.sick_balance_days ?? safeNumber(employee.sick_balance, 0) / 8,
+    VTO_Balance_Days: employee.vto_balance_days ?? safeNumber(employee.vto_balance, 0) / 8,
+    Off_Day_Approved: employee.off_day_approved ? "TRUE" : "FALSE",
     Notes: employee.notes || "",
     Temp_Password: employee.temp_password || "",
   };
@@ -1204,7 +1268,7 @@ function HRWorkforceApp() {
   const [adminMode, setAdminMode] = useState(false);
   const [search, setSearch] = useState("");
   const [reportView, setReportView] = useState("LOB");
-  const [filters, setFilters] = useState({ lob: "All", department: "All", subDepartment: "All", employee: "All", category: "All", startDate: "", endDate: "" });
+  const [filters, setFilters] = useState({ lob: "All", department: "All", subDepartment: "All", employee: "All", country: "All", category: "All", startDate: "", endDate: "" });
   const [agentStatus, setAgentStatus] = useState("Working");
   const [newTime, setNewTime] = useState({ category: "Working", category_start: "08:00", category_end: "09:00", notes: "" });
   const [newRequest, setNewRequest] = useState({ type: "PTO", start_date: today, end_date: today, hours: 8, reason: "" });
@@ -1382,6 +1446,7 @@ function HRWorkforceApp() {
   const departmentOptions = ["All", ...new Set([...departments, ...visibleEmployees.map((e) => e.department).filter(Boolean)])];
   const subDepartmentOptions = ["All", ...new Set([...subDepartments, ...visibleEmployees.map((e) => e.sub_department).filter(Boolean)])];
   const employeeOptions = ["All", ...visibleEmployees.map((e) => e.full_name)];
+  const countryOptions = ["All", ...new Set(visibleEmployees.map((e) => e.country).filter(Boolean))];
   const categoryOptions = ["All", ...timeCategories, "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change"];
 
   const filteredTime = visibleTime.filter((t) => {
@@ -1392,6 +1457,7 @@ function HRWorkforceApp() {
       (filters.department === "All" || t.department === filters.department) &&
       (filters.subDepartment === "All" || (t.sub_department || employees.find((e) => e.id === t.employee_id)?.sub_department || "") === filters.subDepartment) &&
       (filters.employee === "All" || t.employee_name === filters.employee) &&
+      (filters.country === "All" || employees.find((e) => e.id === t.employee_id)?.country === filters.country) &&
       (filters.category === "All" || t.category === filters.category)
     );
   });
@@ -1405,6 +1471,7 @@ function HRWorkforceApp() {
       (filters.department === "All" || employee?.department === filters.department) &&
       (filters.subDepartment === "All" || employee?.sub_department === filters.subDepartment) &&
       (filters.employee === "All" || r.employee_name === filters.employee) &&
+      (filters.country === "All" || employee?.country === filters.country) &&
       (filters.category === "All" || r.type === filters.category)
     );
   });
@@ -1656,6 +1723,12 @@ User can now log into the Agent Portal.`
     const now = new Date();
     const time = now.toTimeString().slice(0, 5);
     const schedule = getStableSchedule(selectedEmployee);
+
+    if (isTodayOffDay(selectedEmployee) && !selectedEmployee.off_day_approved) {
+      showToast("Approval required", "This is a scheduled off day. Work is blocked until management approves an off-day exception.", "warning");
+      return null;
+    }
+
     const autoClass = getAutoWorkClassification(selectedEmployee, time);
 
     const resolvedStatus =
@@ -1861,6 +1934,7 @@ User can now log into the Agent Portal.`
       };
       if (supabase) await supabase.from("time_off_requests").insert(item);
       await googleAddRow("requests", mapRequestToSheet(item));
+      await googleAddRow("emailQueue", { Email_ID: cleanId("EMAIL"), Event_Type: "Request Pending Approval", To_Email: selectedEmployee.manager || selectedEmployee.supervisor || "", Employee_Email: selectedEmployee.email, Employee_Name: selectedEmployee.full_name, Request_ID: item.id, Subject: `Pending ${item.type} request approval`, Status: "Pending Send", Created_At: new Date() });
       setRequests((current) => [item, ...current]);
     });
   }
@@ -1982,6 +2056,7 @@ User can now log into the Agent Portal.`
       if (supabase) await supabase.from("time_off_requests").update({ status }).eq("id", id);
 
       await googleUpdateRow("requests", "Request_ID", id, mapRequestToSheet(updatedRequest));
+      await googleAddRow("emailQueue", { Email_ID: cleanId("EMAIL"), Event_Type: `Request ${status}`, To_Email: updatedEmployee?.email || "", Employee_Email: updatedEmployee?.email || "", Employee_Name: latestRequest.employee_name, Request_ID: latestRequest.id, Subject: `${latestRequest.type} request ${status}`, Status: "Pending Send", Created_At: new Date() });
 
       await googleAddRow(
         "approvals",
@@ -2199,6 +2274,37 @@ User can now log into the Agent Portal.`
     setTab("agent");
   }
 
+  const headerRequestSummary = requestStatusSummary(filteredRequests);
+  const scheduledTodayCount = visibleEmployees.filter((employee) => !isTodayOffDay(employee) && employee.employment_status === "Active").length;
+  const activeEmployeeCount = visibleEmployees.filter((employee) => employee.employment_status === "Active").length;
+
+  function HeaderMetrics() {
+    if (isAgentOnly) return null;
+
+    if (["requests", "manager"].includes(tab)) {
+      return (
+        <section className="tabMetrics">
+          <Metric icon={CalendarDays} label="Total Requests" value={headerRequestSummary.total} hint="All filtered requests" />
+          <Metric icon={Clock} label="Pending" value={headerRequestSummary.pending} hint="Awaiting approval" />
+          <Metric icon={CheckCircle} label="Approved" value={headerRequestSummary.approved} hint="Approved requests" />
+          <Metric icon={XCircle} label="Denied" value={headerRequestSummary.denied} hint="Denied requests" />
+        </section>
+      );
+    }
+
+    if (["dashboard", "employees", "schedule"].includes(tab)) {
+      return (
+        <section className="tabMetrics">
+          <Metric icon={Users} label="Active Employees" value={activeEmployeeCount} hint="Active profiles" />
+          <Metric icon={CalendarDays} label="Scheduled Today" value={scheduledTodayCount} hint="Not on off day" />
+          <Metric icon={BarChart3} label="Productivity" value={`${stats.productivity}%`} hint="Working vs tracked" />
+        </section>
+      );
+    }
+
+    return null;
+  }
+
   const navItems = isAgentOnly
     ? [["agent", Clock]]
     : [
@@ -2242,7 +2348,7 @@ User can now log into the Agent Portal.`
         <nav>
           {navItems.map(([key, Icon]) => (
             <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>
-              <Icon size={18} /> {key === "agent" ? "My Portal" : key}
+              <Icon size={18} /> {key === "agent" ? "My Portal" : key === "manager" ? "Approvals" : key}
             </button>
           ))}
         </nav>
@@ -2283,12 +2389,15 @@ User can now log into the Agent Portal.`
           )}
         </header>
 
+        <HeaderMetrics />
+
         {!isAgentOnly && (
           <section className="filterPanel">
             <Field label="LOB"><select value={filters.lob} onChange={(e) => setFilters({ ...filters, lob: e.target.value })}>{lobOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Department"><select value={filters.department} onChange={(e) => setFilters({ ...filters, department: e.target.value })}>{departmentOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Sub-Department"><select value={filters.subDepartment} onChange={(e) => setFilters({ ...filters, subDepartment: e.target.value })}>{subDepartmentOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Employee"><select value={filters.employee} onChange={(e) => setFilters({ ...filters, employee: e.target.value })}>{employeeOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
+            <Field label="Country"><select value={filters.country} onChange={(e) => setFilters({ ...filters, country: e.target.value })}>{countryOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Type"><select value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })}>{categoryOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Start"><input type="date" value={filters.startDate} onChange={(e) => setFilters({ ...filters, startDate: e.target.value })} /></Field>
             <Field label="End"><input type="date" value={filters.endDate} onChange={(e) => setFilters({ ...filters, endDate: e.target.value })} /></Field>
@@ -2346,26 +2455,26 @@ User can now log into the Agent Portal.`
 
               <Card title="My balances">
                 <div className="balanceGrid">
-                  <div><span>PTO</span><strong>{selectedEmployee.pto_balance}h</strong></div>
-                  <div><span>Sick</span><strong>{selectedEmployee.sick_balance}h</strong></div>
-                  <div><span>VTO</span><strong>{selectedEmployee.vto_balance}h</strong></div>
+                  <div><span>PTO</span><strong>{balanceDays(selectedEmployee, "PTO")} day(s)</strong></div>
+                  <div><span>Sick</span><strong>{balanceDays(selectedEmployee, "Sick Leave")} day(s)</strong></div>
+                  <div><span>VTO</span><strong>{balanceDays(selectedEmployee, "VTO")} day(s)</strong></div>
                   <div><span>Tenure</span><strong>{tenure(selectedEmployee.hire_date)}</strong></div>
                 </div>
               </Card>
 
               <Card title="Submit my PTO / VTO / OT request">
-                <p className="helperText">For full-day or multi-day requests, select the start and end dates and the app calculates hours automatically at 8 hours per day. For same-day partial requests, enter the exact number of hours needed.</p>
+                <p className="helperText">PTO, VTO, and sick requests are approved in full days. Select the start and end dates and the app calculates the number of requested days automatically.</p>
                 <div className="requestPreview">
                   <Info label="Request Type" value={newRequest.type} />
-                  <Info label="Requested" value={`${requestPreview.requestedHours}h / ${requestPreview.requestedDays.toFixed(1)} days`} />
-                  <Info label="Current Balance" value={requestPreview.impactsBalance ? `${requestPreview.currentBalance}h` : "N/A"} />
-                  <Info label="After Approval" value={requestPreview.impactsBalance ? `${requestPreview.projectedBalance}h` : "No deduction"} />
+                  <Info label="Requested" value={`${requestPreview.requestedHours} day(s)`} />
+                  <Info label="Current Balance" value={requestPreview.impactsBalance ? `${requestPreview.currentBalance} day(s)` : "N/A"} />
+                  <Info label="After Approval" value={requestPreview.impactsBalance ? `${requestPreview.projectedBalance} day(s)` : "No deduction"} />
                 </div>
                 <FormGrid>
-                  <select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change", "Overtime"].map((x) => <option key={x}>{x}</option>)}</select>
+                  <select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change", "Overtime"].map((x) => <option key={x} disabled={x === "Overtime" && !OT_REQUESTS_ENABLED}>{x === "Overtime" && !OT_REQUESTS_ENABLED ? "Overtime Request (Disabled)" : x}</option>)}</select>
                   <input type="date" value={newRequest.start_date} onChange={(e) => setNewRequest({ ...newRequest, start_date: e.target.value })} />
                   <input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} />
-                  <input type="number" min="0" step="0.25" title="Hours are automatic for multi-day requests. For same-day partial requests, enter the exact hours needed." value={newRequest.start_date !== newRequest.end_date ? calculateRequestHours(newRequest) : newRequest.hours} disabled={newRequest.start_date !== newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} />
+                  <input type="number" min="0" step="0.25" title="Requests are now approved in full days." value={newRequest.start_date !== newRequest.end_date ? calculateRequestHours(newRequest) : newRequest.hours} disabled={true} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} />
                   <input placeholder="Reason or notes" value={newRequest.reason} onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })} />
                   <button className="primary wide" onClick={saveRequest}>Submit to Manager</button>
                 </FormGrid>
@@ -2390,6 +2499,32 @@ User can now log into the Agent Portal.`
 
         {!isAgentOnly && tab === "dashboard" && (
           <section className="grid two">
+            <Card title="Live floor traffic light view">
+              <div className="trafficGrid">
+                {visibleEmployees.filter((employee) => employee.employment_status === "Active").map((employee) => {
+                  const live = employeeLiveStatus(employee, timeEntries, activityLog);
+                  return (
+                    <div className={`trafficCard ${live.color}`} key={employee.id}>
+                      <span className="trafficDot" />
+                      <strong>{employee.full_name}</strong>
+                      <small>{employee.department} · {employee.sub_department || "N/A"}</small>
+                      <b>{live.status}</b>
+                      <em>{live.note}</em>
+                    </div>
+                  );
+                })}
+              </div>
+            </Card>
+            <Card title="Role access profiles">
+              <div className="roleProfileGrid">
+                {Object.entries(ROLE_ACCESS_PROFILES).map(([key, profile]) => (
+                  <div className="roleProfile" key={key}>
+                    <strong>{profile.label}</strong>
+                    <span>{profile.tasks.join(" · ")}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
             <Card title="Overall time productivity">
               <div className="productivityHelp">
                 <strong>How productivity is calculated</strong>
@@ -2459,26 +2594,26 @@ User can now log into the Agent Portal.`
 
         {!isAgentOnly && tab === "requests" && (
           <section className="grid split reverse">
-            <Card title="Submit PTO / VTO / leave"><p className="helperText">For full-day or multi-day requests, select the start and end dates and the app calculates hours automatically at 8 hours per day. For same-day partial requests, enter the exact number of hours needed.</p><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change", "Overtime"].map((x) => <option key={x}>{x}</option>)}</select><input type="date" value={newRequest.start_date} onChange={(e) => setNewRequest({ ...newRequest, start_date: e.target.value })} /><input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} /><input type="number" min="0" step="0.25" title="Hours are automatic for multi-day requests. For same-day partial requests, enter the exact hours needed." value={newRequest.start_date !== newRequest.end_date ? calculateRequestHours(newRequest) : newRequest.hours} disabled={newRequest.start_date !== newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} /><input placeholder="Reason" value={newRequest.reason} onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })} /><button className="primary wide" onClick={saveRequest}>Submit request</button></FormGrid></Card>
+            <Card title="Submit PTO / VTO / leave"><p className="helperText">PTO, VTO, and sick requests are approved in full days. Select the start and end dates and the app calculates the number of requested days automatically.</p><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change", "Overtime"].map((x) => <option key={x} disabled={x === "Overtime" && !OT_REQUESTS_ENABLED}>{x === "Overtime" && !OT_REQUESTS_ENABLED ? "Overtime Request (Disabled)" : x}</option>)}</select><input type="date" value={newRequest.start_date} onChange={(e) => setNewRequest({ ...newRequest, start_date: e.target.value })} /><input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} /><input type="number" min="0" step="0.25" title="Requests are now approved in full days." value={newRequest.start_date !== newRequest.end_date ? calculateRequestHours(newRequest) : newRequest.hours} disabled={true} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} /><input placeholder="Reason" value={newRequest.reason} onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })} /><button className="primary wide" onClick={saveRequest}>Submit request</button></FormGrid></Card>
             <Card title="Request history"><Table headers={["Employee", "Type", "Dates", "Hours", "Days", "Current", "After", "Status"]} rows={filteredRequests.map((r) => [r.employee_name, r.type, `${r.start_date} to ${r.end_date}`, r.hours, Number(r.requested_days || r.hours / 8).toFixed(1), r.current_balance ?? "N/A", r.projected_balance ?? "N/A", <Badge>{r.status}</Badge>])} /></Card>
           </section>
         )}
 
         {!isAgentOnly && tab === "manager" && (
           <section className="grid two">
-            <Card title="Time-Off & Schedule Request Approvals">
+            <Card title="Approval Queue - Time-Off & Schedule Requests">
               <p className="helperText">Use this queue for requests submitted by employees, including PTO, VTO, Sick Leave, Paid Leave, Unpaid Leave, Schedule Change, and OT requests submitted as a formal request. Approval updates the Requests tab, creates an Approvals audit record, and deducts balances when applicable.</p>
               {requests.filter((r) => r.status === "Pending").length ? requests.filter((r) => r.status === "Pending").map((r) => <Approval key={r.id} title={r.employee_name} detail={`${r.type} · ${formatDateOnly(r.start_date)} to ${formatDateOnly(r.end_date)} · ${r.hours}h / ${Number(r.requested_days || r.hours / 8).toFixed(1)} days · Current: ${r.current_balance ?? "N/A"}h · After: ${r.projected_balance ?? "N/A"}h`} approve={() => setRequestStatus(r.id, "Approved")} deny={() => setRequestStatus(r.id, "Denied")} />) : <p className="muted">No pending employee requests at this time.</p>}
             </Card>
-            <Card title="Time Log & Overtime Exception Review">
-              <p className="helperText">Use this queue for time entries that require manager review, such as overtime logged from the agent portal, late/early shift exceptions, manual time corrections, or unusual dispositions. Approval updates the Time_Logs tab and creates an Approvals audit record.</p>
-              {timeEntries.filter((t) => t.approved === "Pending").length ? timeEntries.filter((t) => t.approved === "Pending").map((t) => <Approval key={t.id} title={t.employee_name} detail={`${t.category} · ${formatDateOnly(t.date)} · ${formatTimeRange(t.category_start, t.category_end)} · ${t.payable_status || "Pending Review"}`} approve={() => setTimeStatus(t.id, "Approved")} deny={() => setTimeStatus(t.id, "Denied")} />) : <p className="muted">No pending time or overtime exceptions at this time.</p>}
+            <Card title="Time Log / Overtime Exception Data Backed Up">
+              <p className="helperText">The previous time log and overtime exception approval rule has been removed from this approval view. Time log and overtime records are still retained in Time Logs, payroll review, reporting, and archive/export data for audit purposes.</p>
+              <Table headers={["Employee", "Category", "Date", "Status", "Backup"]} rows={timeEntries.filter((t) => t.approved === "Pending").slice(0, 8).map((t) => [t.employee_name, t.category, formatDateOnly(t.date), t.approved, "Retained"])} />
             </Card>
           </section>
         )}
 
         {!isAgentOnly && tab === "payroll" && (
-          <Card title="Payroll review"><Table headers={["Employee", "Scheduled", "Clock In/Out", "Late", "Worked", "OT", "Status"]} rows={filteredTime.map((t) => { const late = Math.max(0, minutesBetween(t.scheduled_start, t.clock_in)); const worked = minutesBetween(t.clock_in, t.clock_out); const ot = t.category === "Overtime" ? minutesBetween(t.category_start, t.category_end) : Math.max(0, minutesBetween(t.scheduled_end, t.clock_out)); return [t.employee_name, formatTimeRange(t.scheduled_start, t.scheduled_end), formatTimeRange(t.clock_in, t.clock_out), `${late} min`, formatHours(worked), formatHours(ot), <Badge danger={late > 0}>{late > 0 ? "Late" : "On Time"}</Badge>]; })} /></Card>
+          <Card title="Payroll review"><Table headers={["Employee", "Country", "Holiday", "Scheduled", "Clock In/Out", "Late", "Worked", "OT", "Status"]} rows={filteredTime.map((t) => { const employee = employees.find((e) => e.id === t.employee_id); const holiday = isHolidayForCountry(employee?.country, t.date); const late = Math.max(0, minutesBetween(t.scheduled_start, t.clock_in)); const worked = minutesBetween(t.clock_in, t.clock_out); const ot = t.category === "Overtime" ? minutesBetween(t.category_start, t.category_end) : Math.max(0, minutesBetween(t.scheduled_end, t.clock_out)); return [t.employee_name, employee?.country || "N/A", holiday ? <Badge danger>{holiday.holiday_name}</Badge> : <Badge muted>No Holiday</Badge>, formatTimeRange(t.scheduled_start, t.scheduled_end), formatTimeRange(t.clock_in, t.clock_out), `${late} min`, formatHours(worked), formatHours(ot), <Badge danger={late > 0}>{late > 0 ? "Late" : "On Time"}</Badge>]; })} /></Card>
         )}
 
         {!isAgentOnly && tab === "reporting" && (
@@ -2957,8 +3092,25 @@ td input, td select { min-width: 110px; }
 .overrideActions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-@media (max-width: 1280px) { .metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .filterPanel { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.tabMetrics { margin-top: 18px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.trafficGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
+.trafficCard { position: relative; border: 1px solid var(--border); border-radius: 16px; padding: 14px; background: #f8fafc; display: grid; gap: 4px; }
+.trafficCard strong { padding-left: 22px; }
+.trafficCard small, .trafficCard em { color: var(--muted); font-size: 12px; font-style: normal; }
+.trafficCard b { font-size: 13px; text-transform: uppercase; }
+.trafficDot { position: absolute; top: 16px; left: 14px; width: 12px; height: 12px; border-radius: 999px; background: #94a3b8; }
+.trafficCard.green .trafficDot { background: #16a34a; }
+.trafficCard.yellow .trafficDot { background: #f59e0b; }
+.trafficCard.blue .trafficDot { background: #2563eb; }
+.trafficCard.red .trafficDot { background: #dc2626; }
+.trafficCard.gray .trafficDot { background: #64748b; }
+.roleProfileGrid { display: grid; gap: 10px; }
+.roleProfile { border: 1px solid var(--border); background: #f8fcfa; border-radius: 14px; padding: 12px; display: grid; gap: 4px; }
+.roleProfile span { color: var(--muted); font-size: 12px; line-height: 1.45; }
+option:disabled { color: #94a3b8; background: #f1f5f9; }
+
+@media (max-width: 1280px) { .metrics, .tabMetrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } .filterPanel { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 1120px) { .app { grid-template-columns: 1fr; } .sidebar { position: static; min-height: auto; height: auto; } .sidebar nav { grid-template-columns: repeat(3, 1fr); } .syncBox { margin-top: 0; } .topbar, .reportHeader { flex-direction: column; align-items: stretch; } .actions { justify-content: flex-start; } .filterPanel { grid-template-columns: repeat(2, 1fr); } .agentHero { flex-direction: column; align-items: stretch; } .agentGrid, .reportGrid { grid-template-columns: 1fr; } .balanceGrid, .reportMiniGrid { grid-template-columns: repeat(2, 1fr); } .profileGrid, .requestPreview { grid-template-columns: repeat(2, 1fr); } .metrics, .grid.two, .grid.split, .grid.split.reverse { grid-template-columns: 1fr; } }
-@media (max-width: 760px) { .topbar, .agentHero, .reportHeader { padding: 16px; } .metrics { grid-template-columns: 1fr; } .filterPanel { grid-template-columns: 1fr; } .approval { grid-template-columns: 1fr; } .approval div { display: flex; gap: 8px; } .activityItem { grid-template-columns: 1fr 1fr; } }
+@media (max-width: 760px) { .topbar, .agentHero, .reportHeader { padding: 16px; } .metrics, .tabMetrics { grid-template-columns: 1fr; } .filterPanel { grid-template-columns: 1fr; } .approval { grid-template-columns: 1fr; } .approval div { display: flex; gap: 8px; } .activityItem { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 640px) { .demoAccounts > div { grid-template-columns: 1fr; } main, .sidebar { padding: 14px; } .filterPanel, .metrics, .profileGrid, .requestPreview, .reportMiniGrid, .inlineForm, .describedField, .activityItem { grid-template-columns: 1fr; } .currentStatus, .agentActions, .balanceGrid { grid-template-columns: 1fr; } .sidebar nav { grid-template-columns: 1fr; } .employeeFooter { flex-direction: column; align-items: flex-start; } .search { min-width: 0; width: 100%; } .card header { flex-direction: column; align-items: stretch; } }
 `;
