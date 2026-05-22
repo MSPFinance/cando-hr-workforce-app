@@ -34,13 +34,13 @@ const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
 // For full enterprise security later, connect this to Google SSO or Supabase Auth.
 const DEFAULT_LOGIN_EMAIL = "agent1@goday.ca";
 const DEFAULT_LOGIN_PASSWORD = "Cando123!";
-const ADMIN_ACCESS_LEVELS = ["TL", "Manager", "HR", "Payroll", "Admin", "Executive"];
+const ADMIN_ACCESS_LEVELS = ["TL", "Approvals", "HR", "Payroll", "Admin", "Executive"];
 const OT_REQUESTS_ENABLED = false;
 
 const ROLE_ACCESS_PROFILES = {
   Employee: { label: "Agent", tasks: ["My Portal", "Start/End Shift", "Status Logs", "PTO/VTO/Sick Requests"], tabs: ["agent"] },
-  TL: { label: "Supervisor / Team Lead", tasks: ["Team Review", "Approval Queue", "Live Floor View", "Basic Reporting"], tabs: ["agent", "dashboard", "requests", "manager", "reporting"] },
-  Manager: { label: "Manager", tasks: ["Approval Queue", "Schedule Review", "Payroll Review", "Reporting", "Rules"], tabs: ["agent", "dashboard", "employees", "schedule", "time", "requests", "manager", "payroll", "reporting", "rules"] },
+  TL: { label: "Supervisor / Team Lead", tasks: ["Team Review", "Approvals Queue", "Live Floor View", "Basic Reporting"], tabs: ["agent", "dashboard", "requests", "manager", "reporting"] },
+  Manager: { label: "Approvals", tasks: ["Approvals Queue", "Schedule Review", "Payroll Review", "Reporting", "Rules"], tabs: ["agent", "dashboard", "employees", "schedule", "time", "requests", "manager", "payroll", "reporting", "rules"] },
   HR: { label: "HR", tasks: ["Employee Records", "Status Review", "Reporting"], tabs: ["agent", "dashboard", "employees", "reporting"] },
   Payroll: { label: "Payroll", tasks: ["Payroll Review", "Approved Time", "Country/Holiday Review"], tabs: ["agent", "dashboard", "payroll", "reporting"] },
   Admin: { label: "Admin", tasks: ["Full Admin Access", "Settings", "Rules", "Schedules", "Approvals", "Payroll"], tabs: ["agent", "dashboard", "employees", "schedule", "time", "requests", "manager", "payroll", "reporting", "rules"] },
@@ -66,7 +66,7 @@ const SCHEDULE_FIELDS = [
 const DEMO_ACCOUNTS = [
   { label: "Agent", email: "agent1@goday.ca", password: "Cando123!", access: "Employee portal only" },
   { label: "Team Lead", email: "tl@goday.ca", password: "Cando123!", access: "Team lead / admin access" },
-  { label: "Manager", email: "manager@goday.ca", password: "Cando123!", access: "Approvals, reporting, rules" },
+  { label: "Approvals", email: "manager@goday.ca", password: "Cando123!", access: "Approvals, reporting, rules" },
   { label: "HR", email: "hr@goday.ca", password: "Cando123!", access: "Employee records and HR review" },
   { label: "Payroll", email: "payroll@goday.ca", password: "Cando123!", access: "Payroll review and exceptions" },
   { label: "Admin", email: "admin@goday.ca", password: "Cando123!", access: "Full admin access" },
@@ -188,8 +188,8 @@ const employeesSeed = [
     department: "Operations",
     sub_department: "Customer Service",
     lob: "GoDay",
-    role: "Manager",
-    access_level: "Manager",
+    role: "Approvals",
+    access_level: "Approvals",
     supervisor: "Director of Operations",
     manager: "Executive Team",
     hire_date: "2021-05-03",
@@ -391,6 +391,26 @@ const timeCategories = [
 ];
 
 const SYSTEM_MANAGED_TIME_CATEGORIES = ["Overtime", "Early Unscheduled", "Off-Day Unscheduled"];
+
+const ROLE_ACCESS = {
+  Agent: ["portal"],
+  Supervisor: ["portal", "dashboard", "requests", "approvals", "reporting"],
+  "Team Lead": ["portal", "dashboard", "requests", "approvals", "reporting"],
+  Manager: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting", "rules"],
+  Reporting: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting"],
+  HR: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting", "rules"],
+  Payroll: ["portal", "dashboard", "payroll", "reporting"],
+  Admin: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting", "rules"],
+};
+
+function canAccess(role, area) {
+  return (ROLE_ACCESS[role] || []).includes(area);
+}
+
+function canEditSchedules(role) {
+  return ["Manager", "Reporting", "HR", "Admin"].includes(role);
+}
+
 function isSystemManagedTimeCategory(category) {
   return SYSTEM_MANAGED_TIME_CATEGORIES.includes(category);
 }
@@ -1715,6 +1735,10 @@ User can now log into the Agent Portal.`
   }
 
   function updateEmployeeSchedule(employeeId, field, value) {
+  if (!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")) {
+    showToast("Access denied", "Only Reporting, HR, Managers, and Admin users can modify schedules.", "danger");
+    return;
+  }
     const updated = employees.map((employee) => {
       if (employee.id !== employeeId) return employee;
       const next = { ...employee, [field]: value };
@@ -2528,7 +2552,7 @@ User can now log into the Agent Portal.`
                 })}
               </div>
             </Card>
-            <Card title="Role access profiles">
+            <Card title="Role-based access profiles">
               <div className="roleProfileGrid">
                 {Object.entries(ROLE_ACCESS_PROFILES).map(([key, profile]) => (
                   <div className="roleProfile" key={key}>
@@ -2585,8 +2609,8 @@ User can now log into the Agent Portal.`
                   <select value={e.sub_department || ""} onChange={(event) => updateEmployeeSchedule(e.id, "sub_department", event.target.value)}>{subDepartments.map((subDepartment) => <option key={subDepartment}>{subDepartment}</option>)}</select>,
                   <input value={e.off_days || ""} onChange={(event) => updateEmployeeSchedule(e.id, "off_days", event.target.value)} placeholder="Saturday, Sunday" />,
                   <Badge danger={isTodayOffDay(e)} muted={!isTodayOffDay(e)}>{isTodayOffDay(e) ? "Off Today" : "Scheduled"}</Badge>,
-                  <input type="time" value={e.shift_start} onChange={(event) => updateEmployeeSchedule(e.id, "shift_start", event.target.value)} />,
-                  <input type="time" value={e.shift_end} onChange={(event) => updateEmployeeSchedule(e.id, "shift_end", event.target.value)} />,
+                  <input type="time" value={e.shift_start} disabled={!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")} onChange={(event) => updateEmployeeSchedule(e.id, "shift_start", event.target.value)} />,
+                  <input type="time" value={e.shift_end} disabled={!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")} onChange={(event) => updateEmployeeSchedule(e.id, "shift_end", event.target.value)} />,
                   <div className="miniTimes"><input type="time" value={e.break_start} onChange={(event) => updateEmployeeSchedule(e.id, "break_start", event.target.value)} /><input type="time" value={e.break_end} onChange={(event) => updateEmployeeSchedule(e.id, "break_end", event.target.value)} /></div>,
                   <div className="miniTimes"><input type="time" value={e.lunch_start} onChange={(event) => updateEmployeeSchedule(e.id, "lunch_start", event.target.value)} /><input type="time" value={e.lunch_end} onChange={(event) => updateEmployeeSchedule(e.id, "lunch_end", event.target.value)} /></div>,
                   <div className="miniTimes"><input type="time" value={e.second_break_start} onChange={(event) => updateEmployeeSchedule(e.id, "second_break_start", event.target.value)} /><input type="time" value={e.second_break_end} onChange={(event) => updateEmployeeSchedule(e.id, "second_break_end", event.target.value)} /></div>,
@@ -2614,7 +2638,7 @@ User can now log into the Agent Portal.`
 
         {!isAgentOnly && tab === "manager" && (
           <section className="grid two">
-            <Card title="Approval Queue - Time-Off & Schedule Requests">
+            <Card title="Approvals Queue - Time-Off & Schedule Requests">
               <p className="helperText">Use this queue for requests submitted by employees, including PTO, VTO, Sick Leave, Paid Leave, Unpaid Leave, Schedule Change, and OT requests submitted as a formal request. Approval updates the Requests tab, creates an Approvals audit record, and deducts balances when applicable.</p>
               {requests.filter((r) => r.status === "Pending").length ? requests.filter((r) => r.status === "Pending").map((r) => <Approval key={r.id} title={r.employee_name} detail={`${r.type} · ${formatDateOnly(r.start_date)} to ${formatDateOnly(r.end_date)} · ${r.hours}h / ${Number(r.requested_days || r.hours / 8).toFixed(1)} days · Current: ${r.current_balance ?? "N/A"}h · After: ${r.projected_balance ?? "N/A"}h`} approve={() => setRequestStatus(r.id, "Approved")} deny={() => setRequestStatus(r.id, "Denied")} />) : <p className="muted">No pending employee requests at this time.</p>}
             </Card>
@@ -2966,6 +2990,10 @@ button:hover, .btn:hover { transform: translateY(-1px); box-shadow: 0 10px 22px 
   border-color: #c9c9c9 !important;
   box-shadow: none !important;
   transform: none !important;
+}
+.restrictedField {
+  opacity: .55;
+  pointer-events: none;
 }
 .otDisabledBtn {
   justify-content: center;
