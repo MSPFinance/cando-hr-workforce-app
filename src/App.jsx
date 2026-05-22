@@ -34,13 +34,13 @@ const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
 // For full enterprise security later, connect this to Google SSO or Supabase Auth.
 const DEFAULT_LOGIN_EMAIL = "agent1@goday.ca";
 const DEFAULT_LOGIN_PASSWORD = "Cando123!";
-const ADMIN_ACCESS_LEVELS = ["TL", "Approvals", "HR", "Payroll", "Admin", "Executive"];
+const ADMIN_ACCESS_LEVELS = ["TL", "Supervisor", "Manager", "Approvals", "HR", "Payroll", "Admin", "Executive", "Reporting"];
 const OT_REQUESTS_ENABLED = false;
 
 const ROLE_ACCESS_PROFILES = {
   Employee: { label: "Agent", tasks: ["My Portal", "Start/End Shift", "Status Logs", "PTO/VTO/Sick Requests"], tabs: ["agent"] },
   TL: { label: "Supervisor / Team Lead", tasks: ["Team Review", "Approvals Queue", "Live Floor View", "Basic Reporting"], tabs: ["agent", "dashboard", "requests", "manager", "reporting"] },
-  Manager: { label: "Approvals", tasks: ["Approvals Queue", "Schedule Review", "Payroll Review", "Reporting", "Rules"], tabs: ["agent", "dashboard", "employees", "schedule", "time", "requests", "manager", "payroll", "reporting", "rules"] },
+  Manager: { label: "Manager", tasks: ["Approvals Queue", "Schedule Review", "Payroll Review", "Reporting", "Rules"], tabs: ["agent", "dashboard", "employees", "schedule", "time", "requests", "manager", "payroll", "reporting", "rules"] },
   HR: { label: "HR", tasks: ["Employee Records", "Status Review", "Reporting"], tabs: ["agent", "dashboard", "employees", "reporting"] },
   Payroll: { label: "Payroll", tasks: ["Payroll Review", "Approved Time", "Country/Holiday Review"], tabs: ["agent", "dashboard", "payroll", "reporting"] },
   Admin: { label: "Admin", tasks: ["Full Admin Access", "Settings", "Rules", "Schedules", "Approvals", "Payroll"], tabs: ["agent", "dashboard", "employees", "schedule", "time", "requests", "manager", "payroll", "reporting", "rules"] },
@@ -66,7 +66,7 @@ const SCHEDULE_FIELDS = [
 const DEMO_ACCOUNTS = [
   { label: "Agent", email: "agent1@goday.ca", password: "Cando123!", access: "Employee portal only" },
   { label: "Team Lead", email: "tl@goday.ca", password: "Cando123!", access: "Team lead / admin access" },
-  { label: "Approvals", email: "manager@goday.ca", password: "Cando123!", access: "Approvals, reporting, rules" },
+  { label: "Manager", email: "manager@goday.ca", password: "Cando123!", access: "Manager dashboard, approvals, reporting, rules" },
   { label: "HR", email: "hr@goday.ca", password: "Cando123!", access: "Employee records and HR review" },
   { label: "Payroll", email: "payroll@goday.ca", password: "Cando123!", access: "Payroll review and exceptions" },
   { label: "Admin", email: "admin@goday.ca", password: "Cando123!", access: "Full admin access" },
@@ -188,8 +188,8 @@ const employeesSeed = [
     department: "Operations",
     sub_department: "Customer Service",
     lob: "GoDay",
-    role: "Approvals",
-    access_level: "Approvals",
+    role: "Manager",
+    access_level: "Manager",
     supervisor: "Director of Operations",
     manager: "Executive Team",
     hire_date: "2021-05-03",
@@ -796,8 +796,16 @@ function getTodayShiftSummary(employee) {
   };
 }
 
+
+function getUserAccessLevel(employee) {
+  const raw = employee?.access_level || employee?.role || "Employee";
+  if (raw === "Agent") return "Employee";
+  if (raw === "Team Lead") return "TL";
+  return raw;
+}
+
 function hasAdminAccess(employee) {
-  return ADMIN_ACCESS_LEVELS.includes(employee?.access_level || employee?.role || "");
+  return ADMIN_ACCESS_LEVELS.includes(getUserAccessLevel(employee));
 }
 
 function getAccessProfile(employee) {
@@ -1472,6 +1480,13 @@ function HRWorkforceApp() {
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(currentUser.id);
   const selectedEmployee = isAgentOnly ? currentUser : employees.find((e) => e.id === selectedEmployeeId) || currentUser;
 
+  useEffect(() => {
+    if (isAuthenticated && canAccessAdmin && !adminMode) {
+      setAdminMode(true);
+      setTab("dashboard");
+    }
+  }, [isAuthenticated, canAccessAdmin, adminMode]);
+
   const visibleEmployees = isAgentOnly ? [currentUser] : employees;
   const visibleTime = isAgentOnly ? timeEntries.filter((t) => t.employee_id === currentUser.id) : timeEntries;
   const visibleRequests = isAgentOnly ? requests.filter((r) => r.employee_id === currentUser.id) : requests;
@@ -1736,7 +1751,7 @@ User can now log into the Agent Portal.`
   }
 
   function updateEmployeeSchedule(employeeId, field, value) {
-  if (!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")) {
+  if (!canEditSchedules(getUserAccessLevel(selectedEmployee))) {
     showToast("Access denied", "Only Reporting, HR, Managers, and Admin users can modify schedules.", "danger");
     return;
   }
@@ -1759,7 +1774,7 @@ User can now log into the Agent Portal.`
   }
 
   async function updateEmployeeRole(employeeId, newAccessLevel) {
-    if (!["Manager", "HR", "Admin"].includes(currentUser?.access_level || currentUser?.role || "")) {
+    if (!["Manager", "HR", "Admin"].includes(getUserAccessLevel(currentUser))) {
       showToast("Access denied", "Only Manager, HR, or Admin users can update employee role access.", "danger");
       return;
     }
@@ -2360,10 +2375,13 @@ User can now log into the Agent Portal.`
       return;
     }
 
+    const userHasAdminAccess = hasAdminAccess(employee);
+
     localStorage.setItem("candoHrUserEmail", employee.email);
     setSessionUserEmail(employee.email);
     setSelectedEmployeeId(employee.id);
-    setAdminMode(false);
+    setAdminMode(userHasAdminAccess);
+    setTab(userHasAdminAccess ? "dashboard" : "agent");
     setAuthError("");
   }
 
@@ -2473,7 +2491,17 @@ User can now log into the Agent Portal.`
           </div>
           {isAgentOnly && (
             <div className="actions">
-              {canAccessAdmin && <button className="primary" onClick={() => setAdminMode(true)}>Admin / Manager Access</button>}
+              {canAccessAdmin && (
+                <button
+                  className="primary"
+                  onClick={() => {
+                    setAdminMode(true);
+                    setTab("dashboard");
+                  }}
+                >
+                  Admin Dashboard
+                </button>
+              )}
               <button onClick={logout}>Logout</button>
             </div>
           )}
@@ -2643,7 +2671,7 @@ User can now log into the Agent Portal.`
                   <Badge>{employee.access_level}</Badge>,
                   <select
                     value={employee.access_level || "Employee"}
-                    disabled={!["Manager", "HR", "Admin"].includes(currentUser?.access_level || currentUser?.role || "")}
+                    disabled={!["Manager", "HR", "Admin"].includes(getUserAccessLevel(currentUser))}
                     onChange={(event) => updateEmployeeRole(employee.id, event.target.value)}
                   >
                     {ROLE_PROFILE_OPTIONS.map((roleOption) => (
@@ -2685,8 +2713,8 @@ User can now log into the Agent Portal.`
                   <select value={e.sub_department || ""} onChange={(event) => updateEmployeeSchedule(e.id, "sub_department", event.target.value)}>{subDepartments.map((subDepartment) => <option key={subDepartment}>{subDepartment}</option>)}</select>,
                   <input value={e.off_days || ""} onChange={(event) => updateEmployeeSchedule(e.id, "off_days", event.target.value)} placeholder="Saturday, Sunday" />,
                   <Badge danger={isTodayOffDay(e)} muted={!isTodayOffDay(e)}>{isTodayOffDay(e) ? "Off Today" : "Scheduled"}</Badge>,
-                  <input type="time" value={e.shift_start} disabled={!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")} onChange={(event) => updateEmployeeSchedule(e.id, "shift_start", event.target.value)} />,
-                  <input type="time" value={e.shift_end} disabled={!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")} onChange={(event) => updateEmployeeSchedule(e.id, "shift_end", event.target.value)} />,
+                  <input type="time" value={e.shift_start} disabled={!canEditSchedules(getUserAccessLevel(selectedEmployee))} onChange={(event) => updateEmployeeSchedule(e.id, "shift_start", event.target.value)} />,
+                  <input type="time" value={e.shift_end} disabled={!canEditSchedules(getUserAccessLevel(selectedEmployee))} onChange={(event) => updateEmployeeSchedule(e.id, "shift_end", event.target.value)} />,
                   <div className="miniTimes"><input type="time" value={e.break_start} onChange={(event) => updateEmployeeSchedule(e.id, "break_start", event.target.value)} /><input type="time" value={e.break_end} onChange={(event) => updateEmployeeSchedule(e.id, "break_end", event.target.value)} /></div>,
                   <div className="miniTimes"><input type="time" value={e.lunch_start} onChange={(event) => updateEmployeeSchedule(e.id, "lunch_start", event.target.value)} /><input type="time" value={e.lunch_end} onChange={(event) => updateEmployeeSchedule(e.id, "lunch_end", event.target.value)} /></div>,
                   <div className="miniTimes"><input type="time" value={e.second_break_start} onChange={(event) => updateEmployeeSchedule(e.id, "second_break_start", event.target.value)} /><input type="time" value={e.second_break_end} onChange={(event) => updateEmployeeSchedule(e.id, "second_break_end", event.target.value)} /></div>,
