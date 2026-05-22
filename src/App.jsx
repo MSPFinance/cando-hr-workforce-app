@@ -36,6 +36,7 @@ const DEFAULT_LOGIN_EMAIL = "agent1@goday.ca";
 const DEFAULT_LOGIN_PASSWORD = "Cando123!";
 const ADMIN_ACCESS_LEVELS = ["TL", "Supervisor", "Team Lead", "Manager", "Approvals", "HR", "Payroll", "Admin", "Executive", "Reporting"];
 const OT_REQUESTS_ENABLED = false;
+const ROLE_PROFILE_OPTIONS = ["Employee", "TL", "Supervisor", "Manager", "HR", "Payroll", "Admin", "Executive", "Reporting"];
 
 const ROLE_ACCESS_PROFILES = {
   Employee: { label: "Agent", tasks: ["My Portal", "Start/End Shift", "Status Logs", "PTO/VTO/Sick Requests"], tabs: ["agent"] },
@@ -1578,7 +1579,14 @@ const visibleEmployees = isAgentOnly ? [currentUser] : employees;
 
   const reportingSummary = useMemo(() => {
     const keyGetter = reportView === "LOB" ? (item) => item.lob : (item) => item.department;
-    const groupedEmployees = groupBy(employees, keyGetter);
+    const reportingEmployees = employees.filter((employee) =>
+      (filters.lob === "All" || employee.lob === filters.lob) &&
+      (filters.department === "All" || employee.department === filters.department) &&
+      (filters.subDepartment === "All" || employee.sub_department === filters.subDepartment) &&
+      (filters.employee === "All" || employee.full_name === filters.employee) &&
+      (filters.country === "All" || employee.country === filters.country)
+    );
+    const groupedEmployees = groupBy(reportingEmployees, keyGetter);
     const groups = [];
 
     groupedEmployees.forEach((groupEmployees, groupName) => {
@@ -1610,7 +1618,7 @@ const visibleEmployees = isAgentOnly ? [currentUser] : employees;
     });
 
     return groups.sort((a, b) => a.groupName.localeCompare(b.groupName));
-  }, [employees, filteredTime, requests, reportView]);
+  }, [employees, filteredTime, requests, reportView, filters]);
 
   const agentReporting = useMemo(() => {
     return employees.map((e) => {
@@ -2616,7 +2624,7 @@ User can now log into the Agent Portal.`
         )}
 
         {!isAgentOnly && tab === "dashboard" && (
-          <section className="grid two">
+          <section className="dashboardLayout">
             <Card title="Live floor traffic light view">
               <div className="trafficGrid">
                 {visibleEmployees.filter((employee) => employee.employment_status === "Active").map((employee) => {
@@ -2633,16 +2641,6 @@ User can now log into the Agent Portal.`
                 })}
               </div>
             </Card>
-            <Card title="Role-based access profiles">
-              <div className="roleProfileGrid">
-                {Object.entries(ROLE_ACCESS_PROFILES).map(([key, profile]) => (
-                  <div className="roleProfile" key={key}>
-                    <strong>{profile.label}</strong>
-                    <span>{profile.tasks.join(" · ")}</span>
-                  </div>
-                ))}
-              </div>
-            </Card>
             <Card title="Overall time productivity">
               <div className="productivityHelp">
                 <strong>How productivity is calculated</strong>
@@ -2656,6 +2654,16 @@ User can now log into the Agent Portal.`
 
         {!isAgentOnly && tab === "employees" && (
           <section className="grid split">
+            <Card title="Employee role access profiles reference">
+              <div className="roleProfileGrid compactRoleProfiles">
+                {Object.entries(ROLE_ACCESS_PROFILES).map(([key, profile]) => (
+                  <div className="roleProfile" key={key}>
+                    <strong>{profile.label}</strong>
+                    <span>{profile.tasks.join(" · ")}</span>
+                  </div>
+                ))}
+              </div>
+            </Card>
             <Card title="Employee master database" action={<SearchBox value={search} onChange={setSearch} />}>
               <Table headers={["Employee", "LOB", "Department", "Sub-Department", "Role", "Country", "Shift", "Off Days", "Status"]} rows={filteredEmployees.map((e) => [<button className="textBtn" onClick={() => setSelectedEmployeeId(e.id)}>{e.full_name}<small>{e.email}</small></button>, e.lob, e.department, e.sub_department || "N/A", e.role, e.country, formatTimeRange(e.shift_start, e.shift_end), formatOffDays(e.off_days), <Badge>{e.employment_status}</Badge>])} />
             </Card>
@@ -3276,4 +3284,55 @@ button:disabled:hover { transform: none; box-shadow: none; }
 @media (max-width: 1120px) { .app { grid-template-columns: 1fr; } .sidebar { position: static; min-height: auto; height: auto; } .sidebar nav { grid-template-columns: repeat(3, 1fr); } .syncBox { margin-top: 0; } .topbar, .reportHeader { flex-direction: column; align-items: stretch; } .actions { justify-content: flex-start; } .filterPanel { grid-template-columns: repeat(2, 1fr); } .agentHero { flex-direction: column; align-items: stretch; } .agentGrid, .reportGrid { grid-template-columns: 1fr; } .balanceGrid, .reportMiniGrid { grid-template-columns: repeat(2, 1fr); } .profileGrid, .requestPreview { grid-template-columns: repeat(2, 1fr); } .metrics, .grid.two, .grid.split, .grid.split.reverse { grid-template-columns: 1fr; } }
 @media (max-width: 760px) { .topbar, .agentHero, .reportHeader { padding: 16px; } .metrics, .tabMetrics { grid-template-columns: 1fr; } .filterPanel { grid-template-columns: 1fr; } .approval { grid-template-columns: 1fr; } .approval div { display: flex; gap: 8px; } .activityItem { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 640px) { .demoAccounts > div { grid-template-columns: 1fr; } main, .sidebar { padding: 14px; } .filterPanel, .metrics, .profileGrid, .requestPreview, .reportMiniGrid, .inlineForm, .describedField, .activityItem { grid-template-columns: 1fr; } .currentStatus, .agentActions, .balanceGrid { grid-template-columns: 1fr; } .sidebar nav { grid-template-columns: 1fr; } .employeeFooter { flex-direction: column; align-items: flex-start; } .search { min-width: 0; width: 100%; } .card header { flex-direction: column; align-items: stretch; } }
+
+
+/* Dashboard traffic light optimization */
+.dashboardLayout {
+  margin-top: 18px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 18px;
+}
+
+.dashboardLayout > .card:first-child {
+  min-height: 420px;
+}
+
+.dashboardLayout > .card:first-child .trafficGrid {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.dashboardLayout > .card:first-child .trafficCard {
+  min-height: 128px;
+  padding: 18px;
+  border-radius: 20px;
+  font-size: 15px;
+}
+
+.dashboardLayout > .card:first-child .trafficCard strong {
+  font-size: 17px;
+}
+
+.dashboardLayout > .card:first-child .trafficCard b {
+  font-size: 14px;
+}
+
+.dashboardLayout > .card:first-child .trafficDot {
+  width: 14px;
+  height: 14px;
+  top: 20px;
+  left: 16px;
+}
+
+.compactRoleProfiles {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+@media (min-width: 1280px) {
+  .dashboardLayout {
+    grid-template-columns: 1fr;
+  }
+}
+
 `;
