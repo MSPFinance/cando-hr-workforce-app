@@ -2113,9 +2113,10 @@ User can now log into the Agent Portal.`
     if (!employee) return "Employee profile was not found. Please confirm before approving.";
 
     const balance = getBalance(employee, request.type);
-    if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
-      return `${request.employee_name} is requesting ${request.hours}h of ${request.type}, but the available balance is ${balance}h. Manager override is required to continue.`;
-    }
+
+if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
+  return `${request.employee_name} is requesting ${request.hours} PTO day(s), but the available balance is ${balance} day(s). Manager override is required to continue.`;
+}
 
     const rule = rules.find(
       (r) =>
