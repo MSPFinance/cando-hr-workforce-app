@@ -1311,6 +1311,28 @@ class AppErrorBoundary extends React.Component {
     return this.props.children;
   }
 }
+function ManagerOverrideModal({ title, message, onCancel, onConfirm }) {
+  return (
+    <div className="modalBackdrop">
+      <div className="overrideCard">
+        <h2>{title || "Manager approval required"}</h2>
+        <p>
+          {message ||
+            "This action requires manager review before it can be completed."}
+        </p>
+
+        <div className="overrideActions">
+          <button type="button" className="btn" onClick={onCancel}>
+            Cancel
+          </button>
+          <button type="button" className="primary" onClick={onConfirm}>
+            Approve Override
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function HRWorkforceApp() {
   const [employees, setEmployees] = useState(employeesSeed);
