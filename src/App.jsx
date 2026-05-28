@@ -2086,41 +2086,39 @@ User can now log into the Agent Portal.`
     });
   }
 
-  function getApprovalRiskMessage(request) {
-    const employee = employees.find((e) => e.id === request.employee_id);
-    if (!employee) return "Employee profile was not found. Please confirm before approving.";
+ function getApprovalRiskMessage(request) {
+  const employee = employees.find((e) => e.id === request.employee_id);
 
-    const balance = getBalance(employee, request.type);
-    if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
-      return `${request.employee_name} is requesting ${request.hours}h of ${request.type}, but the available balance is ${balance}h. Manager override is required to continue.`;
-    }
-
-    const rule = rules.find(
-      (r) =>
-        r.lob === employee.lob &&
-        r.department === employee.department &&
-        r.shift_start === employee.shift_start &&
-        r.shift_end === employee.shift_end
-    );
-
-    if (!rule) return null;
-
-    const usage = getRuleUsage(rule);
-    const nextPto = usage.pto + (request.type === "PTO" ? 1 : 0);
-    const nextVto = usage.vto + (request.type === "VTO" ? 1 : 0);
-    const nextSick = usage.sick + (request.type === "Sick Leave" ? 1 : 0);
-    const nextAvailable = usage.scheduled - (nextPto + nextVto + nextSick);
-
-    const exceedsRule =
-      nextPto > safeNumber(rule.max_pto_out, 0) ||
-      nextVto > safeNumber(rule.max_vto_out, 0) ||
-      nextSick > safeNumber(rule.max_sick_out, 0) ||
-      nextAvailable < safeNumber(rule.min_staff_required, 0);
-
-    if (!exceedsRule) return null;
-
-    return `Approving this ${request.type} may exceed the staffing rule for ${employee.lob} / ${employee.department}. Current after approval: PTO ${nextPto}/${rule.max_pto_out}, VTO ${nextVto}/${rule.max_vto_out}, Sick ${nextSick}/${rule.max_sick_out}, Available ${nextAvailable}, Minimum required ${rule.min_staff_required}. Manager override is required.`;
+  if (!employee) {
+    return "Employee profile was not found. Please confirm before approving.";
   }
+
+  const balance = getBalance(employee, request.type);
+  const issues = [];
+
+  if (
+    balance !== null &&
+    safeNumber(request.hours, 0) > safeNumber(balance, 0)
+  ) {
+    issues.push(
+      `${request.employee_name} is requesting ${request.hours} PTO day(s), but the available balance is ${balance} day(s).`
+    );
+  }
+
+  if (safeNumber(request.hours, 0) > 5) {
+    issues.push(
+      "This request exceeds the standard PTO policy limit of 5 consecutive days."
+    );
+  }
+
+  if (issues.length > 0) {
+    return `${issues.join(" ")} Manager override is required to continue.`;
+  }
+
+  return null;
+}
+
+   
 
   async function setRequestStatus(id, status) {
     if (isAgentOnly) return;
