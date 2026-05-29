@@ -3983,20 +3983,7 @@ function ProcessingOverlay({ status = "processing", title, message }) {
   );
 }
 
-function ManagerOverrideModal({ title, message, onCancel, onConfirm }) {
-  return (
-    <div className="modalBackdrop">
-      <section className="overrideCard">
-        <h2>{title}</h2>
-        <p>{message}</p>
-        <div className="overrideActions">
-          <button type="button" onClick={onCancel}>Cancel</button>
-          <button type="button" className="primary" onClick={onConfirm}>Approve override</button>
-        </div>
-      </section>
-    </div>
-  );
-}
+
 
 function Field({ label, children }) { return <label className="field"><span>{label}</span>{children}</label>; }
 function Info({ label, value }) { return <div className="info"><span>{label}</span><strong>{value}</strong></div>; }
