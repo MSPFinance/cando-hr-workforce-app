@@ -22,6 +22,7 @@ const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
 const today = new Date().toISOString().slice(0, 10);
+const DAILY_TIMER_STOP_TIME = "12:59";
 const LOGO = "/cando-logo.png";
 
 // DEMO MODE CONFIGURATION
@@ -29,19 +30,77 @@ const LOGO = "/cando-logo.png";
 // When you are ready to reconnect live Google Sheets, replace "" with your working /exec Apps Script URL.
 const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
 
+// WORKFORCE PLANNING SHEET SYNC
+// Source: Google Sheet tab "New Team Roster(Lucho)" in GoDay & LC Team Schedules.
+// This reads approved operational fields from the shared workforce sheet while protecting identity/auth fields.
+// Protected fields that are NEVER overwritten by this sync: email, password/temp_password, role, access_level, hire_date, birthday, and employee id.
+const WORKFORCE_SYNC_SHEET_ID = "1kHPJIXQ531QEZOYgy9wn5BCgvNnzg5MkSztSFN3ukpE";
+const WORKFORCE_SYNC_SHEET_NAMES = ["New Team Roster(Lucho)"];
+const WORKFORCE_SYNC_AUTOMATIC_ENABLED = true;
+const WORKFORCE_SYNC_SCHEDULE_DAY = 6; // Saturday, based on local browser time.
+const WORKFORCE_SYNC_SCHEDULE_TIME = "05:00"; // Saturday morning sync window.
+const WORKFORCE_SYNC_LAST_RUN_KEY = "candoHrLastSaturdayWorkforceSync";
+const ATTENDANCE_DAILY_EMAILS_ENABLED = true;
+const DEFAULT_ATTENDANCE_EMAIL_SETTINGS = {
+  enabled: true,
+  deliveryMode: "Daily Summary",
+  sendTime: "09:00",
+  sendOnFirstLog: true,
+  includeManager: true,
+  includeSupervisor: true,
+  includeHrWfm: true,
+  hrWfmEmails: "",
+  lobFilter: "All",
+};
+const WORKFORCE_SYNC_ALLOWED_FIELDS = [
+  "country",
+  "lob",
+  "department",
+  "sub_department",
+  "supervisor",
+  "manager",
+  "employment_status",
+  "employment_type",
+  "off_days",
+  "shift_start",
+  "shift_end",
+  "break_start",
+  "break_end",
+  "lunch_start",
+  "lunch_end",
+  "second_break_start",
+  "second_break_end",
+  "break_minutes",
+  "lunch_minutes",
+];
+
+function getLocalDateKey(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function isWeeklyWorkforceSyncWindow(date = new Date()) {
+  if (!WORKFORCE_SYNC_AUTOMATIC_ENABLED) return false;
+  const currentTime = date.toTimeString().slice(0, 5);
+  return date.getDay() === WORKFORCE_SYNC_SCHEDULE_DAY && currentTime >= WORKFORCE_SYNC_SCHEDULE_TIME;
+}
+
 // LOGIN + ROLE ACCESS
 // Production path: this uses the Employees database to identify the user and role.
 // For full enterprise security later, connect this to Google SSO or Supabase Auth.
 const DEFAULT_LOGIN_EMAIL = "agent1@goday.ca";
 const DEFAULT_LOGIN_PASSWORD = "Cando123!";
-const ADMIN_ACCESS_LEVELS = ["TL", "Supervisor", "Team Lead", "Manager", "Approvals", "HR", "Payroll", "Admin", "Executive", "Reporting"];
+const ADMIN_ACCESS_LEVELS = ["TL", "Team Lead", "Supervisor", "Manager", "Approvals", "Reporting", "HR", "Payroll", "Admin", "Executive"];
 const OT_REQUESTS_ENABLED = false;
-const ROLE_PROFILE_OPTIONS = ["Employee", "TL", "Supervisor", "Manager", "HR", "Payroll", "Admin", "Executive", "Reporting"];
+
+const ROLE_PROFILE_OPTIONS = ["Employee", "TL", "Manager", "Approvals", "Reporting", "HR", "Payroll", "Admin", "Executive"];
 
 const ROLE_ACCESS_PROFILES = {
   Employee: { label: "Agent", tasks: ["My Portal", "Start/End Shift", "Status Logs", "PTO/VTO/Sick Requests"], tabs: ["agent"] },
-  TL: { label: "Supervisor / Team Lead", tasks: ["Team Review", "Approvals Queue", "Live Floor View", "Basic Reporting"], tabs: ["agent", "dashboard", "requests", "manager", "reporting"] },
-  Manager: { label: "Manager", tasks: ["Approvals Queue", "Schedule Review", "Payroll Review", "Reporting", "Rules"], tabs: ["agent", "dashboard", "employees", "schedule", "time", "requests", "manager", "payroll", "reporting", "rules"] },
+  TL: { label: "Supervisor / Team Lead", tasks: ["Team Review", "Time Edits", "Approvals Queue", "Live Floor View", "Basic Reporting"], tabs: ["agent", "dashboard", "schedule", "time", "requests", "manager", "reporting"] },
+  Manager: { label: "Approvals", tasks: ["Approvals Queue", "Schedule Review", "Payroll Review", "Reporting", "Rules"], tabs: ["agent", "dashboard", "employees", "schedule", "time", "requests", "manager", "payroll", "reporting", "rules"] },
   HR: { label: "HR", tasks: ["Employee Records", "Status Review", "Reporting"], tabs: ["agent", "dashboard", "employees", "reporting"] },
   Payroll: { label: "Payroll", tasks: ["Payroll Review", "Approved Time", "Country/Holiday Review"], tabs: ["agent", "dashboard", "payroll", "reporting"] },
   Admin: { label: "Admin", tasks: ["Full Admin Access", "Settings", "Rules", "Schedules", "Approvals", "Payroll"], tabs: ["agent", "dashboard", "employees", "schedule", "time", "requests", "manager", "payroll", "reporting", "rules"] },
@@ -67,7 +126,7 @@ const SCHEDULE_FIELDS = [
 const DEMO_ACCOUNTS = [
   { label: "Agent", email: "agent1@goday.ca", password: "Cando123!", access: "Employee portal only" },
   { label: "Team Lead", email: "tl@goday.ca", password: "Cando123!", access: "Team lead / admin access" },
-  { label: "Manager", email: "manager@goday.ca", password: "Cando123!", access: "Manager dashboard, approvals, reporting, rules" },
+  { label: "Approvals", email: "manager@goday.ca", password: "Cando123!", access: "Approvals, reporting, rules" },
   { label: "HR", email: "hr@goday.ca", password: "Cando123!", access: "Employee records and HR review" },
   { label: "Payroll", email: "payroll@goday.ca", password: "Cando123!", access: "Payroll review and exceptions" },
   { label: "Admin", email: "admin@goday.ca", password: "Cando123!", access: "Full admin access" },
@@ -100,7 +159,6 @@ const employeesSeed = [
     hire_date: "2024-03-15",
     birthday: "1995-06-12",
     employment_status: "Active",
-    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "08:00",
@@ -133,7 +191,6 @@ const employeesSeed = [
     hire_date: "2022-09-01",
     birthday: "1990-11-02",
     employment_status: "Active",
-    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "09:00",
@@ -166,7 +223,6 @@ const employeesSeed = [
     hire_date: "2023-01-10",
     birthday: "1994-08-20",
     employment_status: "Active",
-    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "08:00",
@@ -192,14 +248,13 @@ const employeesSeed = [
     department: "Operations",
     sub_department: "Customer Service",
     lob: "GoDay",
-    role: "Manager",
-    access_level: "Manager",
+    role: "Approvals",
+    access_level: "Approvals",
     supervisor: "Director of Operations",
     manager: "Executive Team",
     hire_date: "2021-05-03",
     birthday: "1988-04-15",
     employment_status: "Active",
-    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "08:00",
@@ -232,7 +287,6 @@ const employeesSeed = [
     hire_date: "2020-02-10",
     birthday: "1987-09-18",
     employment_status: "Active",
-    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "08:00",
@@ -265,7 +319,6 @@ const employeesSeed = [
     hire_date: "2019-07-22",
     birthday: "1985-12-05",
     employment_status: "Active",
-    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "09:00",
@@ -298,7 +351,6 @@ const employeesSeed = [
     hire_date: "2018-01-08",
     birthday: "1984-03-30",
     employment_status: "Active",
-    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "08:00",
@@ -331,7 +383,6 @@ const employeesSeed = [
     hire_date: "2017-11-01",
     birthday: "1980-01-22",
     employment_status: "Active",
-    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "09:00",
@@ -376,6 +427,9 @@ const rulesSeed = [
     max_vto_out: 1,
     max_sick_out: 2,
     min_staff_required: 6,
+    start_date: today,
+    end_date: "",
+    recurrence: "Daily",
     notes: "Default LC staffing rule",
   },
 ];
@@ -404,8 +458,8 @@ const SYSTEM_MANAGED_TIME_CATEGORIES = ["Overtime", "Early Unscheduled", "Off-Da
 const ROLE_ACCESS = {
   Employee: ["portal"],
   Agent: ["portal"],
-  Supervisor: ["portal", "dashboard", "requests", "approvals", "reporting"],
-  "Team Lead": ["portal", "dashboard", "requests", "approvals", "reporting"],
+  Supervisor: ["portal", "dashboard", "schedule", "time", "requests", "approvals", "reporting"],
+  "Team Lead": ["portal", "dashboard", "schedule", "time", "requests", "approvals", "reporting"],
   Manager: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting", "rules"],
   Reporting: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting"],
   HR: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting", "rules"],
@@ -418,7 +472,11 @@ function canAccess(role, area) {
 }
 
 function canEditSchedules(role) {
-  return ["Manager", "Reporting", "HR", "Admin"].includes(role);
+  return ["TL", "Team Lead", "Supervisor", "Manager", "Reporting", "HR", "Admin"].includes(role);
+}
+
+function canEditTimeLogs(role) {
+  return ["TL", "Team Lead", "Supervisor", "Manager", "Reporting", "HR", "Payroll", "Admin"].includes(role);
 }
 
 function isSystemManagedTimeCategory(category) {
@@ -681,6 +739,283 @@ function normalizeEmail(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function normalizeHeader(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function parseCsvLine(line) {
+  const values = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    const next = line[i + 1];
+
+    if (char === '"' && inQuotes && next === '"') {
+      current += '"';
+      i += 1;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === "," && !inQuotes) {
+      values.push(current);
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+
+  values.push(current);
+  return values.map((value) => value.trim());
+}
+
+function parseCsvText(text) {
+  const lines = String(text || "")
+    .replace(/^\uFEFF/, "")
+    .split(/\r?\n/)
+    .filter((line) => line.trim() !== "");
+
+  if (!lines.length) return [];
+
+  const headers = parseCsvLine(lines[0]).map(normalizeHeader);
+
+  return lines.slice(1).map((line) => {
+    const values = parseCsvLine(line);
+    return headers.reduce((row, header, index) => {
+      row[header] = values[index] ?? "";
+      return row;
+    }, {});
+  });
+}
+
+function firstValue(row, keys) {
+  for (const key of keys) {
+    const normalized = normalizeHeader(key);
+    const value = row?.[normalized];
+    if (value !== undefined && value !== null && String(value).trim() !== "") return value;
+  }
+  return "";
+}
+
+function mapWorkforceSyncRow(row) {
+  const employeeId = String(firstValue(row, ["Employee_ID", "Employee ID", "ID", "employee_id", "Employee Id"]) || "").trim();
+  const fullName = String(firstValue(row, ["Full_Name", "Full Name", "Employee", "Employee Name", "Name", "Agent", "Agent Name"]) || "").trim();
+  const sourceEmail = String(firstValue(row, ["Email", "Auth_Email", "Work Email", "Company Email"]) || "").trim();
+
+  // For production the preferred match key is Employee_ID.
+  // During staging/demo, Full Name can be used as a safe fallback so roster sync can be tested before real users exist.
+  if (!employeeId && !fullName && !sourceEmail) return null;
+
+  const payload = {};
+
+  const setText = (field, keys) => {
+    const value = firstValue(row, keys);
+    if (String(value || "").trim() !== "") payload[field] = String(value).trim();
+  };
+
+  const setTime = (field, keys) => {
+    const value = firstValue(row, keys);
+    if (String(value || "").trim() !== "") payload[field] = formatMilitaryTime(value);
+  };
+
+  setText("country", ["Country", "Site", "Location"]);
+  setText("lob", ["LOB", "Line of Business", "Line_Of_Business", "Client"]);
+  setText("department", ["Department", "Team", "Area"]);
+  setText("sub_department", ["Sub_Department", "Sub Department", "SubDepartment", "Sub Team", "Queue", "Role"]);
+  setText("supervisor", ["Supervisor", "TL", "Team_Leader", "Team Leader", "Team Lead", "Direct Supervisor"]);
+  setText("manager", ["Manager", "Operations Manager", "OM"]);
+  setText("employment_status", ["Employment_Status", "Employment Status", "Status"]);
+  setText("employment_type", ["Employment_Type", "Employment Type"]);
+  setText("off_days", ["Off_Days", "Off Days", "Rest Days", "Days Off"]);
+
+  setTime("shift_start", ["Shift_Start", "Shift Start", "Scheduled_Shift_Start", "Scheduled Shift Start", "Start Time"]);
+  setTime("shift_end", ["Shift_End", "Shift End", "Scheduled_Shift_End", "Scheduled Shift End", "End Time"]);
+  setTime("break_start", ["Break_1_Start", "Break 1 Start", "First Break Start"]);
+  setTime("break_end", ["Break_1_End", "Break 1 End", "First Break End"]);
+  setTime("lunch_start", ["Lunch_Start", "Lunch Start"]);
+  setTime("lunch_end", ["Lunch_End", "Lunch End"]);
+  setTime("second_break_start", ["Break_2_Start", "Break 2 Start", "Second Break Start"]);
+  setTime("second_break_end", ["Break_2_End", "Break 2 End", "Second Break End"]);
+
+  if (payload.break_start && payload.break_end) {
+    payload.break_minutes = minutesBetween(payload.break_start, payload.break_end);
+  }
+
+  if (payload.second_break_start && payload.second_break_end) {
+    payload.break_minutes = safeNumber(payload.break_minutes, 0) + minutesBetween(payload.second_break_start, payload.second_break_end);
+  }
+
+  if (payload.lunch_start && payload.lunch_end) {
+    payload.lunch_minutes = minutesBetween(payload.lunch_start, payload.lunch_end);
+  }
+
+  return {
+    employeeId,
+    fullName,
+    sourceEmail,
+    payload,
+  };
+}
+async function fetchWorkforceSheetRows() {
+  if (!WORKFORCE_SYNC_SHEET_ID) return [];
+
+  for (const sheetName of WORKFORCE_SYNC_SHEET_NAMES) {
+    const url = `https://docs.google.com/spreadsheets/d/${WORKFORCE_SYNC_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) continue;
+
+      const text = await response.text();
+      if (!text || text.toLowerCase().includes("html")) continue;
+
+      const rows = parseCsvText(text);
+      const mappedRows = rows.map(mapWorkforceSyncRow).filter(Boolean);
+      if (mappedRows.length) return mappedRows;
+    } catch (error) {
+      console.warn(`Workforce sync sheet ${sheetName} failed:`, error?.message || error);
+    }
+  }
+
+  return [];
+}
+
+function mergeWorkforceRowsIntoEmployees(currentEmployees, workforceRows, options = {}) {
+  const { importMissing = true } = options;
+
+  if (!Array.isArray(workforceRows) || !workforceRows.length) {
+    return { employees: currentEmployees, updatedCount: 0, importedCount: 0, missingCount: 0 };
+  }
+
+  let updatedCount = 0;
+  let importedCount = 0;
+  const matchedRosterKeys = new Set();
+  const usedEmployeeIds = new Set(currentEmployees.map((employee) => String(employee.id || "").trim()).filter(Boolean));
+
+  const normalizeName = (value) => String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  const normalizeKey = (value) => String(value || "").trim().toLowerCase();
+  const makeRosterKey = (row) => normalizeKey(row.employeeId) || normalizeName(row.fullName) || normalizeKey(row.sourceEmail);
+
+  const byId = new Map();
+  const byName = new Map();
+  const byEmail = new Map();
+
+  workforceRows.forEach((row) => {
+    if (row.employeeId) byId.set(normalizeKey(row.employeeId), row);
+    if (row.fullName) byName.set(normalizeName(row.fullName), row);
+    if (row.sourceEmail) byEmail.set(normalizeKey(row.sourceEmail), row);
+  });
+
+  const buildSafePayload = (payload = {}) =>
+    WORKFORCE_SYNC_ALLOWED_FIELDS.reduce((clean, field) => {
+      if (payload[field] !== undefined && payload[field] !== null && payload[field] !== "") {
+        clean[field] = payload[field];
+      }
+      return clean;
+    }, {});
+
+  const employees = currentEmployees.map((employee) => {
+    const matchedRow =
+      byId.get(normalizeKey(employee.id)) ||
+      byName.get(normalizeName(employee.full_name)) ||
+      byEmail.get(normalizeKey(employee.email));
+
+    if (!matchedRow) return employee;
+
+    matchedRosterKeys.add(makeRosterKey(matchedRow));
+    const safePayload = buildSafePayload(matchedRow.payload);
+    if (!Object.keys(safePayload).length) return employee;
+
+    updatedCount += 1;
+
+    return {
+      ...employee,
+      ...safePayload,
+      full_name: employee.full_name || matchedRow.fullName || employee.full_name,
+      // Protected identity/auth fields below intentionally remain from the app database.
+      id: employee.id,
+      email: employee.email,
+      temp_password: employee.temp_password,
+      role: employee.role,
+      access_level: employee.access_level,
+      hire_date: employee.hire_date,
+      birthday: employee.birthday,
+      last_sync_date: getLocalDateKey(new Date()),
+      last_sync_source: "New Team Roster(Lucho)",
+    };
+  });
+
+  if (importMissing) {
+    workforceRows.forEach((row) => {
+      const rosterKey = makeRosterKey(row);
+      if (!rosterKey || matchedRosterKeys.has(rosterKey)) return;
+
+      const safePayload = buildSafePayload(row.payload);
+      const generatedIdBase = row.employeeId || `ROSTER-${String(row.fullName || "EMPLOYEE").toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 24)}`;
+      let generatedId = generatedIdBase;
+      let counter = 1;
+      while (usedEmployeeIds.has(String(generatedId).trim())) {
+        counter += 1;
+        generatedId = `${generatedIdBase}-${counter}`;
+      }
+      usedEmployeeIds.add(String(generatedId).trim());
+
+      employees.push({
+        id: generatedId,
+        full_name: row.fullName || "Roster Employee Pending Name",
+        email: "", // Protected identity field. Complete manually before login access is granted.
+        country: safePayload.country || "",
+        lob: safePayload.lob || "",
+        department: safePayload.department || "",
+        sub_department: safePayload.sub_department || "",
+        role: "Agent",
+        access_level: "Employee",
+        supervisor: safePayload.supervisor || "",
+        manager: safePayload.manager || "",
+        hire_date: "",
+        birthday: "",
+        employment_status: safePayload.employment_status || "Active",
+        employment_type: safePayload.employment_type || "Full-Time",
+        off_days: safePayload.off_days || defaultOffDays,
+        shift_start: safePayload.shift_start || "08:00",
+        shift_end: safePayload.shift_end || "17:00",
+        break_start: safePayload.break_start || "10:00",
+        break_end: safePayload.break_end || "10:15",
+        lunch_start: safePayload.lunch_start || "12:00",
+        lunch_end: safePayload.lunch_end || "13:00",
+        second_break_start: safePayload.second_break_start || "15:00",
+        second_break_end: safePayload.second_break_end || "15:15",
+        break_minutes: safeNumber(safePayload.break_minutes, 30),
+        lunch_minutes: safeNumber(safePayload.lunch_minutes, 60),
+        pto_balance: 0,
+        sick_balance: 0,
+        vto_balance: 0,
+        pto_balance_days: 0,
+        sick_balance_days: 0,
+        vto_balance_days: 0,
+        temp_password: "",
+        notes: "Imported from New Team Roster(Lucho). Add email/access details manually before production login.",
+        last_sync_date: getLocalDateKey(new Date()),
+        last_sync_source: "New Team Roster(Lucho)",
+        ...safePayload,
+      });
+
+      importedCount += 1;
+      matchedRosterKeys.add(rosterKey);
+    });
+  }
+
+  return {
+    employees,
+    updatedCount,
+    importedCount,
+    missingCount: Math.max(0, workforceRows.length - matchedRosterKeys.size),
+  };
+}
 const WEEK_DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 function normalizeOffDays(value) {
@@ -806,22 +1141,74 @@ function getTodayShiftSummary(employee) {
 }
 
 
-function normalizeAccessValue(value) {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  if (raw === "Agent") return "Employee";
-  if (raw === "Team Lead") return "TL";
-  return raw;
+function hasPendingScheduleOverride(requestsList, employeeId) {
+  return requestsList.some(
+    (request) =>
+      request.employee_id === employeeId &&
+      request.type === "Schedule Override" &&
+      ["Pending", "Pending Manager Approval"].includes(request.status)
+  );
 }
 
-function getUserAccessLevel(employee) {
-  return normalizeAccessValue(employee?.access_level || employee?.Access_Level || employee?.role || employee?.Role || "Employee") || "Employee";
+function buildScheduleOverrideRequest(employee, reason) {
+  return {
+    id: cleanId("REQ"),
+    employee_id: employee.id,
+    employee_name: employee.full_name,
+    type: "Schedule Override",
+    start_date: today,
+    end_date: today,
+    hours: 0,
+    requested_days: 0,
+    reason,
+    status: "Pending Manager Approval",
+    manager: employee.supervisor || employee.manager || "",
+    current_balance: "N/A",
+    projected_balance: "N/A",
+    requested_at: new Date().toISOString(),
+  };
+}
+
+function requestCoversDate(request, dateValue) {
+  const startDate = String(request.start_date || request.requested_at || "").slice(0, 10);
+  const endDate = String(request.end_date || request.start_date || request.requested_at || "").slice(0, 10);
+  if (!startDate) return false;
+  return dateValue >= startDate && dateValue <= (endDate || startDate);
+}
+
+function hasApprovedScheduleOverride(requestsList, employeeId, dateValue = today) {
+  return requestsList.some(
+    (request) =>
+      request.employee_id === employeeId &&
+      request.type === "Schedule Override" &&
+      request.status === "Approved" &&
+      requestCoversDate(request, dateValue)
+  );
+}
+
+function showSickBalanceForCountry(country) {
+  return String(country || "").toLowerCase() === "canada";
+}
+
+function employeeMonthlyAttendance(employee, timeEntries = [], requests = []) {
+  const monthKey = today.slice(0, 7);
+  const entries = timeEntries.filter((entry) => entry.employee_id === employee?.id && String(entry.date || "").startsWith(monthKey));
+  const approvedRequests = requests.filter((request) => request.employee_id === employee?.id && request.status === "Approved" && String(request.start_date || "").startsWith(monthKey));
+  const sickApproved = approvedRequests.filter((request) => request.type === "Sick Leave");
+  const ptoApproved = approvedRequests.filter((request) => request.type === "PTO");
+  const vtoApproved = approvedRequests.filter((request) => request.type === "VTO");
+  return {
+    monthLabel: new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" }),
+    workingHours: entries.filter((entry) => entry.category === "Working").reduce((sum, entry) => sum + minutesBetween(entry.category_start, entry.category_end), 0) / 60,
+    sickApprovedDays: sickApproved.reduce((sum, request) => sum + safeNumber(request.requested_days || request.hours / 8, 0), 0),
+    ptoApprovedDays: ptoApproved.reduce((sum, request) => sum + safeNumber(request.requested_days || request.hours / 8, 0), 0),
+    vtoApprovedHours: vtoApproved.reduce((sum, request) => sum + safeNumber(request.hours, 0), 0),
+    approvedRequests: approvedRequests.slice(0, 6),
+  };
 }
 
 function hasAdminAccess(employee) {
-  const accessLevel = normalizeAccessValue(employee?.access_level || employee?.Access_Level);
-  const role = normalizeAccessValue(employee?.role || employee?.Role);
-  return ADMIN_ACCESS_LEVELS.includes(accessLevel) || ADMIN_ACCESS_LEVELS.includes(role);
+  return ADMIN_ACCESS_LEVELS.includes(employee?.access_level || employee?.role || "");
 }
 
 function getAccessProfile(employee) {
@@ -864,7 +1251,7 @@ function employeeLiveStatus(employee, timeEntries = [], activityLog = []) {
 function requestStatusSummary(requestsList = []) {
   return {
     total: requestsList.length,
-    pending: requestsList.filter((r) => r.status === "Pending").length,
+    pending: requestsList.filter((r) => ["Pending", "Pending Manager Approval"].includes(r.status)).length,
     approved: requestsList.filter((r) => r.status === "Approved").length,
     denied: requestsList.filter((r) => r.status === "Denied").length,
   };
@@ -982,7 +1369,7 @@ async function googleAddRow(tab, data) {
     console.log("Google Sheets addRow result:", result);
 
     if (!result?.success) {
-      alert(`Google Sheets write failed: ${result?.message || "Unknown error"}`);
+      console.warn(`Google Sheets write failed: ${result?.message || "Unknown error"}`);
     }
 
     return result;
@@ -1239,6 +1626,9 @@ function mapRuleFromSheet(row) {
     max_vto_out: safeNumber(row.Max_VTO_Out, 0),
     max_sick_out: safeNumber(row.Max_Sick_Out, 0),
     min_staff_required: safeNumber(row.Minimum_Staff_Required, 0),
+    start_date: row.Start_Date || row.Effective_Start || today,
+    end_date: row.End_Date || row.Effective_End || "",
+    recurrence: row.Recurrence || "Daily",
     notes: row.Notes || "",
   };
 }
@@ -1254,6 +1644,9 @@ function mapRuleToSheet(rule) {
     Max_VTO_Out: rule.max_vto_out,
     Max_Sick_Out: rule.max_sick_out,
     Minimum_Staff_Required: rule.min_staff_required,
+    Start_Date: rule.start_date || "",
+    End_Date: rule.end_date || "",
+    Recurrence: rule.recurrence || "Daily",
     Notes: rule.notes,
     Last_Updated: new Date(),
   };
@@ -1324,7 +1717,7 @@ function HRWorkforceApp() {
   const [newLob, setNewLob] = useState("");
   const [newDepartment, setNewDepartment] = useState("");
   const [tab, setTab] = useState("agent");
-  const [adminMode, setAdminMode] = useState(true);
+  const [adminMode, setAdminMode] = useState(false);
   const [search, setSearch] = useState("");
   const [reportView, setReportView] = useState("LOB");
   const [filters, setFilters] = useState({ lob: "All", department: "All", subDepartment: "All", employee: "All", country: "All", category: "All", startDate: "", endDate: "" });
@@ -1340,6 +1733,9 @@ function HRWorkforceApp() {
     max_vto_out: 1,
     max_sick_out: 2,
     min_staff_required: 6,
+    start_date: today,
+    end_date: "",
+    recurrence: "Daily",
     notes: "",
   });
   const [newEmployee, setNewEmployee] = useState({
@@ -1356,7 +1752,6 @@ function HRWorkforceApp() {
     hire_date: "",
     birthday: "",
     employment_status: "Active",
-    termination_date: "",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "08:00",
@@ -1372,11 +1767,10 @@ function HRWorkforceApp() {
     pto_balance: 0,
     sick_balance: 0,
     vto_balance: 0,
-    pto_balance_days: 0,
-    sick_balance_days: 0,
-    vto_balance_days: 0,
   });
   const [databaseStatus, setDatabaseStatus] = useState("Demo mode active. Using built-in demo users and sample HR data.");
+  const [attendanceEmailSettings, setAttendanceEmailSettings] = useState(DEFAULT_ATTENDANCE_EMAIL_SETTINGS);
+  const [lastWorkforceSync, setLastWorkforceSync] = useState(null);
   const [sessionUserEmail, setSessionUserEmail] = useState(localStorage.getItem("candoHrUserEmail") || "");
   const [loginEmail, setLoginEmail] = useState(DEFAULT_LOGIN_EMAIL);
   const [loginPassword, setLoginPassword] = useState("");
@@ -1387,14 +1781,72 @@ function HRWorkforceApp() {
   const actionLockRef = useRef(new Set());
   const toastTimerRef = useRef(null);
   const overrideResolverRef = useRef(null);
+  const dailyTimerStopRef = useRef("");
+  const weeklyWorkforceSyncRef = useRef(localStorage.getItem(WORKFORCE_SYNC_LAST_RUN_KEY) || "");
+  const attendanceEmailQueueRef = useRef(new Set());
 
+
+  async function syncWorkforcePlanningSheet(options = {}) {
+    const { silent = false, automatic = false } = options;
+
+    try {
+      const workforceRows = await fetchWorkforceSheetRows();
+
+      if (!workforceRows.length) {
+        if (!silent) {
+          showToast(
+            "Workforce sheet not synced",
+            "No matching rows were found. Confirm the sheet is shared with viewer access and has Employee_ID plus operational columns.",
+            "warning"
+          );
+        }
+        return { updatedCount: 0, importedCount: 0, missingCount: 0 };
+      }
+
+      let syncResult = { updatedCount: 0, importedCount: 0, missingCount: 0 };
+
+      setEmployees((current) => {
+        syncResult = mergeWorkforceRowsIntoEmployees(current, workforceRows, { importMissing: true });
+        return syncResult.employees;
+      });
+
+      const syncDate = getLocalDateKey(new Date());
+      const syncedAt = new Date().toLocaleString();
+      const syncMode = automatic ? "Automatic Saturday Sync" : "Manual Sync";
+
+      if (automatic) {
+        localStorage.setItem(WORKFORCE_SYNC_LAST_RUN_KEY, syncDate);
+        weeklyWorkforceSyncRef.current = syncDate;
+      }
+
+      setLastWorkforceSync({ ...syncResult, syncedAt, syncMode, nextScheduledSync: "Saturday 5:00 AM" });
+
+      setDatabaseStatus(
+        `${syncMode} completed: ${syncResult.updatedCount} employee(s) updated and ${syncResult.importedCount || 0} employee(s) imported. Protected identity fields were not overwritten.`
+      );
+
+      if (!silent) {
+        showToast(
+          "Workforce sheet synced",
+          `${syncResult.updatedCount} employee(s) updated and ${syncResult.importedCount || 0} imported. Email, password, role, hire date, access level, and ID were protected.`,
+          "success"
+        );
+      }
+
+      return syncResult;
+    } catch (error) {
+      console.error("Workforce planning sync failed:", error);
+      if (!silent) showToast("Workforce sync failed", error?.message || "Please verify the shared sheet access.", "danger");
+      return { updatedCount: 0, importedCount: 0, missingCount: 0 };
+    }
+  }
 
   useEffect(() => {
     async function loadGoogleDatabase() {
       const database = await googleGetDatabase();
 
       if (!database) {
-        setDatabaseStatus("Demo mode active. Using built-in demo users and sample HR data.");
+        setDatabaseStatus("Demo mode active. Using built-in demo users and sample HR data. Workforce roster sync is scheduled for Saturday 5:00 AM or can be run manually by an admin.");
         return;
       }
 
@@ -1414,11 +1866,25 @@ function HRWorkforceApp() {
       if (sheetDepartments.length) setDepartments([...new Set(sheetDepartments)]);
       if (sheetSubDepartments.length) setSubDepartments([...new Set(sheetSubDepartments)]);
 
-      setDatabaseStatus("Google Sheets database connected live");
+      setDatabaseStatus("Google Sheets database connected live. Workforce roster sync is scheduled for Saturday 5:00 AM or can be run manually by an admin.");
     }
 
     loadGoogleDatabase();
   }, []);
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      const now = new Date();
+      const currentDate = now.toISOString().slice(0, 10);
+      const currentTime = now.toTimeString().slice(0, 5);
+      if (currentTime === DAILY_TIMER_STOP_TIME && dailyTimerStopRef.current !== currentDate) {
+        dailyTimerStopRef.current = currentDate;
+        autoStopDailyTimers(currentDate, DAILY_TIMER_STOP_TIME);
+      }
+    }, 30000);
+
+    return () => window.clearInterval(interval);
+  }, [employees, timeEntries]);
 
   function showToast(title, message = "", type = "success") {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -1496,13 +1962,35 @@ function HRWorkforceApp() {
   const currentUser = employees.find((e) => normalizeEmail(e.email) === normalizeEmail(sessionUserEmail)) || employees.find((e) => normalizeEmail(e.email) === normalizeEmail(DEFAULT_LOGIN_EMAIL)) || employees[0];
   const canAccessAdmin = hasAdminAccess(currentUser);
   const isAuthenticated = Boolean(sessionUserEmail && currentUser);
-  const isAgentOnly = !adminMode || !canAccessAdmin;
+  const isAgentOnly = !canAccessAdmin;
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(currentUser.id);
   const selectedEmployee = isAgentOnly ? currentUser : employees.find((e) => e.id === selectedEmployeeId) || currentUser;
-const visibleEmployees = isAgentOnly ? [currentUser] : employees;
+
+  const visibleEmployees = isAgentOnly ? [currentUser] : employees;
   const visibleTime = isAgentOnly ? timeEntries.filter((t) => t.employee_id === currentUser.id) : timeEntries;
   const visibleRequests = isAgentOnly ? requests.filter((r) => r.employee_id === currentUser.id) : requests;
   const visibleActivity = isAgentOnly ? activityLog.filter((a) => a.employee_id === currentUser.id) : activityLog;
+
+  useEffect(() => {
+    if (!isAuthenticated || isAgentOnly) return undefined;
+
+    const checkWeeklySync = () => {
+      const now = new Date();
+      if (!isWeeklyWorkforceSyncWindow(now)) return;
+
+      const todayKey = getLocalDateKey(now);
+      const lastStoredSync = localStorage.getItem(WORKFORCE_SYNC_LAST_RUN_KEY);
+
+      if (lastStoredSync === todayKey || weeklyWorkforceSyncRef.current === todayKey) return;
+
+      weeklyWorkforceSyncRef.current = todayKey;
+      syncWorkforcePlanningSheet({ silent: true, automatic: true });
+    };
+
+    checkWeeklySync();
+    const interval = window.setInterval(checkWeeklySync, 60000);
+    return () => window.clearInterval(interval);
+  }, [isAuthenticated, isAgentOnly]);
 
   const lobOptions = ["All", ...new Set([...lobs, ...visibleEmployees.map((e) => e.lob).filter(Boolean)])];
   const departmentOptions = ["All", ...new Set([...departments, ...visibleEmployees.map((e) => e.department).filter(Boolean)])];
@@ -1591,14 +2079,7 @@ const visibleEmployees = isAgentOnly ? [currentUser] : employees;
 
   const reportingSummary = useMemo(() => {
     const keyGetter = reportView === "LOB" ? (item) => item.lob : (item) => item.department;
-    const reportingEmployees = employees.filter((employee) =>
-      (filters.lob === "All" || employee.lob === filters.lob) &&
-      (filters.department === "All" || employee.department === filters.department) &&
-      (filters.subDepartment === "All" || employee.sub_department === filters.subDepartment) &&
-      (filters.employee === "All" || employee.full_name === filters.employee) &&
-      (filters.country === "All" || employee.country === filters.country)
-    );
-    const groupedEmployees = groupBy(reportingEmployees, keyGetter);
+    const groupedEmployees = groupBy(employees, keyGetter);
     const groups = [];
 
     groupedEmployees.forEach((groupEmployees, groupName) => {
@@ -1630,7 +2111,7 @@ const visibleEmployees = isAgentOnly ? [currentUser] : employees;
     });
 
     return groups.sort((a, b) => a.groupName.localeCompare(b.groupName));
-  }, [employees, filteredTime, requests, reportView, filters]);
+  }, [employees, filteredTime, requests, reportView]);
 
   const agentReporting = useMemo(() => {
     return employees.map((e) => {
@@ -1726,12 +2207,6 @@ const visibleEmployees = isAgentOnly ? [currentUser] : employees;
         ...newEmployee,
         id: authUserId || cleanId("EMP"),
         temp_password: generatedPassword,
-        break_minutes: minutesBetween(newEmployee.break_start, newEmployee.break_end) + minutesBetween(newEmployee.second_break_start, newEmployee.second_break_end),
-        lunch_minutes: minutesBetween(newEmployee.lunch_start, newEmployee.lunch_end),
-        pto_balance_days: newEmployee.pto_balance_days ?? safeNumber(newEmployee.pto_balance, 0) / 8,
-        sick_balance_days: newEmployee.sick_balance_days ?? safeNumber(newEmployee.sick_balance, 0) / 8,
-        vto_balance_days: newEmployee.vto_balance_days ?? safeNumber(newEmployee.vto_balance, 0) / 8,
-        termination_date: newEmployee.employment_status === "Inactive" ? (newEmployee.termination_date || today) : "",
       };
 
       if (supabase) await supabase.from("employees").upsert(item);
@@ -1739,13 +2214,7 @@ const visibleEmployees = isAgentOnly ? [currentUser] : employees;
 
       setEmployees([item, ...employees]);
       setSelectedEmployeeId(item.id);
-      setNewEmployee({
-        ...newEmployee,
-        full_name: "",
-        email: "",
-        termination_date: "",
-        employment_status: "Active",
-      });
+      setNewEmployee({ ...newEmployee, full_name: "", email: "" });
 
       setTimeout(() => {
         alert(
@@ -1771,6 +2240,9 @@ User can now log into the Agent Portal.`
         max_vto_out: safeNumber(newRule.max_vto_out, 0),
         max_sick_out: safeNumber(newRule.max_sick_out, 0),
         min_staff_required: safeNumber(newRule.min_staff_required, 0),
+        start_date: newRule.start_date || today,
+        end_date: newRule.end_date || "",
+        recurrence: newRule.recurrence || "Daily",
       };
       setRules([item, ...rules]);
       await googleAddRow("staffingRules", mapRuleToSheet(item));
@@ -1782,7 +2254,7 @@ User can now log into the Agent Portal.`
   }
 
   function updateEmployeeSchedule(employeeId, field, value) {
-  if (!canEditSchedules(getUserAccessLevel(selectedEmployee))) {
+  if (!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")) {
     showToast("Access denied", "Only Reporting, HR, Managers, and Admin users can modify schedules.", "danger");
     return;
   }
@@ -1805,7 +2277,7 @@ User can now log into the Agent Portal.`
   }
 
   async function updateEmployeeRole(employeeId, newAccessLevel) {
-    if (!["Manager", "HR", "Admin"].includes(getUserAccessLevel(currentUser))) {
+    if (!["Manager", "HR", "Admin"].includes(currentUser?.access_level || currentUser?.role || "")) {
       showToast("Access denied", "Only Manager, HR, or Admin users can update employee role access.", "danger");
       return;
     }
@@ -1857,6 +2329,106 @@ User can now log into the Agent Portal.`
     });
   }
 
+
+  function getAttendanceEmailRecipients(employee) {
+    if (!attendanceEmailSettings.enabled || !employee) return "";
+    if (attendanceEmailSettings.lobFilter !== "All" && employee.lob !== attendanceEmailSettings.lobFilter) return "";
+
+    const recipients = [];
+    if (attendanceEmailSettings.includeManager && employee.manager) recipients.push(employee.manager);
+    if (attendanceEmailSettings.includeSupervisor && employee.supervisor) recipients.push(employee.supervisor);
+    if (attendanceEmailSettings.includeHrWfm && attendanceEmailSettings.hrWfmEmails) {
+      attendanceEmailSettings.hrWfmEmails
+        .split(/[;,]/)
+        .map((email) => email.trim())
+        .filter(Boolean)
+        .forEach((email) => recipients.push(email));
+    }
+
+    return [...new Set(recipients.filter(Boolean))].join(", ");
+  }
+
+  function buildAttendanceEmailNotes(employee, savedEntries = []) {
+    const dateKey = getLocalDateKey(new Date());
+    const schedule = getStableSchedule(employee);
+    const categories = savedEntries.map((entry) => entry.category).filter(Boolean).join(" / ") || "Time Logged";
+    const actions = savedEntries.map((entry) => entry.notes).filter(Boolean).join(" / ") || "Attendance activity";
+    return [
+      `Date: ${dateKey}`,
+      `Employee: ${employee.full_name || "Employee"}`,
+      `LOB: ${employee.lob || "N/A"}`,
+      `Department: ${employee.department || "N/A"}`,
+      `Scheduled Shift: ${formatTimeRange(schedule.shift_start, schedule.shift_end)}`,
+      `Latest Action: ${actions}`,
+      `Latest Category: ${categories}`,
+      `Delivery Mode: ${attendanceEmailSettings.deliveryMode}`,
+      `Scheduled Daily Send Time: ${attendanceEmailSettings.sendTime}`,
+    ].join(" | ");
+  }
+
+  async function queueDailyAttendanceEmail(employee, savedEntries = []) {
+    if (!ATTENDANCE_DAILY_EMAILS_ENABLED || !attendanceEmailSettings.enabled || !employee) return;
+
+    const recipients = getAttendanceEmailRecipients(employee);
+    if (!recipients) return;
+
+    const dateKey = getLocalDateKey(new Date());
+    const queueKey = `${employee.id}-${recipients}-${dateKey}-${attendanceEmailSettings.deliveryMode}`;
+
+    // Daily Summary creates one pending emailQueue row per employee/recipient/date in the current app session.
+    // Apps Script should process emailQueue rows with Status = "Pending Send" using GmailApp.sendEmail().
+    if (attendanceEmailQueueRef.current.has(queueKey)) return;
+    attendanceEmailQueueRef.current.add(queueKey);
+
+    try {
+      await googleAddRow("emailQueue", {
+        Email_ID: cleanId("EMAIL"),
+        Event_Type: "Daily Attendance Summary",
+        To_Email: recipients,
+        Employee_Email: employee.email || "",
+        Employee_Name: employee.full_name || "",
+        Request_ID: savedEntries.map((entry) => entry.id).join(", "),
+        Subject: `Daily Attendance Report - ${employee.full_name || "Employee"} - ${dateKey}`,
+        Status: "Pending Send",
+        Send_Mode: attendanceEmailSettings.deliveryMode,
+        Send_Time: attendanceEmailSettings.sendTime,
+        Created_At: new Date(),
+        Notes: buildAttendanceEmailNotes(employee, savedEntries),
+      });
+    } catch (error) {
+      console.error("Daily attendance email queue failed:", error);
+    }
+  }
+
+  async function queueAttendanceTestEmail() {
+    if (isAgentOnly) return;
+    const testEmployee = selectedEmployee || currentUser;
+    const recipients = getAttendanceEmailRecipients(testEmployee);
+
+    if (!recipients) {
+      showToast("No recipients found", "Add a manager, supervisor, or HR/WFM email before sending a test queue item.", "warning");
+      return;
+    }
+
+    return runProtectedAction("attendance-email-test", "Attendance email test", async () => {
+      await googleAddRow("emailQueue", {
+        Email_ID: cleanId("EMAIL"),
+        Event_Type: "Attendance Email Test",
+        To_Email: recipients,
+        Employee_Email: testEmployee.email || "",
+        Employee_Name: testEmployee.full_name || "",
+        Request_ID: "TEST",
+        Subject: `TEST - Daily Attendance Report - ${testEmployee.full_name || "Employee"}`,
+        Status: "Pending Send",
+        Send_Mode: attendanceEmailSettings.deliveryMode,
+        Send_Time: attendanceEmailSettings.sendTime,
+        Created_At: new Date(),
+        Notes: buildAttendanceEmailNotes(testEmployee, [{ id: "TEST", category: "Test", notes: "Attendance email test queue item" }]),
+      });
+      showToast("Test queued", "A Pending Send row was added to emailQueue for Apps Script to send.", "success");
+    });
+  }
+
   async function agentAction(action, status = agentStatus) {
     if (status === "Overtime" && action !== "Shift Ended") {
       showToast("Manual overtime disabled", "Overtime is created automatically after the scheduled shift end.", "warning");
@@ -1867,12 +2439,48 @@ User can now log into the Agent Portal.`
     const time = now.toTimeString().slice(0, 5);
     const schedule = getStableSchedule(selectedEmployee);
 
-    if (isTodayOffDay(selectedEmployee) && !selectedEmployee.off_day_approved) {
-      showToast("Approval required", "This is a scheduled off day. Work is blocked until management approves an off-day exception.", "warning");
+    const autoClass = getAutoWorkClassification(selectedEmployee, time);
+
+    if (
+      ["Shift Started", "Status Changed"].includes(action) &&
+      ["Off-Day Unscheduled", "Early Unscheduled"].includes(autoClass.category) &&
+      !hasApprovedScheduleOverride(requests, selectedEmployee.id)
+    ) {
+      const reason =
+        autoClass.category === "Off-Day Unscheduled"
+          ? "Attempted login on scheduled off day"
+          : "Attempted login before scheduled shift start";
+
+      if (!hasPendingScheduleOverride(requests, selectedEmployee.id)) {
+        const overrideRequest = buildScheduleOverrideRequest(selectedEmployee, reason);
+        setRequests((current) => [overrideRequest, ...current]);
+
+        try {
+          await googleAddRow("requests", mapRequestToSheet(overrideRequest));
+          await googleAddRow("emailQueue", {
+            Email_ID: cleanId("EMAIL"),
+            Event_Type: "Schedule Override Pending Approval",
+            To_Email: selectedEmployee.manager || selectedEmployee.supervisor || "",
+            Employee_Email: selectedEmployee.email,
+            Employee_Name: selectedEmployee.full_name,
+            Request_ID: overrideRequest.id,
+            Subject: "Schedule override pending manager approval",
+            Status: "Pending Send",
+            Created_At: new Date(),
+          });
+        } catch (error) {
+          console.error("Schedule override sync failed:", error);
+        }
+      }
+
+      window.alert("You are not available to log in at this time. Please reach your manager. A Schedule Override request has been created for manager approval.");
+      showToast(
+        "Manager approval required",
+        "You are outside your approved schedule. A Schedule Override request was submitted and work is blocked until approval.",
+        "warning"
+      );
       return null;
     }
-
-    const autoClass = getAutoWorkClassification(selectedEmployee, time);
 
     const resolvedStatus =
       action === "Shift Ended" && shouldSplitAutoOvertime(selectedEmployee, time)
@@ -1986,13 +2594,89 @@ User can now log into the Agent Portal.`
         await googleAddRow("timeLogs", mapTimeToSheet(entry));
       }
 
+      await queueDailyAttendanceEmail(selectedEmployee, entriesToSave);
+
       setActivityLog((current) => [activity, ...current]);
       setTimeEntries((current) => [...entriesToSave, ...current]);
     });
   }
 
+  function getOpenShiftEmployeesForDate(dateValue) {
+    return employees.filter((employee) => {
+      if (employee.employment_status !== "Active") return false;
+      const employeeEntries = timeEntries.filter((entry) => entry.employee_id === employee.id && entry.date === dateValue);
+      const hasShiftStart = employeeEntries.some((entry) => entry.notes === "Shift Started" || entry.category === "Working");
+      const hasShiftEnd = employeeEntries.some((entry) => entry.notes === "Shift Ended" || entry.notes === "System auto logout at 12:59" || entry.category === "Auto Logout");
+      return hasShiftStart && !hasShiftEnd;
+    });
+  }
+
+  async function autoStopDailyTimers(dateValue = new Date().toISOString().slice(0, 10), stopTime = DAILY_TIMER_STOP_TIME) {
+    const openEmployees = getOpenShiftEmployeesForDate(dateValue);
+    if (!openEmployees.length) return;
+
+    const autoEntries = openEmployees.map((employee) => {
+      const schedule = getStableSchedule(employee);
+      return {
+        id: cleanId("TIME"),
+        employee_id: employee.id,
+        employee_name: employee.full_name,
+        date: dateValue,
+        scheduled_start: schedule.shift_start,
+        scheduled_end: schedule.shift_end,
+        schedule_break_1: formatTimeRange(schedule.break_start, schedule.break_end),
+        schedule_lunch: formatTimeRange(schedule.lunch_start, schedule.lunch_end),
+        schedule_break_2: formatTimeRange(schedule.second_break_start, schedule.second_break_end),
+        schedule_off_days: schedule.off_days,
+        schedule_source: "System daily timer stop",
+        clock_in: schedule.shift_start,
+        clock_out: stopTime,
+        category: "Auto Logout",
+        category_start: stopTime,
+        category_end: stopTime,
+        approved: "Pending",
+        payable_status: "Pending Manager Review",
+        locked: false,
+        auto_rule: `System stopped active timer at ${stopTime} because no shift end was recorded.`,
+        lob: employee.lob,
+        department: employee.department,
+        sub_department: employee.sub_department || "",
+        notes: "System auto logout at 12:59",
+      };
+    });
+
+    const autoActivities = openEmployees.map((employee) => ({
+      id: cleanId("ACT"),
+      employee_id: employee.id,
+      employee_name: employee.full_name,
+      date: dateValue,
+      action: "System Auto Logout",
+      time: stopTime,
+      status: "Auto Logout",
+      lob: employee.lob,
+      department: employee.department,
+      sub_department: employee.sub_department || "",
+    }));
+
+    try {
+      if (supabase) await supabase.from("time_entries").insert(autoEntries);
+      for (const entry of autoEntries) {
+        await googleAddRow("timeLogs", mapTimeToSheet(entry));
+      }
+    } catch (error) {
+      console.error("Daily auto logout sync failed:", error);
+    }
+
+    setTimeEntries((current) => [...autoEntries, ...current]);
+    setActivityLog((current) => [...autoActivities, ...current]);
+    showToast("Daily timer stop completed", `${autoEntries.length} open shift timer(s) were closed automatically at ${stopTime}.`, "info");
+  }
+
   async function saveTime() {
-    if (isAgentOnly) return;
+    if (!canEditTimeLogs(currentUser?.access_level || currentUser?.role || "Employee")) {
+      showToast("Access denied", "Only TLs, Managers, Reporting, HR, Payroll, and Admin users can edit time logs.", "danger");
+      return null;
+    }
     if (newTime.category === "Overtime") {
       showToast("Manual overtime disabled", "Overtime is created automatically after the scheduled shift end.", "warning");
       return null;
@@ -2045,6 +2729,7 @@ User can now log into the Agent Portal.`
       };
       if (supabase) await supabase.from("time_entries").insert(item);
       await googleAddRow("timeLogs", mapTimeToSheet(item));
+      await queueDailyAttendanceEmail(selectedEmployee, [item]);
       setTimeEntries((current) => [item, ...current]);
     });
   }
@@ -2086,39 +2771,41 @@ User can now log into the Agent Portal.`
     });
   }
 
- function getApprovalRiskMessage(request) {
-  const employee = employees.find((e) => e.id === request.employee_id);
+  function getApprovalRiskMessage(request) {
+    const employee = employees.find((e) => e.id === request.employee_id);
+    if (!employee) return "Employee profile was not found. Please confirm before approving.";
 
-  if (!employee) {
-    return "Employee profile was not found. Please confirm before approving.";
-  }
+    const balance = getBalance(employee, request.type);
+    if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
+      return `${request.employee_name} is requesting ${request.hours}h of ${request.type}, but the available balance is ${balance}h. Manager override is required to continue.`;
+    }
 
-  const balance = getBalance(employee, request.type);
-  const issues = [];
-
-  if (
-    balance !== null &&
-    safeNumber(request.hours, 0) > safeNumber(balance, 0)
-  ) {
-    issues.push(
-      `${request.employee_name} is requesting ${request.hours} PTO day(s), but the available balance is ${balance} day(s).`
+    const rule = rules.find(
+      (r) =>
+        r.lob === employee.lob &&
+        r.department === employee.department &&
+        r.shift_start === employee.shift_start &&
+        r.shift_end === employee.shift_end
     );
+
+    if (!rule) return null;
+
+    const usage = getRuleUsage(rule);
+    const nextPto = usage.pto + (request.type === "PTO" ? 1 : 0);
+    const nextVto = usage.vto + (request.type === "VTO" ? 1 : 0);
+    const nextSick = usage.sick + (request.type === "Sick Leave" ? 1 : 0);
+    const nextAvailable = usage.scheduled - (nextPto + nextVto + nextSick);
+
+    const exceedsRule =
+      nextPto > safeNumber(rule.max_pto_out, 0) ||
+      nextVto > safeNumber(rule.max_vto_out, 0) ||
+      nextSick > safeNumber(rule.max_sick_out, 0) ||
+      nextAvailable < safeNumber(rule.min_staff_required, 0);
+
+    if (!exceedsRule) return null;
+
+    return `Approving this ${request.type} may exceed the staffing rule for ${employee.lob} / ${employee.department}. Current after approval: PTO ${nextPto}/${rule.max_pto_out}, VTO ${nextVto}/${rule.max_vto_out}, Sick ${nextSick}/${rule.max_sick_out}, Available ${nextAvailable}, Minimum required ${rule.min_staff_required}. Manager override is required.`;
   }
-
-  if (safeNumber(request.hours, 0) > 5) {
-    issues.push(
-      "This request exceeds the standard PTO policy limit of 5 consecutive days."
-    );
-  }
-
-  if (issues.length > 0) {
-    return `${issues.join(" ")} Manager override is required to continue.`;
-  }
-
-  return null;
-}
-
-   
 
   async function setRequestStatus(id, status) {
     if (isAgentOnly) return;
@@ -2165,6 +2852,28 @@ User can now log into the Agent Portal.`
           if (updatedEmployee) {
             await googleUpdateRow("employees", "Employee_ID", latestRequest.employee_id, mapEmployeeToSheet(updatedEmployee));
           }
+        }
+
+        if (latestRequest.type === "Schedule Override" && updatedEmployee) {
+          updatedEmployees = updatedEmployees.map((employee) =>
+            employee.id === latestRequest.employee_id
+              ? {
+                  ...employee,
+                  off_day_approved: true,
+                  schedule_exception_date: latestRequest.start_date || today,
+                  schedule_exception_reason: latestRequest.reason || "Approved schedule override",
+                }
+              : employee
+          );
+          updatedEmployee = updatedEmployees.find((employee) => employee.id === latestRequest.employee_id);
+          if (updatedEmployee) {
+            await googleUpdateRow("employees", "Employee_ID", latestRequest.employee_id, mapEmployeeToSheet(updatedEmployee));
+          }
+          showToast(
+            "Schedule exception approved",
+            `${latestRequest.employee_name} can now log in outside the standard schedule for ${formatDateOnly(latestRequest.start_date || today)} only.`,
+            "success"
+          );
         }
 
         if (latestRequest.type === "Schedule Change" && updatedEmployee) {
@@ -2275,6 +2984,83 @@ User can now log into the Agent Portal.`
       );
 
       setTimeEntries((current) => current.map((t) => (t.id === id ? updatedTimeEntry : t)));
+    });
+  }
+
+
+  function editTimeEntryLocal(id, field, value) {
+    if (!canEditTimeLogs(currentUser?.access_level || currentUser?.role || "Employee")) {
+      showToast("Access denied", "Only TLs, Managers, Reporting, HR, Payroll, and Admin users can edit previous time logs.", "danger");
+      return;
+    }
+
+    setTimeEntries((current) =>
+      current.map((entry) => {
+        if (entry.id !== id) return entry;
+        const next = { ...entry, [field]: value };
+        if (field === "category" && value === "Overtime") {
+          next.approved = "Pending";
+          next.payable_status = "Pending Manager Approval";
+          next.auto_rule = next.auto_rule || "Manual correction changed to overtime for payroll review";
+        }
+        return next;
+      })
+    );
+  }
+
+  async function saveEditedTimeEntry(id) {
+    if (!canEditTimeLogs(currentUser?.access_level || currentUser?.role || "Employee")) {
+      showToast("Access denied", "Only TLs, Managers, Reporting, HR, Payroll, and Admin users can save time log corrections.", "danger");
+      return null;
+    }
+
+    const timeEntry = timeEntries.find((entry) => entry.id === id);
+    if (!timeEntry) {
+      showToast("Time entry not found", "The selected time log could not be found.", "danger");
+      return null;
+    }
+
+    const key = `time-log-edit-${id}-${timeEntry.date}-${timeEntry.category}-${timeEntry.category_start}-${timeEntry.category_end}`;
+
+    return runProtectedAction(key, "Time log correction", async () => {
+      const correctedEntry = {
+        ...timeEntry,
+        category_start: formatMilitaryTime(timeEntry.category_start),
+        category_end: formatMilitaryTime(timeEntry.category_end),
+        clock_in: formatMilitaryTime(timeEntry.clock_in || timeEntry.category_start),
+        clock_out: formatMilitaryTime(timeEntry.clock_out || timeEntry.category_end),
+        edited_by: currentUser.email,
+        edited_at: new Date().toISOString(),
+        approved_by: currentUser.email,
+      };
+
+      if (supabase) {
+        await supabase.from("time_entries").update(correctedEntry).eq("id", id);
+      }
+
+      await googleUpdateRow("timeLogs", "Log_ID", id, mapTimeToSheet(correctedEntry));
+
+      await googleAddRow(
+        "approvals",
+        mapApprovalToSheet({
+          id: cleanId("TIMEEDIT"),
+          employee_id: correctedEntry.employee_id,
+          employee_name: correctedEntry.employee_name,
+          approval_type: "Time Log Manual Correction",
+          related_record_id: correctedEntry.id,
+          request_type: correctedEntry.category,
+          decision: "Corrected",
+          previous_status: timeEntry.approved || "Pending Review",
+          new_status: correctedEntry.approved || "Pending Review",
+          approved_by: currentUser.email,
+          approved_date: new Date(),
+          hours: (minutesBetween(correctedEntry.category_start, correctedEntry.category_end) / 60).toFixed(2),
+          notes: correctedEntry.notes || "Manager/TL time log correction saved from Time tab.",
+        })
+      );
+
+      setTimeEntries((current) => current.map((entry) => (entry.id === id ? correctedEntry : entry)));
+      showToast("Time log saved", "The previous time log was corrected and retained for audit review.", "success");
     });
   }
 
@@ -2404,13 +3190,10 @@ User can now log into the Agent Portal.`
       return;
     }
 
-    const userHasAdminAccess = hasAdminAccess(employee);
-
     localStorage.setItem("candoHrUserEmail", employee.email);
     setSessionUserEmail(employee.email);
     setSelectedEmployeeId(employee.id);
-    setAdminMode(userHasAdminAccess);
-    setTab(userHasAdminAccess ? "dashboard" : "agent");
+    setAdminMode(false);
     setAuthError("");
   }
 
@@ -2442,10 +3225,9 @@ User can now log into the Agent Portal.`
 
     if (["dashboard", "employees", "schedule"].includes(tab)) {
       return (
-        <section className="tabMetrics">
+        <section className="tabMetrics compactMetrics">
           <Metric icon={Users} label="Active Employees" value={activeEmployeeCount} hint="Active profiles" />
           <Metric icon={CalendarDays} label="Scheduled Today" value={scheduledTodayCount} hint="Not on off day" />
-          <Metric icon={BarChart3} label="Productivity" value={`${stats.productivity}%`} hint="Working vs tracked" />
         </section>
       );
     }
@@ -2520,17 +3302,7 @@ User can now log into the Agent Portal.`
           </div>
           {isAgentOnly && (
             <div className="actions">
-              {canAccessAdmin && (
-                <button
-                  className="primary"
-                  onClick={() => {
-                    setAdminMode(true);
-                    setTab("dashboard");
-                  }}
-                >
-                  Admin Dashboard
-                </button>
-              )}
+              {canAccessAdmin && <button className="primary" onClick={() => setAdminMode(true)}>Admin / Manager Access</button>}
               <button onClick={logout}>Logout</button>
             </div>
           )}
@@ -2542,12 +3314,19 @@ User can now log into the Agent Portal.`
               <button onClick={exportTimeCsv}><Download size={16} /> Time CSV</button>
               <button onClick={exportRequestsCsv}><Download size={16} /> Requests CSV</button>
               <button className="primary" onClick={exportPdf}><Download size={16} /> PDF</button>
-              <button onClick={createArchiveBackup}><Download size={16} /> Archive Backup</button>
+              <button onClick={() => syncWorkforcePlanningSheet({ automatic: false })}><Database size={16} /> Run Workforce Sync Now</button>
+            <button onClick={createArchiveBackup}><Download size={16} /> Archive Backup</button>
             </div>
           )}
         </header>
 
         <HeaderMetrics />
+
+        {!isAgentOnly && lastWorkforceSync && (
+          <section className="syncNotice">
+            {lastWorkforceSync.syncMode || "Workforce planning sheet synced"}: {lastWorkforceSync.updatedCount} employee(s) updated · {lastWorkforceSync.missingCount} sheet row(s) not matched · {lastWorkforceSync.syncedAt}. Next automatic sync: Saturday 5:00 AM. Protected: email, password, role, access level, hire date, birthday, and employee ID.
+          </section>
+        )}
 
         {!isAgentOnly && (
           <section className="filterPanel">
@@ -2600,23 +3379,62 @@ User can now log into the Agent Portal.`
 
             <div className="agentGrid">
               <Card title="My shift actions">
-                <div className="agentActions">
-                  <button className="primary" onClick={() => agentAction("Shift Started", "Working")}>Start Shift</button>
-                  <button onClick={() => agentAction("Shift Ended", "Working")}>End Shift</button>
-                </div>
-                <div className="currentStatus">
-                  <label><span>Current Status / Disposition</span><select value={agentStatus} onChange={(e) => setAgentStatus(e.target.value)}><TimeCategoryOptions /></select></label>
-                  <button className="primary" onClick={() => agentAction("Status Changed", agentStatus)}>Log Status</button>
-                  <button disabled className="disabledBtn otDisabledBtn" title="Manual overtime is disabled. Overtime is created automatically after the scheduled shift end.">Automatic OT Only</button>
-                </div>
-              </Card>
+              <div className="agentActions">
+                <button
+                  className="primary"
+                  onClick={() => agentAction("Shift Started", "Working")}
+                >
+                  Start Shift
+                </button>
 
-              <Card title="My balances">
+                <button onClick={() => agentAction("Shift Ended", "Working")}>
+                  End Shift
+                </button>
+              </div>
+
+              <div className="currentStatus">
+                <label>
+                  <span>Current Status / Disposition</span>
+                  <select value={agentStatus} onChange={(e) => setAgentStatus(e.target.value)}>
+                    <TimeCategoryOptions />
+                  </select>
+                </label>
+                <button className="primary" onClick={() => agentAction("Status Changed", agentStatus)}>
+                  Log Status
+                </button>
+                <button
+                  disabled
+                  className="disabledBtn otDisabledBtn"
+                  title="Manual overtime is disabled. Overtime is created automatically after the scheduled shift end."
+                >
+                  Automatic OT Only
+                </button>
+              </div>
+            </Card>
+
+            <Card title="My balances">
                 <div className="balanceGrid">
                   <div><span>PTO</span><strong>{balanceDays(selectedEmployee, "PTO")} day(s)</strong></div>
-                  <div><span>Sick</span><strong>{balanceDays(selectedEmployee, "Sick Leave")} day(s)</strong></div>
-                  <div><span>VTO</span><strong>{balanceDays(selectedEmployee, "VTO")} day(s)</strong></div>
+                  {showSickBalanceForCountry(selectedEmployee.country) && (
+                    <div><span>Sick</span><strong>{balanceDays(selectedEmployee, "Sick Leave")} day(s)</strong></div>
+                  )}
                   <div><span>Tenure</span><strong>{tenure(selectedEmployee.hire_date)}</strong></div>
+                </div>
+                <div className="monthlyAttendanceBox">
+                  <strong>Monthly attendance · {employeeMonthlyAttendance(selectedEmployee, timeEntries, requests).monthLabel}</strong>
+                  <div className="reportMiniGrid">
+                    <Info label="Worked" value={`${employeeMonthlyAttendance(selectedEmployee, timeEntries, requests).workingHours.toFixed(1)}h`} />
+                    <Info label="Approved PTO" value={`${employeeMonthlyAttendance(selectedEmployee, timeEntries, requests).ptoApprovedDays} day(s)`} />
+                    {!showSickBalanceForCountry(selectedEmployee.country) && (
+                      <Info label="Approved Sick Status" value={`${employeeMonthlyAttendance(selectedEmployee, timeEntries, requests).sickApprovedDays} day(s)`} />
+                    )}
+                    <Info label="Approved VTO" value={`${employeeMonthlyAttendance(selectedEmployee, timeEntries, requests).vtoApprovedHours}h`} />
+                  </div>
+                  <div className="miniRequestList">
+                    {employeeMonthlyAttendance(selectedEmployee, timeEntries, requests).approvedRequests.length ? employeeMonthlyAttendance(selectedEmployee, timeEntries, requests).approvedRequests.map((request) => (
+                      <span key={request.id}>{request.type}: {formatDateOnly(request.start_date)} · {request.type === "VTO" ? `${request.hours}h` : `${Number(request.requested_days || request.hours / 8).toFixed(1)} day(s)`}</span>
+                    )) : <span>No approved requests for this month yet.</span>}
+                  </div>
                 </div>
               </Card>
 
@@ -2646,38 +3464,77 @@ User can now log into the Agent Portal.`
         )}
 
         {!isAgentOnly && tab === "dashboard" && (
-          <section className="dashboardLayout">
-            <Card title="Live floor traffic light view">
-              <div className="trafficGrid">
-                {visibleEmployees.filter((employee) => employee.employment_status === "Active").map((employee) => {
-                  const live = employeeLiveStatus(employee, timeEntries, activityLog);
+          <section className="dashboardFloorSection">
+            <Card title="Live floor traffic light view by LOB">
+              <p className="helperText">Production-ready live floor view grouped by Line of Business. This larger dashboard layout is designed to hold many more agent cards once the app is moved into production.</p>
+              <div className="lobTrafficSplit largeFloorView">
+                {lobOptions.filter((lob) => lob !== "All").map((lob) => {
+                  const lobEmployees = visibleEmployees.filter((employee) => employee.employment_status === "Active" && employee.lob === lob);
                   return (
-                    <div className={`trafficCard ${live.color}`} key={employee.id}>
-                      <span className="trafficDot" />
-                      <strong>{employee.full_name}</strong>
-                      <small>{employee.department} · {employee.sub_department || "N/A"}</small>
-                      <b>{live.status}</b>
-                      <em>{live.note}</em>
-                    </div>
+                    <section className="lobTrafficColumn" key={lob}>
+                      <div className="lobTrafficHeader">
+                        <h3>{lob}</h3>
+                        <Badge>{lobEmployees.length} active</Badge>
+                      </div>
+                      <div className="trafficGrid production">
+                        {lobEmployees.map((employee) => {
+                          const live = employeeLiveStatus(employee, timeEntries, activityLog);
+                          return (
+                            <div className={`trafficCard ${live.color}`} key={employee.id}>
+                              <span className="trafficDot" />
+                              <strong>{employee.full_name}</strong>
+                              <small>{employee.department} · {employee.sub_department || "N/A"}</small>
+                              <b>{live.status}</b>
+                              <em>{live.note}</em>
+                            </div>
+                          );
+                        })}
+                        {!lobEmployees.length && <p className="muted">No active agents assigned to this LOB.</p>}
+                      </div>
+                    </section>
                   );
                 })}
               </div>
             </Card>
-            <Card title="Overall time productivity">
-              <div className="productivityHelp">
-                <strong>How productivity is calculated</strong>
-                <p>Productivity % = Working Time ÷ Total Tracked Time × 100. Break, lunch, bathroom, training, meetings, system issues, and other non-working dispositions reduce the percentage. Working time and approved overtime count as productive time.</p>
-              </div>
-              {categoryStats.map((item) => <Progress key={item.label} label={item.label} value={formatHours(item.minutes)} percent={stats.total ? (item.minutes / stats.total) * 100 : 0} />)}
-            </Card>
+
             <Card title="Break / Lunch / Bathroom usage by team">{teamStats.length ? teamStats.map((item) => <Progress key={item.label} label={item.label} value={formatHours(item.minutes)} percent={stats.total ? (item.minutes / stats.total) * 100 : 0} />) : <p className="muted">No break-related data for this filter.</p>}</Card>
           </section>
         )}
 
         {!isAgentOnly && tab === "employees" && (
-          <section className="employeesPage">
-            <Card title="Employee role access profiles reference">
-              <div className="roleProfileGrid compactRoleProfiles">
+          <section className="grid split">
+            <Card title="Employee master database" action={<SearchBox value={search} onChange={setSearch} />}>
+              <Table
+                headers={["Employee", "LOB", "Department", "Sub-Department", "Role", "Access Level", "Country", "Shift", "Off Days", "Status"]}
+                rows={filteredEmployees.map((e) => [
+                  <button className="textBtn" onClick={() => setSelectedEmployeeId(e.id)}>
+                    {e.full_name}
+                    <small>{e.email}</small>
+                  </button>,
+                  e.lob,
+                  e.department,
+                  e.sub_department || "N/A",
+                  e.role,
+                  <select
+                    value={e.access_level || "Employee"}
+                    disabled={!["Manager", "HR", "Admin"].includes(currentUser?.access_level || currentUser?.role || "")}
+                    onChange={(event) => updateEmployeeRole(e.id, event.target.value)}
+                  >
+                    {ROLE_PROFILE_OPTIONS.map((roleOption) => (
+                      <option key={roleOption} value={roleOption}>{roleOption}</option>
+                    ))}
+                  </select>,
+                  e.country,
+                  formatTimeRange(e.shift_start, e.shift_end),
+                  formatOffDays(e.off_days),
+                  <Badge>{e.employment_status}</Badge>,
+                ])}
+              />
+            </Card>
+
+            <Card title="Role-based access profiles">
+              <p className="helperText">Reference guide for what each employee access profile can do. This has been moved from Dashboard to Employees so role management stays in one place.</p>
+              <div className="roleProfileGrid">
                 {Object.entries(ROLE_ACCESS_PROFILES).map(([key, profile]) => (
                   <div className="roleProfile" key={key}>
                     <strong>{profile.label}</strong>
@@ -2686,114 +3543,21 @@ User can now log into the Agent Portal.`
                 ))}
               </div>
             </Card>
-            <Card title="Employee master database" action={<SearchBox value={search} onChange={setSearch} />}>
-              <p className="helperText">Review all employee profile details, assigned schedules, breaks, lunch, off days, role access, and reporting fields in one wider view. Use the horizontal scroll if your screen is smaller.</p>
-              <Table
-                headers={["Employee", "Email", "LOB", "Department", "Sub-Department", "Role", "Access", "Country", "Supervisor", "Manager", "Shift", "Break 1", "Lunch", "Break 2", "Off Days", "Status"]}
-                rows={filteredEmployees.map((e) => [
-                  <button className="textBtn" onClick={() => setSelectedEmployeeId(e.id)}>{e.full_name}<small>{e.id}</small></button>,
-                  e.email,
-                  e.lob,
-                  e.department,
-                  e.sub_department || "N/A",
-                  e.role,
-                  <Badge muted>{e.access_level}</Badge>,
-                  e.country,
-                  e.supervisor || "Not assigned",
-                  e.manager || "Not assigned",
-                  formatTimeRange(e.shift_start, e.shift_end),
-                  formatTimeRange(e.break_start, e.break_end),
-                  formatTimeRange(e.lunch_start, e.lunch_end),
-                  formatTimeRange(e.second_break_start, e.second_break_end),
-                  formatOffDays(e.off_days),
-                  <Badge>{e.employment_status}</Badge>,
-                ])}
-              />
-            </Card>
-            <Card title="Employee role access management">
-              <p className="helperText">Update existing user role profiles without changing their schedule or employee data. Role changes control which tabs and actions are available to the user.</p>
-              <Table
-                headers={["Employee", "Email", "Current Role", "Access Level", "Update Access"]}
-                rows={filteredEmployees.map((employee) => [
-                  <strong>{employee.full_name}</strong>,
-                  employee.email,
-                  employee.role,
-                  <Badge>{employee.access_level}</Badge>,
-                  <select
-                    value={employee.access_level || "Employee"}
-                    disabled={!["Manager", "HR", "Admin"].includes(getUserAccessLevel(currentUser))}
-                    onChange={(event) => updateEmployeeRole(employee.id, event.target.value)}
-                  >
-                    {ROLE_PROFILE_OPTIONS.map((roleOption) => (
-                      <option key={roleOption} value={roleOption}>{roleOption}</option>
-                    ))}
-                  </select>,
-                ])}
-              />
-            </Card>
 
-            <Card title="Add employee with complete schedule">
-              <p className="helperText">Create the employee profile and assign the full master schedule at the same time. These fields feed the Agent Portal, Schedule tab, Time logs, Payroll, Reporting, and Google Sheets.</p>
-              <div className="employeeFormSections">
-                <section>
-                  <h3>Profile</h3>
-                  <FormGrid>
-                    <input placeholder="Full name" value={newEmployee.full_name} onChange={(e) => setNewEmployee({ ...newEmployee, full_name: e.target.value })} />
-                    <input placeholder="Email" value={newEmployee.email} onChange={(e) => setNewEmployee({ ...newEmployee, email: e.target.value })} />
-                    <input placeholder="Country" value={newEmployee.country} onChange={(e) => setNewEmployee({ ...newEmployee, country: e.target.value })} />
-                    <select value={newEmployee.lob} onChange={(e) => setNewEmployee({ ...newEmployee, lob: e.target.value })}>{lobs.map((lob) => <option key={lob}>{lob}</option>)}</select>
-                    <select value={newEmployee.department} onChange={(e) => setNewEmployee({ ...newEmployee, department: e.target.value })}>{departments.map((department) => <option key={department}>{department}</option>)}</select>
-                    <select value={newEmployee.sub_department} onChange={(e) => setNewEmployee({ ...newEmployee, sub_department: e.target.value })}>{subDepartments.map((subDepartment) => <option key={subDepartment}>{subDepartment}</option>)}</select>
-                    <select value={newEmployee.role} onChange={(e) => setNewEmployee({ ...newEmployee, role: e.target.value, access_level: e.target.value === "Agent" ? "Employee" : e.target.value })}>
-                      {["Agent", "Team Lead", "Supervisor", "Manager", "HR", "Payroll", "Admin", "Executive", "Reporting"].map((role) => <option key={role}>{role}</option>)}
-                    </select>
-                    <select value={newEmployee.access_level} onChange={(e) => setNewEmployee({ ...newEmployee, access_level: e.target.value })}>
-                      {ROLE_PROFILE_OPTIONS.map((roleOption) => <option key={roleOption} value={roleOption}>{roleOption}</option>)}
-                    </select>
-                    <input placeholder="Supervisor" value={newEmployee.supervisor} onChange={(e) => setNewEmployee({ ...newEmployee, supervisor: e.target.value })} />
-                    <input placeholder="Manager" value={newEmployee.manager} onChange={(e) => setNewEmployee({ ...newEmployee, manager: e.target.value })} />
-                    <input type="date" title="Hire Date" value={newEmployee.hire_date} onChange={(e) => setNewEmployee({ ...newEmployee, hire_date: e.target.value })} />
-                    <select value={newEmployee.employment_status} onChange={(e) => setNewEmployee({ ...newEmployee, employment_status: e.target.value, termination_date: e.target.value === "Inactive" ? today : "" })}>
-                      <option>Active</option>
-                      <option>Inactive</option>
-                    </select>
-                    <select value={newEmployee.employment_type} onChange={(e) => setNewEmployee({ ...newEmployee, employment_type: e.target.value })}>
-                      <option>Full-Time</option>
-                      <option>Part-Time</option>
-                      <option>Contractor</option>
-                      <option>Temporary</option>
-                    </select>
-                  </FormGrid>
-                </section>
-
-                <section>
-                  <h3>Master schedule</h3>
-                  <FormGrid>
-                    <label className="field"><span>Shift Start</span><input type="time" value={newEmployee.shift_start} onChange={(e) => setNewEmployee({ ...newEmployee, shift_start: e.target.value })} /></label>
-                    <label className="field"><span>Shift End</span><input type="time" value={newEmployee.shift_end} onChange={(e) => setNewEmployee({ ...newEmployee, shift_end: e.target.value })} /></label>
-                    <label className="field"><span>Break 1 Start</span><input type="time" value={newEmployee.break_start} onChange={(e) => setNewEmployee({ ...newEmployee, break_start: e.target.value, break_minutes: minutesBetween(e.target.value, newEmployee.break_end) + minutesBetween(newEmployee.second_break_start, newEmployee.second_break_end) })} /></label>
-                    <label className="field"><span>Break 1 End</span><input type="time" value={newEmployee.break_end} onChange={(e) => setNewEmployee({ ...newEmployee, break_end: e.target.value, break_minutes: minutesBetween(newEmployee.break_start, e.target.value) + minutesBetween(newEmployee.second_break_start, newEmployee.second_break_end) })} /></label>
-                    <label className="field"><span>Lunch Start</span><input type="time" value={newEmployee.lunch_start} onChange={(e) => setNewEmployee({ ...newEmployee, lunch_start: e.target.value, lunch_minutes: minutesBetween(e.target.value, newEmployee.lunch_end) })} /></label>
-                    <label className="field"><span>Lunch End</span><input type="time" value={newEmployee.lunch_end} onChange={(e) => setNewEmployee({ ...newEmployee, lunch_end: e.target.value, lunch_minutes: minutesBetween(newEmployee.lunch_start, e.target.value) })} /></label>
-                    <label className="field"><span>Break 2 Start</span><input type="time" value={newEmployee.second_break_start} onChange={(e) => setNewEmployee({ ...newEmployee, second_break_start: e.target.value, break_minutes: minutesBetween(newEmployee.break_start, newEmployee.break_end) + minutesBetween(e.target.value, newEmployee.second_break_end) })} /></label>
-                    <label className="field"><span>Break 2 End</span><input type="time" value={newEmployee.second_break_end} onChange={(e) => setNewEmployee({ ...newEmployee, second_break_end: e.target.value, break_minutes: minutesBetween(newEmployee.break_start, newEmployee.break_end) + minutesBetween(newEmployee.second_break_start, e.target.value) })} /></label>
-                    <input placeholder="Off days, example: Saturday, Sunday" value={newEmployee.off_days} onChange={(e) => setNewEmployee({ ...newEmployee, off_days: e.target.value })} />
-                    <input type="number" min="0" title="Total break minutes" value={newEmployee.break_minutes} onChange={(e) => setNewEmployee({ ...newEmployee, break_minutes: safeNumber(e.target.value, 0) })} />
-                    <input type="number" min="0" title="Lunch minutes" value={newEmployee.lunch_minutes} onChange={(e) => setNewEmployee({ ...newEmployee, lunch_minutes: safeNumber(e.target.value, 0) })} />
-                  </FormGrid>
-                </section>
-
-                <section>
-                  <h3>Balances</h3>
-                  <FormGrid>
-                    <label className="field"><span>PTO Days</span><input type="number" min="0" step="0.5" value={newEmployee.pto_balance_days ?? safeNumber(newEmployee.pto_balance, 0) / 8} onChange={(e) => setNewEmployee({ ...newEmployee, pto_balance_days: safeNumber(e.target.value, 0), pto_balance: safeNumber(e.target.value, 0) * 8 })} /></label>
-                    <label className="field"><span>Sick Days</span><input type="number" min="0" step="0.5" value={newEmployee.sick_balance_days ?? safeNumber(newEmployee.sick_balance, 0) / 8} onChange={(e) => setNewEmployee({ ...newEmployee, sick_balance_days: safeNumber(e.target.value, 0), sick_balance: safeNumber(e.target.value, 0) * 8 })} /></label>
-                    <label className="field"><span>VTO Days</span><input type="number" min="0" step="0.5" value={newEmployee.vto_balance_days ?? safeNumber(newEmployee.vto_balance, 0) / 8} onChange={(e) => setNewEmployee({ ...newEmployee, vto_balance_days: safeNumber(e.target.value, 0), vto_balance: safeNumber(e.target.value, 0) * 8 })} /></label>
-                  </FormGrid>
-                </section>
-
-                <button className="primary wide" onClick={saveEmployee}>Save employee with schedule</button>
-              </div>
+            <Card title="Add employee">
+              <FormGrid>
+                <input placeholder="Full name" value={newEmployee.full_name} onChange={(e) => setNewEmployee({ ...newEmployee, full_name: e.target.value })} />
+                <input placeholder="Email" value={newEmployee.email} onChange={(e) => setNewEmployee({ ...newEmployee, email: e.target.value })} />
+                <input placeholder="Country" value={newEmployee.country} onChange={(e) => setNewEmployee({ ...newEmployee, country: e.target.value })} />
+                <select value={newEmployee.lob} onChange={(e) => setNewEmployee({ ...newEmployee, lob: e.target.value })}>{lobs.map((lob) => <option key={lob}>{lob}</option>)}</select>
+                <select value={newEmployee.department} onChange={(e) => setNewEmployee({ ...newEmployee, department: e.target.value })}>{departments.map((department) => <option key={department}>{department}</option>)}</select>
+                <select value={newEmployee.sub_department} onChange={(e) => setNewEmployee({ ...newEmployee, sub_department: e.target.value })}>{subDepartments.map((subDepartment) => <option key={subDepartment}>{subDepartment}</option>)}</select>
+                <input placeholder="Role" value={newEmployee.role} onChange={(e) => setNewEmployee({ ...newEmployee, role: e.target.value })} />
+                <input type="time" value={newEmployee.shift_start} onChange={(e) => setNewEmployee({ ...newEmployee, shift_start: e.target.value })} />
+                <input type="time" value={newEmployee.shift_end} onChange={(e) => setNewEmployee({ ...newEmployee, shift_end: e.target.value })} />
+                <input placeholder="Off days, example: Saturday, Sunday" value={newEmployee.off_days} onChange={(e) => setNewEmployee({ ...newEmployee, off_days: e.target.value })} />
+                <button className="primary wide" onClick={saveEmployee}>Save employee</button>
+              </FormGrid>
             </Card>
           </section>
         )}
@@ -2811,8 +3575,8 @@ User can now log into the Agent Portal.`
                   <select value={e.sub_department || ""} onChange={(event) => updateEmployeeSchedule(e.id, "sub_department", event.target.value)}>{subDepartments.map((subDepartment) => <option key={subDepartment}>{subDepartment}</option>)}</select>,
                   <input value={e.off_days || ""} onChange={(event) => updateEmployeeSchedule(e.id, "off_days", event.target.value)} placeholder="Saturday, Sunday" />,
                   <Badge danger={isTodayOffDay(e)} muted={!isTodayOffDay(e)}>{isTodayOffDay(e) ? "Off Today" : "Scheduled"}</Badge>,
-                  <input type="time" value={e.shift_start} disabled={!canEditSchedules(getUserAccessLevel(selectedEmployee))} onChange={(event) => updateEmployeeSchedule(e.id, "shift_start", event.target.value)} />,
-                  <input type="time" value={e.shift_end} disabled={!canEditSchedules(getUserAccessLevel(selectedEmployee))} onChange={(event) => updateEmployeeSchedule(e.id, "shift_end", event.target.value)} />,
+                  <input type="time" value={e.shift_start} disabled={!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")} onChange={(event) => updateEmployeeSchedule(e.id, "shift_start", event.target.value)} />,
+                  <input type="time" value={e.shift_end} disabled={!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")} onChange={(event) => updateEmployeeSchedule(e.id, "shift_end", event.target.value)} />,
                   <div className="miniTimes"><input type="time" value={e.break_start} onChange={(event) => updateEmployeeSchedule(e.id, "break_start", event.target.value)} /><input type="time" value={e.break_end} onChange={(event) => updateEmployeeSchedule(e.id, "break_end", event.target.value)} /></div>,
                   <div className="miniTimes"><input type="time" value={e.lunch_start} onChange={(event) => updateEmployeeSchedule(e.id, "lunch_start", event.target.value)} /><input type="time" value={e.lunch_end} onChange={(event) => updateEmployeeSchedule(e.id, "lunch_end", event.target.value)} /></div>,
                   <div className="miniTimes"><input type="time" value={e.second_break_start} onChange={(event) => updateEmployeeSchedule(e.id, "second_break_start", event.target.value)} /><input type="time" value={e.second_break_end} onChange={(event) => updateEmployeeSchedule(e.id, "second_break_end", event.target.value)} /></div>,
@@ -2826,8 +3590,38 @@ User can now log into the Agent Portal.`
 
         {!isAgentOnly && tab === "time" && (
           <section className="grid split reverse">
-            <Card title="Log time category"><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newTime.category} onChange={(e) => setNewTime({ ...newTime, category: e.target.value })}><TimeCategoryOptions /></select><input type="time" value={newTime.category_start} onChange={(e) => setNewTime({ ...newTime, category_start: e.target.value })} /><input type="time" value={newTime.category_end} onChange={(e) => setNewTime({ ...newTime, category_end: e.target.value })} /><input placeholder="Notes" value={newTime.notes} onChange={(e) => setNewTime({ ...newTime, notes: e.target.value })} /><button className="primary wide" onClick={saveTime}>Add time entry</button></FormGrid></Card>
-            <Card title="Daily time utilization"><Table headers={["Employee", "Date", "LOB", "Category", "Time", "Duration", "Approval", "Payable"]} rows={filteredTime.map((t) => [t.employee_name, t.date, t.lob, <Badge muted={t.locked} danger={t.approved === "Pending Approval"}>{t.category}</Badge>, formatTimeRange(t.category_start, t.category_end), formatHours(minutesBetween(t.category_start, t.category_end)), <Badge danger={t.approved === "Pending Approval"}>{t.approved}</Badge>, t.payable_status || "Regular"]) } /></Card>
+            <Card title="Manager / TL editable time log">
+              <p className="helperText">Managers and TLs can add new time entries and edit previous time logs for agents. Each saved correction is retained in the approval/audit trail.</p>
+              <FormGrid>
+                <select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select>
+                <select value={newTime.category} onChange={(e) => setNewTime({ ...newTime, category: e.target.value })}><TimeCategoryOptions /></select>
+                <input type="time" value={newTime.category_start} onChange={(e) => setNewTime({ ...newTime, category_start: e.target.value })} />
+                <input type="time" value={newTime.category_end} onChange={(e) => setNewTime({ ...newTime, category_end: e.target.value })} />
+                <input placeholder="Notes" value={newTime.notes} onChange={(e) => setNewTime({ ...newTime, notes: e.target.value })} />
+                <button className="primary wide" onClick={saveTime}>Add time entry</button>
+              </FormGrid>
+            </Card>
+            <Card title="Editable previous time logs">
+              <p className="helperText">Use this table to correct historical clock-in/out, category, approval, payable status, or notes. Select Save on the corrected row to persist the update.</p>
+              <Table
+                headers={["Employee", "Date", "LOB", "Category", "Start", "End", "Duration", "Approval", "Payable", "Notes", "Save"]}
+                rows={filteredTime.map((t) => [
+                  <strong>{t.employee_name}</strong>,
+                  <input type="date" value={t.date || today} onChange={(event) => editTimeEntryLocal(t.id, "date", event.target.value)} />,
+                  t.lob,
+                  <select value={t.category} onChange={(event) => editTimeEntryLocal(t.id, "category", event.target.value)}><TimeCategoryOptions /></select>,
+                  <input type="time" value={formatMilitaryTime(t.category_start)} onChange={(event) => editTimeEntryLocal(t.id, "category_start", event.target.value)} />,
+                  <input type="time" value={formatMilitaryTime(t.category_end)} onChange={(event) => editTimeEntryLocal(t.id, "category_end", event.target.value)} />,
+                  formatHours(minutesBetween(t.category_start, t.category_end)),
+                  <select value={t.approved || "Pending"} onChange={(event) => editTimeEntryLocal(t.id, "approved", event.target.value)}>
+                    {["Pending", "Pending Approval", "Approved", "Denied", "Auto Logged"].map((status) => <option key={status}>{status}</option>)}
+                  </select>,
+                  <input value={t.payable_status || "Regular"} onChange={(event) => editTimeEntryLocal(t.id, "payable_status", event.target.value)} />,
+                  <input value={t.notes || ""} onChange={(event) => editTimeEntryLocal(t.id, "notes", event.target.value)} placeholder="Correction notes" />,
+                  <button className="primary" onClick={() => saveEditedTimeEntry(t.id)}>Save</button>,
+                ])}
+              />
+            </Card>
           </section>
         )}
 
@@ -2842,7 +3636,7 @@ User can now log into the Agent Portal.`
           <section className="grid two">
             <Card title="Approvals Queue - Time-Off & Schedule Requests">
               <p className="helperText">Use this queue for requests submitted by employees, including PTO, VTO, Sick Leave, Paid Leave, Unpaid Leave, Schedule Change, and OT requests submitted as a formal request. Approval updates the Requests tab, creates an Approvals audit record, and deducts balances when applicable.</p>
-              {requests.filter((r) => r.status === "Pending").length ? requests.filter((r) => r.status === "Pending").map((r) => <Approval key={r.id} title={r.employee_name} detail={`${r.type} · ${formatDateOnly(r.start_date)} to ${formatDateOnly(r.end_date)} · ${r.hours}h / ${Number(r.requested_days || r.hours / 8).toFixed(1)} days · Current: ${r.current_balance ?? "N/A"}h · After: ${r.projected_balance ?? "N/A"}h`} approve={() => setRequestStatus(r.id, "Approved")} deny={() => setRequestStatus(r.id, "Denied")} />) : <p className="muted">No pending employee requests at this time.</p>}
+              {requests.filter((r) => ["Pending", "Pending Manager Approval"].includes(r.status)).length ? requests.filter((r) => ["Pending", "Pending Manager Approval"].includes(r.status)).map((r) => <Approval key={r.id} title={r.employee_name} detail={`${r.type} · ${formatDateOnly(r.start_date)} to ${formatDateOnly(r.end_date)} · ${r.hours}h / ${Number(r.requested_days || r.hours / 8).toFixed(1)} days · Current: ${r.current_balance ?? "N/A"}h · After: ${r.projected_balance ?? "N/A"}h`} approve={() => setRequestStatus(r.id, "Approved")} deny={() => setRequestStatus(r.id, "Denied")} />) : <p className="muted">No pending employee requests at this time.</p>}
             </Card>
             <Card title="Time Log / Overtime Exception Data Backed Up">
               <p className="helperText">The previous time log and overtime exception approval rule has been removed from this approval view. Time log and overtime records are still retained in Time Logs, payroll review, reporting, and archive/export data for audit purposes.</p>
@@ -2898,7 +3692,11 @@ User can now log into the Agent Portal.`
                   rows={agentReporting.map((e) => [e.full_name, e.lob, e.department, e.sub_department || "N/A", `${e.productivity}%`, formatMinutes(e.lateMinutes), formatMinutes(e.breakMinutes), formatMinutes(e.scheduledBreakLunch), <Badge danger={e.variance > 0} muted={e.variance <= 0}>{e.variance > 0 ? "+" : ""}{formatMinutes(e.variance)}</Badge>, formatHours(e.otMinutes)])}
                 />
               </Card>
-              <Card title="Category utilization summary">
+              <Card title="Overall time productivity">
+                <div className="productivityHelp">
+                  <strong>How productivity is calculated</strong>
+                  <p>Productivity % = Working Time ÷ Total Tracked Time × 100. Break, lunch, bathroom, training, meetings, system issues, and other non-working dispositions reduce the percentage. Working time and approved overtime count as productive time.</p>
+                </div>
                 {categoryStats.map((item) => <Progress key={item.label} label={item.label} value={formatHours(item.minutes)} percent={stats.total ? (item.minutes / stats.total) * 100 : 0} />)}
                 <div className="reportNote">Use this view to compare scheduled expectations against actual logged time by LOB, department, and agent. This helps review breaks, lunch, bathroom time, meetings, training, system issues, OT, and productivity.</div>
               </Card>
@@ -2918,7 +3716,7 @@ User can now log into the Agent Portal.`
                 <div className="chipList">{lobs.map((lob) => <span className="chip" key={lob}>{lob}<button onClick={() => deleteLob(lob)}>×</button></span>)}</div>
               </Card>
               <Card title="Manage Departments">
-                <p className="helperText">Add departments used for scheduling, reporting, productivity review, PTO/VTO limits, and payroll tracking.</p>
+                <p className="helperText">Add departments used for scheduling, reporting, PTO/VTO limits, and payroll tracking.</p>
                 <div className="inlineForm">
                   <input placeholder="Example: Operations, QA, Training, HR" value={newDepartment} onChange={(e) => setNewDepartment(e.target.value)} />
                   <button className="primary" onClick={addDepartment}>Add Department</button>
@@ -2935,6 +3733,65 @@ User can now log into the Agent Portal.`
               </Card>
             </section>
 
+            <Card title="Attendance Email Automation Settings">
+              <p className="helperText">Attendance emails are queued in Google Sheets when time is logged. Apps Script should send rows from emailQueue where Status is Pending Send. This avoids sending emails directly from the React app.</p>
+              <div className="describedForm">
+                <DescribedField title="Enable Attendance Emails" description="When enabled, the app creates emailQueue rows after attendance/time logs are saved.">
+                  <select
+                    value={attendanceEmailSettings.enabled ? "Enabled" : "Disabled"}
+                    onChange={(e) => setAttendanceEmailSettings({ ...attendanceEmailSettings, enabled: e.target.value === "Enabled" })}
+                  >
+                    <option>Enabled</option>
+                    <option>Disabled</option>
+                  </select>
+                </DescribedField>
+                <DescribedField title="Delivery Mode" description="Daily Summary is recommended to avoid manager email spam. The queue row is created and Apps Script handles the send process.">
+                  <select
+                    value={attendanceEmailSettings.deliveryMode}
+                    onChange={(e) => setAttendanceEmailSettings({ ...attendanceEmailSettings, deliveryMode: e.target.value })}
+                  >
+                    <option>Daily Summary</option>
+                    <option>First Log Alert</option>
+                    <option>Manual Review Only</option>
+                  </select>
+                </DescribedField>
+                <DescribedField title="Daily Send Time" description="Recommended daily send time for Apps Script processing of pending attendance reports.">
+                  <input
+                    type="time"
+                    value={attendanceEmailSettings.sendTime}
+                    onChange={(e) => setAttendanceEmailSettings({ ...attendanceEmailSettings, sendTime: e.target.value })}
+                  />
+                </DescribedField>
+                <DescribedField title="Recipient Groups" description="Choose who receives attendance summaries. Manager and TL use each employee profile fields.">
+                  <div className="checkboxGrid">
+                    <label><input type="checkbox" checked={attendanceEmailSettings.includeManager} onChange={(e) => setAttendanceEmailSettings({ ...attendanceEmailSettings, includeManager: e.target.checked })} /> Manager</label>
+                    <label><input type="checkbox" checked={attendanceEmailSettings.includeSupervisor} onChange={(e) => setAttendanceEmailSettings({ ...attendanceEmailSettings, includeSupervisor: e.target.checked })} /> TL / Supervisor</label>
+                    <label><input type="checkbox" checked={attendanceEmailSettings.includeHrWfm} onChange={(e) => setAttendanceEmailSettings({ ...attendanceEmailSettings, includeHrWfm: e.target.checked })} /> HR / WFM</label>
+                  </div>
+                </DescribedField>
+                <DescribedField title="HR / WFM Emails" description="Optional extra recipients. Separate multiple emails with comma or semicolon.">
+                  <input
+                    placeholder="wfm@company.com, hr@company.com"
+                    value={attendanceEmailSettings.hrWfmEmails}
+                    onChange={(e) => setAttendanceEmailSettings({ ...attendanceEmailSettings, hrWfmEmails: e.target.value })}
+                  />
+                </DescribedField>
+                <DescribedField title="LOB Filter" description="Limit automation to one LOB or keep All enabled.">
+                  <select
+                    value={attendanceEmailSettings.lobFilter}
+                    onChange={(e) => setAttendanceEmailSettings({ ...attendanceEmailSettings, lobFilter: e.target.value })}
+                  >
+                    <option>All</option>
+                    {lobs.map((lob) => <option key={lob}>{lob}</option>)}
+                  </select>
+                </DescribedField>
+              </div>
+              <div className="emailAutomationSummary">
+                <strong>Current setup:</strong> {attendanceEmailSettings.enabled ? "Enabled" : "Disabled"} · {attendanceEmailSettings.deliveryMode} · Send time {attendanceEmailSettings.sendTime} · Recipients: {attendanceEmailSettings.includeManager ? "Manager " : ""}{attendanceEmailSettings.includeSupervisor ? "TL/Supervisor " : ""}{attendanceEmailSettings.includeHrWfm ? "HR/WFM" : ""}
+              </div>
+              <button className="primary wide" onClick={queueAttendanceTestEmail}>Queue Test Attendance Email</button>
+            </Card>
+
             <section className="grid split reverse">
               <Card title="Editable staffing rule engine">
                 <div className="ruleGuide">
@@ -2946,6 +3803,9 @@ User can now log into the Agent Portal.`
                   <DescribedField title="Department" description="Department or team covered by this staffing rule."><select value={newRule.department} onChange={(e) => setNewRule({ ...newRule, department: e.target.value })}>{departments.map((department) => <option key={department}>{department}</option>)}</select></DescribedField>
                   <DescribedField title="Shift Start" description="The beginning of the scheduled shift block this rule controls."><input type="time" value={newRule.shift_start} onChange={(e) => setNewRule({ ...newRule, shift_start: e.target.value })} /></DescribedField>
                   <DescribedField title="Shift End" description="The end of the scheduled shift block this rule controls."><input type="time" value={newRule.shift_end} onChange={(e) => setNewRule({ ...newRule, shift_end: e.target.value })} /></DescribedField>
+                  <DescribedField title="Rule Start Date" description="When this staffing rule becomes active for planning."><input type="date" value={newRule.start_date} onChange={(e) => setNewRule({ ...newRule, start_date: e.target.value })} /></DescribedField>
+                  <DescribedField title="Rule End Date" description="Optional expiration date. Leave blank for ongoing rules."><input type="date" value={newRule.end_date} onChange={(e) => setNewRule({ ...newRule, end_date: e.target.value })} /></DescribedField>
+                  <DescribedField title="Repeat Frequency" description="Planning frequency for this rule."><select value={newRule.recurrence} onChange={(e) => setNewRule({ ...newRule, recurrence: e.target.value })}>{["None", "Daily", "Weekly", "Monthly", "Seasonal"].map((x) => <option key={x}>{x}</option>)}</select></DescribedField>
                   <DescribedField title="Max PTO Out" description="Maximum employees who can be approved for PTO during this shift."><input type="number" value={newRule.max_pto_out} onChange={(e) => setNewRule({ ...newRule, max_pto_out: e.target.value })} /></DescribedField>
                   <DescribedField title="Max VTO Out" description="Maximum employees who can be released early or off as VTO during this shift."><input type="number" value={newRule.max_vto_out} onChange={(e) => setNewRule({ ...newRule, max_vto_out: e.target.value })} /></DescribedField>
                   <DescribedField title="Max Sick Out" description="Coverage threshold for sick leave. If exceeded, the rule flags a staffing risk."><input type="number" value={newRule.max_sick_out} onChange={(e) => setNewRule({ ...newRule, max_sick_out: e.target.value })} /></DescribedField>
@@ -2956,11 +3816,11 @@ User can now log into the Agent Portal.`
               </Card>
               <Card title="Current coverage rules and usage">
                 <Table
-                  headers={["LOB", "Department", "Shift", "Scheduled", "Approved Out", "Available", "Limits", "Status", "Action"]}
+                  headers={["LOB", "Department", "Shift", "Effective Dates", "Repeat", "Scheduled", "Approved Out", "Available", "Limits", "Status", "Action"]}
                   rows={rules.map((rule) => {
                     const usage = getRuleUsage(rule);
                     const exceeds = usage.pto > rule.max_pto_out || usage.vto > rule.max_vto_out || usage.sick > rule.max_sick_out || usage.available < rule.min_staff_required;
-                    return [rule.lob, rule.department, formatTimeRange(rule.shift_start, rule.shift_end), usage.scheduled, usage.out, usage.available, `PTO ${usage.pto}/${rule.max_pto_out} · VTO ${usage.vto}/${rule.max_vto_out} · Sick ${usage.sick}/${rule.max_sick_out} · Min ${rule.min_staff_required}`, <Badge danger={exceeds}>{exceeds ? "Risk" : "Within Rule"}</Badge>, <button onClick={() => deleteRule(rule.id)}>Delete</button>];
+                    return [rule.lob, rule.department, formatTimeRange(rule.shift_start, rule.shift_end), `${formatDateOnly(rule.start_date || today)}${rule.end_date ? ` to ${formatDateOnly(rule.end_date)}` : " onward"}`, rule.recurrence || "Daily", usage.scheduled, usage.out, usage.available, `PTO ${usage.pto}/${rule.max_pto_out} · VTO ${usage.vto}/${rule.max_vto_out} · Sick ${usage.sick}/${rule.max_sick_out} · Min ${rule.min_staff_required}`, <Badge danger={exceeds}>{exceeds ? "Risk" : "Within Rule"}</Badge>, <button onClick={() => deleteRule(rule.id)}>Delete</button>];
                   })}
                 />
               </Card>
@@ -3100,6 +3960,21 @@ function ProcessingOverlay({ status = "processing", title, message }) {
   );
 }
 
+function ManagerOverrideModal({ title, message, onCancel, onConfirm }) {
+  return (
+    <div className="modalBackdrop">
+      <section className="overrideCard">
+        <h2>{title}</h2>
+        <p>{message}</p>
+        <div className="overrideActions">
+          <button type="button" onClick={onCancel}>Cancel</button>
+          <button type="button" className="primary" onClick={onConfirm}>Approve override</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function Field({ label, children }) { return <label className="field"><span>{label}</span>{children}</label>; }
 function Info({ label, value }) { return <div className="info"><span>{label}</span><strong>{value}</strong></div>; }
 function DescribedField({ title, description, children }) { return <div className="describedField"><div><strong>{title}</strong><p>{description}</p></div>{children}</div>; }
@@ -3203,6 +4078,7 @@ button:hover, .btn:hover { transform: translateY(-1px); box-shadow: 0 10px 22px 
 }
 
 .btn input { display: none; }
+.syncNotice { margin-top: 18px; background: #ecfdf5; border: 1px solid #bbf7d0; color: #065f46; border-radius: 16px; padding: 12px 14px; font-size: 13px; line-height: 1.45; font-weight: 700; }
 .filterPanel { margin-top: 18px; background: white; border: 1px solid var(--border); border-radius: 22px; padding: 16px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; max-width: 100%; overflow: hidden; }
 .field { display: grid; gap: 6px; }
 .field span { color: var(--muted); font-size: 12px; font-weight: 800; }
@@ -3291,6 +4167,12 @@ td input, td select { min-width: 110px; }
 .roleAccessNote { color: var(--muted); font-size: 12px; line-height: 1.4; }
 select:disabled { opacity: .55; cursor: not-allowed; background: #f1f5f9; }
 
+.checkboxGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.checkboxGrid label { display: flex; align-items: center; gap: 8px; font-weight: 800; color: var(--dark); background: #f8fcfa; border: 1px solid var(--border); border-radius: 12px; padding: 9px 10px; }
+.checkboxGrid input { width: auto; min-height: auto; }
+.emailAutomationSummary { margin: 0 0 12px; background: #f5fbf8; border: 1px solid var(--border); border-radius: 14px; padding: 12px; color: var(--muted); line-height: 1.45; }
+.emailAutomationSummary strong { color: var(--dark); }
+
 .inlineForm { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
 .chipList { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 .chip { display: inline-flex; align-items: center; gap: 8px; background: #ecfdf5; color: #047857; border-radius: 999px; padding: 7px 10px; font-size: 12px; font-weight: 800; }
@@ -3353,6 +4235,7 @@ select:disabled { opacity: .55; cursor: not-allowed; background: #f1f5f9; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .tabMetrics { margin-top: 18px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.compactMetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .trafficGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; }
 .trafficCard { position: relative; border: 1px solid var(--border); border-radius: 16px; padding: 14px; background: #f8fafc; display: grid; gap: 4px; }
 .trafficCard strong { padding-left: 22px; }
@@ -3377,134 +4260,14 @@ button:disabled:hover { transform: none; box-shadow: none; }
 @media (max-width: 640px) { .demoAccounts > div { grid-template-columns: 1fr; } main, .sidebar { padding: 14px; } .filterPanel, .metrics, .profileGrid, .requestPreview, .reportMiniGrid, .inlineForm, .describedField, .activityItem { grid-template-columns: 1fr; } .currentStatus, .agentActions, .balanceGrid { grid-template-columns: 1fr; } .sidebar nav { grid-template-columns: 1fr; } .employeeFooter { flex-direction: column; align-items: flex-start; } .search { min-width: 0; width: 100%; } .card header { flex-direction: column; align-items: stretch; } }
 
 
-/* Dashboard traffic light optimization */
-.dashboardLayout {
-  margin-top: 18px;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 18px;
-}
-
-.dashboardLayout > .card:first-child {
-  min-height: 420px;
-}
-
-.dashboardLayout > .card:first-child .trafficGrid {
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 16px;
-}
-
-.dashboardLayout > .card:first-child .trafficCard {
-  min-height: 128px;
-  padding: 18px;
-  border-radius: 20px;
-  font-size: 15px;
-}
-
-.dashboardLayout > .card:first-child .trafficCard strong {
-  font-size: 17px;
-}
-
-.dashboardLayout > .card:first-child .trafficCard b {
-  font-size: 14px;
-}
-
-.dashboardLayout > .card:first-child .trafficDot {
-  width: 14px;
-  height: 14px;
-  top: 20px;
-  left: 16px;
-}
-
-.compactRoleProfiles {
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-}
-
-@media (min-width: 1280px) {
-  .dashboardLayout {
-    grid-template-columns: 1fr;
-  }
-}
-
-
-
-/* Employee tab full-width visibility fix */
-.employeesPage {
-  margin-top: 18px;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 18px;
-  max-width: 100%;
-}
-
-.employeesPage .card {
-  width: 100%;
-  max-width: 100%;
-}
-
-.employeesPage .table {
-  max-height: none;
-  overflow: auto;
-}
-
-.employeesPage table {
-  min-width: 1600px;
-}
-
-.employeesPage th,
-.employeesPage td {
-  white-space: nowrap;
-  vertical-align: top;
-}
-
-.employeesPage .roleProfileGrid {
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-}
-
-.employeesPage .formGrid {
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-}
-
-.employeesPage .wide {
-  grid-column: 1 / -1;
-}
-
-@media (max-width: 1120px) {
-  .employeesPage table {
-    min-width: 1400px;
-  }
-}
-
-
-
-/* Complete employee add/edit schedule form */
-.employeeFormSections {
-  display: grid;
-  gap: 18px;
-}
-
-.employeeFormSections section {
-  border: 1px solid #e6f0eb;
-  border-radius: 18px;
-  padding: 16px;
-  background: #fbfefc;
-}
-
-.employeeFormSections h3 {
-  margin: 0 0 12px;
-  font-size: 16px;
-}
-
-.employeeFormSections .formGrid {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-}
-
-.employeeFormSections .field {
-  min-width: 0;
-}
-
-.employeeFormSections .wide {
-  grid-column: 1 / -1;
-}
-
+.monthlyAttendanceBox { margin-top: 14px; padding: 14px; border: 1px solid #dceee7; border-radius: 16px; background: #f8fffc; }
+.miniRequestList { display: grid; gap: 6px; margin-top: 10px; color: #546b61; font-size: 12px; }
+.lobTrafficSplit { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; align-items: start; }
+.dashboardFloorSection { display: grid; gap: 18px; }
+.largeFloorView { grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); }
+.lobTrafficHeader { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+.trafficGrid.production { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); max-height: 620px; overflow: auto; padding-right: 6px; }
+.lobTrafficColumn { border: 1px solid #dceee7; border-radius: 18px; padding: 14px; background: #fbfffd; min-height: 360px; }
+.lobTrafficColumn h3 { margin: 0 0 12px; color: #064a36; }
+.trafficGrid.compact { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 `;
