@@ -2466,7 +2466,12 @@ User can now log into the Agent Portal.`
     if (
       ["Shift Started", "Status Changed"].includes(action) &&
       ["Off-Day Unscheduled", "Early Unscheduled"].includes(autoClass.category) &&
-      !hasApprovedScheduleOverride(requests, selectedEmployee.id)
+      !requests.some((request) =>
+  String(request.employee_id) === String(selectedEmployee.id) &&
+  request.type === "Schedule Override" &&
+  request.status === "Approved" &&
+  String(request.requested_at || request.date || request.created_at || "").slice(0, 10) === today
+)
     ) {
       const reason =
         autoClass.category === "Off-Day Unscheduled"
