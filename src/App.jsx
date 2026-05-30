@@ -2504,12 +2504,23 @@ User can now log into the Agent Portal.`
       return null;
     }
 
-    const resolvedStatus =
-      action === "Shift Ended" && shouldSplitAutoOvertime(selectedEmployee, time)
-        ? "Overtime"
-        : action === "Shift Started" || action === "Status Changed"
-          ? autoClass.category === "Working" ? status : autoClass.category
-          : status;
+    const hasApprovedScheduleOverride = requests.some((request) =>
+  String(request.employee_id) === String(selectedEmployee.id) &&
+  request.type === "Schedule Override" &&
+  request.status === "Approved" &&
+  String(request.requested_at || request.date || "").slice(0, 10) === today
+);
+
+const resolvedStatus =
+  action === "Shift Ended" && shouldSplitAutoOvertime(selectedEmployee, time)
+    ? "Overtime"
+    : hasApprovedScheduleOverride
+    ? status
+    : action === "Shift Started" || action === "Status Changed"
+    ? autoClass.category === "Working"
+      ? status
+      : autoClass.category
+    : status;
 
     const approvalStatus =
       resolvedStatus === "Off-Day Unscheduled" || resolvedStatus === "Early Unscheduled"
