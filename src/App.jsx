@@ -3996,6 +3996,112 @@ function FormGrid({ children }) { return <div className="formGrid">{children}</d
 function Badge({ children, muted, danger }) { return <span className={`badge ${muted ? "muted" : ""} ${danger ? "danger" : ""}`}>{children}</span>; }
 function Progress({ label, value, percent }) { return <div className="progress"><div><span>{label}</span><strong>{value}</strong></div><i><b style={{ width: `${Math.max(4, percent)}%` }} /></i></div>; }
 function Approval({ title, detail, approve, deny }) { return <div className="approval"><section><strong>{title}</strong><span>{detail}</span></section><div><button className="approve" onClick={approve}><CheckCircle size={18} /></button><button className="deny" onClick={deny}><XCircle size={18} /></button></div></div>; }
+function getAgentLiveStatus(agent, statusLogs = [], approvals = []) {
+  const today = new Date().toISOString().slice(0, 10);
+
+  const agentLogs = statusLogs
+    .filter(
+      (log) =>
+        String(log.employee_id || log.employeeId) ===
+          String(agent.employee_id || agent.id) &&
+        String(log.date || "").slice(0, 10) === today
+    )
+    .sort((a, b) => {
+      const aTime = new Date(
+        `${a.date || today} ${a.time || "00:00"}`
+      ).getTime();
+
+      const bTime = new Date(
+        `${b.date || today} ${b.time || "00:00"}`
+      ).getTime();
+
+      return bTime - aTime;
+    });
+
+  const approvedOverride = approvals.some(
+    (approval) =>
+      String(approval.employee_id || approval.employeeId) ===
+        String(agent.employee_id || agent.id) &&
+      approval.status === "Approved" &&
+      approval.type === "Schedule Override" &&
+      String(approval.date || "").slice(0, 10) === today
+  );
+
+  const latestStatus =
+    agentLogs.find(
+      (log) =>
+        log.status &&
+        ![
+          "OFF-DAY UNSCHEDULED",
+          "OFF DAY",
+          "UNSCHEDULED",
+        ].includes(String(log.status).toUpperCase())
+    ) || agentLogs[0];
+
+  if (!latestStatus && !approvedOverride) {
+    return {
+      label: "OFF DAY",
+      type: "gray",
+    };
+  }
+
+  if (
+    latestStatus &&
+    [
+      "BREAK",
+      "LUNCH",
+      "MEETING",
+      "BATHROOM",
+      "TRAINING",
+    ].includes(String(latestStatus.status).toUpperCase())
+  ) {
+    return {
+      label: latestStatus.status,
+      type: "yellow",
+    };
+  }
+
+  if (
+    latestStatus &&
+    [
+      "WORKING",
+      "AVAILABLE",
+      "CALL",
+      "PRODUCTION",
+    ].includes(String(latestStatus.status).toUpperCase())
+  ) {
+    return {
+      label: latestStatus.status,
+      type: "green",
+    };
+  }
+
+  if (
+    latestStatus &&
+    [
+      "OFF-DAY UNSCHEDULED",
+      "UNSCHEDULED",
+    ].includes(String(latestStatus.status).toUpperCase()) &&
+    !approvedOverride
+  ) {
+    return {
+      label: "OFF-DAY UNSCHEDULED",
+      type: "red",
+    };
+  }
+
+  if (approvedOverride) {
+    return {
+      label: latestStatus?.status || "WORKING",
+      type: "green",
+    };
+  }
+
+  return {
+    label: latestStatus?.status || "OFF DAY",
+    type: "gray",
+  };
+}
 function ActivityList({ activities }) {
   if (!activities.length) return <p className="muted">No activity logged yet today.</p>;
   return (
