@@ -3503,12 +3503,12 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
                         {lobEmployees.map((employee) => {
                           const live = employeeLiveStatus(employee, timeEntries, activityLog);
                           return (
-                            <div className={`trafficCard ${live.color}`} key={employee.id}>
+                            <div className={`trafficCard ${live.type}`} key={employee.id}>
                               <span className="trafficDot" />
                               <strong>{employee.full_name}</strong>
                               <small>{employee.department} · {employee.sub_department || "N/A"}</small>
-                              <b>{live.status}</b>
-                              <em>{live.note}</em>
+                              <b>{live.label}</b>
+                              <em>{live.detail}</em>
                             </div>
                           );
                         })}
