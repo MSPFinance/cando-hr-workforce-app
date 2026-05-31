@@ -3517,7 +3517,7 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
                       </div>
                       <div className="trafficGrid production">
                         {lobEmployees.map((employee) => {
-                          const live = employeeLiveStatus(employee, timeEntries, activityLog);
+                          const live = getAgentLiveStatus(employee, activityLog, requests);
                           return (
                             <div className={`trafficCard ${live.type}`} key={employee.id}>
                               <span className="trafficDot" />
