@@ -3935,27 +3935,7 @@ function LoginScreen({ logo, email, password, setEmail, setPassword, onLogin, er
             and Executive users can access admin areas based on their profile.
           </span>
         </div>
-        <div className="demoAccounts">
-          <strong>Demo accounts for testing</strong>
-          <span className="demoHint">Use password <b>Cando123!</b> for all demo users.</span>
-          <div>
-            {demoAccounts.map((account) => (
-              <button
-                key={account.email}
-                type="button"
-                onClick={() => {
-                  setEmail(account.email);
-                  setPassword(account.password);
-                }}
-              >
-                <b>{account.label}</b>
-                <small>{account.email}</small>
-                <em>{account.access}</em>
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="syncBox loginSync">
+         <div className="syncBox loginSync">
           <Database size={16} />
           <span>{databaseStatus}</span>
         </div>
