@@ -22,7 +22,7 @@ const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
 const today = new Date().toISOString().slice(0, 10);
-const DAILY_TIMER_STOP_TIME = "12:59";
+const DAILY_TIMER_STOP_TIME = "23:59";
 const LOGO = "/cando-logo.png";
 
 // DEMO MODE CONFIGURATION
