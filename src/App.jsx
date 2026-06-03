@@ -1437,6 +1437,136 @@ async function googleDeleteRow(tab, idColumn, idValue) {
   }
 }
 
+
+async function supabaseInsert(table, payload, context = "Supabase insert") {
+  if (!supabase) {
+    console.warn(`${context}: Supabase client is not configured. Check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.`);
+    return null;
+  }
+
+  const rows = Array.isArray(payload) ? payload : [payload];
+  const { data, error } = await supabase.from(table).insert(rows).select();
+
+  if (error) {
+    console.error(`${context} failed on ${table}:`, error);
+    return null;
+  }
+
+  console.log(`${context} saved to ${table}:`, data);
+  return data;
+}
+
+function toSupabaseTimestamp(dateValue, timeValue) {
+  const cleanDate = formatDateOnly(dateValue || today) || today;
+  const cleanTime = formatMilitaryTime(timeValue || "00:00") || "00:00";
+  return `${cleanDate}T${cleanTime}:00`;
+}
+
+function mapTimeEntryToSupabaseLog(entry, employee = {}) {
+  return {
+    app_log_id: String(entry.id || ""),
+    employee_id: String(entry.employee_id || employee.id || ""),
+    employee_email: employee.email || entry.employee_email || "",
+    employee_name: entry.employee_name || employee.full_name || "",
+    status: entry.category || entry.status || "Working",
+    clock_in: toSupabaseTimestamp(entry.date, entry.clock_in || entry.category_start),
+    clock_out: entry.clock_out || entry.category_end ? toSupabaseTimestamp(entry.date, entry.clock_out || entry.category_end) : null,
+    break_start: entry.category === "Break" ? toSupabaseTimestamp(entry.date, entry.category_start) : null,
+    break_end: entry.category === "Break" ? toSupabaseTimestamp(entry.date, entry.category_end) : null,
+    category_start: entry.category_start ? toSupabaseTimestamp(entry.date, entry.category_start) : null,
+    category_end: entry.category_end ? toSupabaseTimestamp(entry.date, entry.category_end) : null,
+    duration_minutes: minutesBetween(entry.category_start, entry.category_end),
+    approval_status: entry.approved || "Pending",
+    payable_status: entry.payable_status || "",
+    notes: entry.notes || "",
+    lob: entry.lob || employee.lob || "",
+    department: entry.department || employee.department || "",
+    sub_department: entry.sub_department || employee.sub_department || "",
+  };
+}
+
+function mapRequestToSupabaseRequest(item, employee = {}) {
+  return {
+    app_request_id: String(item.id || ""),
+    employee_id: String(item.employee_id || employee.id || ""),
+    employee_email: employee.email || item.employee_email || "",
+    employee_name: item.employee_name || employee.full_name || "",
+    request_type: item.type || item.request_type || "PTO",
+    start_date: formatDateOnly(item.start_date || today),
+    end_date: formatDateOnly(item.end_date || item.start_date || today),
+    requested_hours: safeNumber(item.hours ?? item.requested_hours, 0),
+    requested_days: safeNumber(item.requested_days, safeNumber(item.hours ?? item.requested_hours, 0)),
+    reason: item.reason || "",
+    status: item.status || "Pending",
+    manager_notes: item.reason || item.manager_notes || "",
+    approved_at: item.status === "Approved" ? new Date().toISOString() : null,
+    approved_by: item.status === "Approved" ? item.manager || "" : null,
+  };
+}
+
+function mapEmailToSupabaseQueue({ recipient, subject, body, status = "Pending" }) {
+  return {
+    recipient: recipient || "",
+    subject: subject || "HR Workforce Notification",
+    body: body || "",
+    status,
+  };
+}
+
+
+async function updateSupabaseRequestDecision(localRequest, status, approverEmail, notes = "") {
+  if (!supabase || !localRequest) return null;
+
+  const updatePayload = {
+    status,
+    manager_notes: notes || localRequest.reason || "",
+    approved_at: new Date().toISOString(),
+    approved_by: approverEmail || "",
+  };
+
+  const matchByAppId = await supabase
+    .from("requests")
+    .update(updatePayload)
+    .eq("app_request_id", String(localRequest.id || ""))
+    .select();
+
+  if (!matchByAppId.error && matchByAppId.data?.length) {
+    console.log("Supabase request status updated by app_request_id:", matchByAppId.data);
+    return matchByAppId.data;
+  }
+
+  const matchByFields = await supabase
+    .from("requests")
+    .update(updatePayload)
+    .eq("employee_email", String(localRequest.employee_email || localRequest.email || "").toLowerCase() || String(localRequest.employee_email || ""))
+    .eq("request_type", localRequest.type || localRequest.request_type || "PTO")
+    .eq("start_date", formatDateOnly(localRequest.start_date || today))
+    .eq("end_date", formatDateOnly(localRequest.end_date || localRequest.start_date || today))
+    .eq("status", "Pending")
+    .select();
+
+  if (matchByFields.error) {
+    console.error("Supabase request status update failed:", matchByFields.error);
+    return null;
+  }
+
+  console.log("Supabase request status updated by fallback fields:", matchByFields.data);
+  return matchByFields.data;
+}
+
+function mapApprovalToSupabaseApproval({ request, approverEmail, status, notes }) {
+  return {
+    app_request_id: String(request?.id || ""),
+    employee_id: String(request?.employee_id || ""),
+    employee_email: String(request?.employee_email || request?.email || ""),
+    employee_name: request?.employee_name || "",
+    request_type: request?.type || request?.request_type || "Request",
+    approver_email: approverEmail || "",
+    action: status || "Updated",
+    notes: notes || "",
+  };
+}
+
 function mapEmployeeFromSheet(row) {
   return {
     id: row.Employee_ID || cleanId("EMP"),
@@ -1797,6 +1927,10 @@ function HRWorkforceApp() {
   const [loginEmail, setLoginEmail] = useState(DEFAULT_LOGIN_EMAIL);
   const [loginPassword, setLoginPassword] = useState("");
   const [authError, setAuthError] = useState("");
+  const [resetNotice, setResetNotice] = useState("");
+  const [passwordResetUser, setPasswordResetUser] = useState(null);
+  const [newPersonalPassword, setNewPersonalPassword] = useState("");
+  const [confirmPersonalPassword, setConfirmPersonalPassword] = useState("");
   const [toast, setToast] = useState(null);
   const [processingModal, setProcessingModal] = useState(null);
   const [managerOverrideModal, setManagerOverrideModal] = useState(null);
@@ -2627,7 +2761,11 @@ const resolvedStatus =
         entriesToSave.push(baseTimeEntry);
       }
 
-      if (supabase) await supabase.from("time_entries").insert(entriesToSave);
+      await supabaseInsert(
+        "time_logs",
+        entriesToSave.map((entry) => mapTimeEntryToSupabaseLog(entry, selectedEmployee)),
+        "Agent time log"
+      );
       for (const entry of entriesToSave) {
         await googleAddRow("timeLogs", mapTimeToSheet(entry));
       }
@@ -2697,7 +2835,11 @@ const resolvedStatus =
     }));
 
     try {
-      if (supabase) await supabase.from("time_entries").insert(autoEntries);
+      await supabaseInsert(
+        "time_logs",
+        autoEntries.map((entry) => mapTimeEntryToSupabaseLog(entry, employees.find((employee) => employee.id === entry.employee_id))),
+        "Daily auto logout time log"
+      );
       for (const entry of autoEntries) {
         await googleAddRow("timeLogs", mapTimeToSheet(entry));
       }
@@ -2765,7 +2907,7 @@ const resolvedStatus =
         ...newTime,
         category: manualCategory,
       };
-      if (supabase) await supabase.from("time_entries").insert(item);
+      await supabaseInsert("time_logs", mapTimeEntryToSupabaseLog(item, selectedEmployee), "Manual time log");
       await googleAddRow("timeLogs", mapTimeToSheet(item));
       await queueDailyAttendanceEmail(selectedEmployee, [item]);
       setTimeEntries((current) => [item, ...current]);
@@ -2802,8 +2944,17 @@ const resolvedStatus =
         current_balance: requestPreview.currentBalance,
         projected_balance: requestPreview.projectedBalance,
       };
-      if (supabase) await supabase.from("time_off_requests").insert(item);
+      await supabaseInsert("requests", mapRequestToSupabaseRequest(item, selectedEmployee), "Time-off request");
       await googleAddRow("requests", mapRequestToSheet(item));
+      await supabaseInsert(
+        "email_queue",
+        mapEmailToSupabaseQueue({
+          recipient: selectedEmployee.manager || selectedEmployee.supervisor || "Manager",
+          subject: `Pending ${item.type} request approval`,
+          body: `${selectedEmployee.full_name} submitted a ${item.type} request from ${formatDateOnly(item.start_date)} to ${formatDateOnly(item.end_date)}. Reason: ${item.reason || "N/A"}`,
+        }),
+        "Request approval email queue"
+      );
       await googleAddRow("emailQueue", { Email_ID: cleanId("EMAIL"), Event_Type: "Request Pending Approval", To_Email: selectedEmployee.manager || selectedEmployee.supervisor || "", Employee_Email: selectedEmployee.email, Employee_Name: selectedEmployee.full_name, Request_ID: item.id, Subject: `Pending ${item.type} request approval`, Status: "Pending Send", Created_At: new Date() });
       setRequests((current) => [item, ...current]);
     });
@@ -2885,7 +3036,7 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
           updatedEmployee = updatedEmployees.find((e) => e.id === latestRequest.employee_id);
 
           if (supabase && updatedEmployee) {
-            await supabase.from("employees").update({ [field]: updatedEmployee[field] }).eq("id", latestRequest.employee_id);
+            await supabase.from("employees").update({ [field]: updatedEmployee[field] }).eq("email", updatedEmployee.email);
           }
 
           if (updatedEmployee) {
@@ -2946,9 +3097,35 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
             : latestRequest.projected_balance,
       };
 
-      if (supabase) await supabase.from("time_off_requests").update({ status }).eq("id", id);
+      await updateSupabaseRequestDecision(
+        { ...latestRequest, employee_email: updatedEmployee?.email || latestRequest.employee_email || "" },
+        status,
+        currentUser.email,
+        `Manager decision recorded for ${latestRequest.type}`
+      );
+
+      await supabaseInsert(
+        "approvals",
+        mapApprovalToSupabaseApproval({
+          request: { ...latestRequest, employee_email: updatedEmployee?.email || latestRequest.employee_email || "" },
+          approverEmail: currentUser.email,
+          status,
+          notes: `${latestRequest.type} request ${status} for ${latestRequest.employee_name}. App request ID: ${latestRequest.id}`,
+        }),
+        "Approval decision"
+      );
 
       await googleUpdateRow("requests", "Request_ID", id, mapRequestToSheet(updatedRequest));
+      await supabaseInsert(
+        "email_queue",
+        mapEmailToSupabaseQueue({
+          recipient: updatedEmployee?.email || "",
+          subject: `${latestRequest.type} request ${status}`,
+          body: `Your ${latestRequest.type} request from ${formatDateOnly(latestRequest.start_date)} to ${formatDateOnly(latestRequest.end_date)} was ${status}.`,
+        }),
+        "Request decision email queue"
+      );
+
       await googleAddRow("emailQueue", { Email_ID: cleanId("EMAIL"), Event_Type: `Request ${status}`, To_Email: updatedEmployee?.email || "", Employee_Email: updatedEmployee?.email || "", Employee_Name: latestRequest.employee_name, Request_ID: latestRequest.id, Subject: `${latestRequest.type} request ${status}`, Status: "Pending Send", Created_At: new Date() });
 
       await googleAddRow(
@@ -2999,7 +3176,7 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
         locked: false,
       };
 
-      if (supabase) await supabase.from("time_entries").update({ approved }).eq("id", id);
+      if (supabase) await supabase.from("time_logs").update({ approval_status: approved }).eq("app_log_id", id);
 
       await googleUpdateRow("timeLogs", "Log_ID", id, mapTimeToSheet(updatedTimeEntry));
 
@@ -3074,7 +3251,7 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
       };
 
       if (supabase) {
-        await supabase.from("time_entries").update(correctedEntry).eq("id", id);
+        await supabase.from("time_logs").update(mapTimeEntryToSupabaseLog(correctedEntry, employees.find((e) => e.id === correctedEntry.employee_id) || {})).eq("app_log_id", id);
       }
 
       await googleUpdateRow("timeLogs", "Log_ID", id, mapTimeToSheet(correctedEntry));
@@ -3229,11 +3406,21 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
       return;
     }
 
+    if (employee.requires_password_reset) {
+      setPasswordResetUser(employee);
+      setNewPersonalPassword("");
+      setConfirmPersonalPassword("");
+      setAuthError("");
+      setResetNotice("Temporary password accepted. Please create your personalized password to continue.");
+      return;
+    }
+
     localStorage.setItem("candoHrUserEmail", employee.email);
     setSessionUserEmail(employee.email);
     setSelectedEmployeeId(employee.id);
     setAdminMode(false);
     setAuthError("");
+    setResetNotice("");
   }
 
   function logout() {
@@ -3242,6 +3429,164 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
     setLoginPassword("");
     setAdminMode(false);
     setTab("agent");
+  }
+
+  function generateTemporaryPassword() {
+    return `Temp${Math.random().toString(36).slice(2, 8)}!${Math.floor(10 + Math.random() * 89)}`;
+  }
+
+  async function handleForgotPassword() {
+    const targetEmail = normalizeEmail(loginEmail);
+    const employee = employees.find((e) => normalizeEmail(e.email) === targetEmail);
+
+    setAuthError("");
+    setResetNotice("");
+
+    if (!targetEmail) {
+      setAuthError("Please enter your email first, then select Forgot password.");
+      return;
+    }
+
+    if (!employee) {
+      setAuthError("No active employee profile was found for this email. Please contact HR or your manager.");
+      return;
+    }
+
+    const temporaryPassword = generateTemporaryPassword();
+    const updatedEmployee = {
+      ...employee,
+      temp_password: temporaryPassword,
+      requires_password_reset: true,
+      password_reset_status: "Temporary Password Issued",
+      password_reset_requested_at: new Date().toISOString(),
+    };
+
+    setEmployees((current) =>
+      current.map((item) => (item.id === employee.id ? updatedEmployee : item))
+    );
+
+    try {
+      if (supabase) {
+        const { error: employeeUpdateError } = await supabase.from("employees").update({
+          temp_password: temporaryPassword,
+          force_password_change: true,
+        }).eq("email", employee.email);
+
+        if (employeeUpdateError) {
+          console.warn("Supabase employee temp password update warning:", employeeUpdateError.message || employeeUpdateError);
+        }
+      }
+
+      await supabaseInsert(
+        "password_reset_requests",
+        {
+          employee_email: employee.email,
+          temporary_password: temporaryPassword,
+          status: "Pending",
+        },
+        "Forgot password request"
+      );
+
+      await supabaseInsert(
+        "email_queue",
+        [
+          mapEmailToSupabaseQueue({
+            recipient: employee.email,
+            subject: "Temporary password for CandoContact HR Workforce Portal",
+            body: `Hello ${employee.full_name || "Employee"}, your temporary password is: ${temporaryPassword}. After login, the app will ask you to create a personalized password.`,
+          }),
+          mapEmailToSupabaseQueue({
+            recipient: employee.manager || employee.supervisor || attendanceEmailSettings.hrWfmEmails || "HR/Admin",
+            subject: "Password reset follow-up required",
+            body: `${employee.full_name} (${employee.email}) requested a password reset. Temporary password generated: ${temporaryPassword}. Please confirm the user completes the personalized password reset after login.`,
+          }),
+        ],
+        "Forgot password email queue"
+      );
+
+      await googleUpdateRow("employees", "Employee_ID", employee.id, mapEmployeeToSheet(updatedEmployee));
+
+      await googleAddRow("emailQueue", {
+        Email_ID: cleanId("EMAIL"),
+        Event_Type: "Forgot Password Temporary Password",
+        To_Email: employee.email,
+        Employee_Email: employee.email,
+        Employee_Name: employee.full_name,
+        Request_ID: cleanId("PWD"),
+        Subject: "Temporary password for CandoContact HR Workforce Portal",
+        Status: "Pending Send",
+        Created_At: new Date(),
+        Notes: `Temporary Password: ${temporaryPassword} | User must create a personalized password after login.`,
+      });
+
+      await googleAddRow("emailQueue", {
+        Email_ID: cleanId("EMAIL"),
+        Event_Type: "Password Reset Manual Follow Up",
+        To_Email: employee.manager || employee.supervisor || attendanceEmailSettings.hrWfmEmails || "",
+        Employee_Email: employee.email,
+        Employee_Name: employee.full_name,
+        Request_ID: cleanId("PWD"),
+        Subject: "Password reset follow-up required",
+        Status: "Pending Send",
+        Created_At: new Date(),
+        Notes: `${employee.full_name} requested password reset. Temporary password was generated and personalized reset is required at next login.`,
+      });
+    } catch (error) {
+      console.error("Password reset queue failed:", error);
+    }
+
+    setResetNotice("Temporary password request created. The email queue will send the temporary password, and the user will be asked to create a personalized password after login.");
+    showToast("Password reset requested", "Temporary password email was queued and personalized reset will be required at next login.", "success");
+  }
+
+  async function completePasswordReset() {
+    if (!passwordResetUser) return;
+
+    if (!newPersonalPassword || newPersonalPassword.length < 8) {
+      setAuthError("Please create a password with at least 8 characters.");
+      return;
+    }
+
+    if (newPersonalPassword !== confirmPersonalPassword) {
+      setAuthError("The new passwords do not match.");
+      return;
+    }
+
+    const updatedEmployee = {
+      ...passwordResetUser,
+      temp_password: newPersonalPassword,
+      requires_password_reset: false,
+      password_reset_status: "Completed",
+      password_reset_completed_at: new Date().toISOString(),
+    };
+
+    setEmployees((current) =>
+      current.map((item) => (item.id === passwordResetUser.id ? updatedEmployee : item))
+    );
+
+    try {
+      if (supabase) {
+        await supabase.from("employees").update({
+          temp_password: newPersonalPassword,
+          force_password_change: false,
+        }).eq("email", passwordResetUser.email);
+      }
+
+      await googleUpdateRow("employees", "Employee_ID", passwordResetUser.id, mapEmployeeToSheet(updatedEmployee));
+    } catch (error) {
+      console.error("Password reset completion sync failed:", error);
+    }
+
+    localStorage.setItem("candoHrUserEmail", updatedEmployee.email);
+    setSessionUserEmail(updatedEmployee.email);
+    setSelectedEmployeeId(updatedEmployee.id);
+    setPasswordResetUser(null);
+    setNewPersonalPassword("");
+    setConfirmPersonalPassword("");
+    setLoginPassword("");
+    setAuthError("");
+    setResetNotice("");
+    showToast("Password updated", "Your personalized password was saved successfully.", "success");
   }
 
   const headerRequestSummary = requestStatusSummary(filteredRequests);
@@ -3298,7 +3643,15 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
         setEmail={setLoginEmail}
         setPassword={setLoginPassword}
         onLogin={login}
+        onForgotPassword={handleForgotPassword}
         error={authError}
+        resetNotice={resetNotice}
+        passwordResetUser={passwordResetUser}
+        newPersonalPassword={newPersonalPassword}
+        confirmPersonalPassword={confirmPersonalPassword}
+        setNewPersonalPassword={setNewPersonalPassword}
+        setConfirmPersonalPassword={setConfirmPersonalPassword}
+        onCompletePasswordReset={completePasswordReset}
         databaseStatus={databaseStatus}
         demoAccounts={DEMO_ACCOUNTS}
       />
@@ -3346,15 +3699,17 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
             </div>
           )}
           {!isAgentOnly && (
-            <div className="actions">
-              <button onClick={() => { setAdminMode(false); setTab("agent"); }}>Return to Agent View</button>
-              <button onClick={logout}>Logout</button>
-              <label className="btn"><Upload size={16} /> Import CSV<input type="file" accept=".csv" onChange={importEmployees} /></label>
-              <button onClick={exportTimeCsv}><Download size={16} /> Time CSV</button>
-              <button onClick={exportRequestsCsv}><Download size={16} /> Requests CSV</button>
-              <button className="primary" onClick={exportPdf}><Download size={16} /> PDF</button>
-              <button onClick={() => syncWorkforcePlanningSheet({ automatic: false })}><Database size={16} /> Run Workforce Sync Now</button>
-            <button onClick={createArchiveBackup}><Download size={16} /> Archive Backup</button>
+            <div className="actions topActions">
+              <button type="button" onClick={() => setTab("agent")}>Return to Agent View</button>
+              <button type="button" onClick={exportPdf}><Download size={16} /> Download PDF</button>
+              <button type="button" onClick={exportTimeCsv}><Download size={16} /> Time CSV</button>
+              <button type="button" onClick={exportRequestsCsv}><Download size={16} /> Requests CSV</button>
+              <label className="btn">
+                <Upload size={16} /> Import Employees
+                <input type="file" accept=".csv" onChange={importEmployees} />
+              </label>
+              <button type="button" onClick={createArchiveBackup}>Create Backup</button>
+              <button type="button" onClick={logout}>Logout</button>
             </div>
           )}
         </header>
@@ -3369,7 +3724,15 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
 
         {!isAgentOnly && (
           <section className="filterPanel">
-            <Field label="LOB"><select value={filters.lob} onChange={(e) => setFilters({ ...filters, lob: e.target.value })}>{lobOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
+            <Field label="LOB">
+  <select value={filters.lob} onChange={(e) => setFilters({ ...filters, lob: e.target.value })}>
+    {lobOptions.map((x) => (
+      <option key={x} value={x}>
+        {x}
+      </option>
+    ))}
+  </select>
+</Field>
             <Field label="Department"><select value={filters.department} onChange={(e) => setFilters({ ...filters, department: e.target.value })}>{departmentOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Sub-Department"><select value={filters.subDepartment} onChange={(e) => setFilters({ ...filters, subDepartment: e.target.value })}>{subDepartmentOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Employee"><select value={filters.employee} onChange={(e) => setFilters({ ...filters, employee: e.target.value })}>{employeeOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
@@ -3505,72 +3868,88 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
         {!isAgentOnly && tab === "dashboard" && (
           <section className="dashboardFloorSection">
             <Card title="Live floor traffic light view by LOB">
-              <p className="helperText">Production-ready live floor view grouped by Line of Business. This larger dashboard layout is designed to hold many more agent cards once the app is moved into production.</p>
+              <p className="helperText">
+                Production-ready live floor view grouped by Line of Business.
+              </p>
+
               <div className="lobTrafficSplit largeFloorView">
-                {lobOptions.filter((lob) => lob !== "All").map((lob) => {
-                  const lobEmployees = visibleEmployees.filter((employee) => employee.employment_status === "Active" && employee.lob === lob);
-                  return (
-                    <section className="lobTrafficColumn" key={lob}>
-                      <div className="lobTrafficHeader">
-                        <h3>{lob}</h3>
-                        <Badge>{lobEmployees.length} active</Badge>
-                      </div>
-                      <div className="trafficGrid production">
-                        {lobEmployees.map((employee) => {
-                          const live = getAgentLiveStatus(employee, activityLog, requests);
-                          return (
-                            <div className={`trafficCard ${live.type}`} key={employee.id}>
+                {lobOptions
+                  .filter((lob) => {
+                    if (lob === "All") return false;
+                    if (filters.lob && filters.lob !== "All") {
+                      return lob === filters.lob;
+                    }
+                    return ["GoDay", "Lending Creative"].includes(lob);
+                  })
+                  .map((lob) => {
+                    const lobEmployees = visibleEmployees.filter(
+                      (employee) =>
+                        employee.employment_status === "Active" &&
+                        employee.lob === lob
+                    );
+
+                    const liveLobEmployees = lobEmployees
+                      .map((employee) => ({
+                        employee,
+                        live: getAgentLiveStatus(employee, activityLog, requests),
+                      }))
+                      .filter(({ live }) => live.type !== "gray" && String(live.label || "").toUpperCase() !== "OFF DAY");
+
+                    return (
+                      <section className="lobTrafficColumn" key={lob}>
+                        <div className="lobTrafficHeader">
+                          <h3>{lob}</h3>
+                          <Badge>{liveLobEmployees.length} on floor / {lobEmployees.length} active</Badge>
+                        </div>
+
+                        <div className="trafficGrid production compactFloor">
+                          {liveLobEmployees.map(({ employee, live }) => (
+                            <div
+                              className={`trafficCard ${live.type || "gray"}`}
+                              key={employee.id}
+                            >
                               <span className="trafficDot" />
                               <strong>{employee.full_name}</strong>
-                              <small>{employee.department} · {employee.sub_department || "N/A"}</small>
-                              <b>{live.label}</b>
-                              <em>{live.detail}</em>
+                              <small>
+                                {employee.department} ·{" "}
+                                {employee.sub_department || "N/A"}
+                              </small>
+                              <b>{live.label || "Working"}</b>
+                              <em>{live.detail || ""}</em>
                             </div>
-                          );
-                        })}
-                        {!lobEmployees.length && <p className="muted">No active agents assigned to this LOB.</p>}
-                      </div>
-                    </section>
-                  );
-                })}
+                          ))}
+
+                          {!liveLobEmployees.length && (
+                            <p className="muted">
+                              No agents currently on floor for this LOB. Off-day agents are hidden from this view.
+                            </p>
+                          )}
+                        </div>
+                      </section>
+                    );
+                  })}
               </div>
             </Card>
 
-            <Card title="Break / Lunch / Bathroom usage by team">{teamStats.length ? teamStats.map((item) => <Progress key={item.label} label={item.label} value={formatHours(item.minutes)} percent={stats.total ? (item.minutes / stats.total) * 100 : 0} />) : <p className="muted">No break-related data for this filter.</p>}</Card>
+            <Card title="Break / Lunch / Bathroom usage by team">
+              {teamStats.length ? (
+                teamStats.map((item) => (
+                  <Progress
+                    key={item.label}
+                    label={item.label}
+                    value={formatHours(item.minutes)}
+                    percent={stats.total ? (item.minutes / stats.total) * 100 : 0}
+                  />
+                ))
+              ) : (
+                <p className="muted">No break-related data for this filter.</p>
+              )}
+            </Card>
           </section>
         )}
 
         {!isAgentOnly && tab === "employees" && (
-          <section className="grid split">
-            <Card title="Employee master database" action={<SearchBox value={search} onChange={setSearch} />}>
-              <Table
-                headers={["Employee", "LOB", "Department", "Sub-Department", "Role", "Access Level", "Country", "Shift", "Off Days", "Status"]}
-                rows={filteredEmployees.map((e) => [
-                  <button className="textBtn" onClick={() => setSelectedEmployeeId(e.id)}>
-                    {e.full_name}
-                    <small>{e.email}</small>
-                  </button>,
-                  e.lob,
-                  e.department,
-                  e.sub_department || "N/A",
-                  e.role,
-                  <select
-                    value={e.access_level || "Employee"}
-                    disabled={!["Manager", "HR", "Admin"].includes(currentUser?.access_level || currentUser?.role || "")}
-                    onChange={(event) => updateEmployeeRole(e.id, event.target.value)}
-                  >
-                    {ROLE_PROFILE_OPTIONS.map((roleOption) => (
-                      <option key={roleOption} value={roleOption}>{roleOption}</option>
-                    ))}
-                  </select>,
-                  e.country,
-                  formatTimeRange(e.shift_start, e.shift_end),
-                  formatOffDays(e.off_days),
-                  <Badge>{e.employment_status}</Badge>,
-                ])}
-              />
-            </Card>
-
+          <section className="grid two">
             <Card title="Role-based access profiles">
               <p className="helperText">Reference guide for what each employee access profile can do. This has been moved from Dashboard to Employees so role management stays in one place.</p>
               <div className="roleProfileGrid">
@@ -3869,7 +4248,6 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
 
         
       </main>
-
       {processingModal && <ProcessingOverlay status={processingModal.status} title={processingModal.title} message={processingModal.message} />}
       {managerOverrideModal && (
         <ManagerOverrideModal
@@ -3893,7 +4271,7 @@ export default function App() {
   );
 }
 
-function LoginScreen({ logo, email, password, setEmail, setPassword, onLogin, error, databaseStatus, demoAccounts = [] }) {
+function LoginScreen({ logo, email, password, setEmail, setPassword, onLogin, onForgotPassword, error, resetNotice, passwordResetUser, newPersonalPassword, confirmPersonalPassword, setNewPersonalPassword, setConfirmPersonalPassword, onCompletePasswordReset, databaseStatus, demoAccounts = [] }) {
   return (
     <div className="loginPage">
       <style>{styles}</style>
@@ -3910,24 +4288,58 @@ function LoginScreen({ logo, email, password, setEmail, setPassword, onLogin, er
           Access your HR portal, time tracking, PTO/VTO/OT requests, approvals,
           payroll review, and reporting according to your assigned role.
         </p>
-        <div className="loginForm">
-          <label>
-            Email
-            <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@goday.ca" />
-          </label>
-          <label>
-            Password
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Enter password"
-              onKeyDown={(e) => e.key === "Enter" && onLogin()}
-            />
-          </label>
-          {error && <div className="loginError">{error}</div>}
-          <button className="primary wide" onClick={onLogin}>Login</button>
-        </div>
+        {!passwordResetUser ? (
+          <div className="loginForm">
+            <label>
+              Email
+              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@goday.ca" />
+            </label>
+            <label>
+              Password
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Enter password"
+                onKeyDown={(e) => e.key === "Enter" && onLogin()}
+              />
+            </label>
+            {error && <div className="loginError">{error}</div>}
+            {resetNotice && <div className="loginSuccess">{resetNotice}</div>}
+            <button className="primary wide" onClick={onLogin}>Login</button>
+            <button type="button" className="linkButton wide" onClick={onForgotPassword}>
+              Forgot password? Generate temporary password email
+            </button>
+          </div>
+        ) : (
+          <div className="loginForm">
+            <div className="loginSuccess">
+              Temporary password accepted for {passwordResetUser.full_name}. Please create your personalized password.
+            </div>
+            <label>
+              New personalized password
+              <input
+                type="password"
+                value={newPersonalPassword}
+                onChange={(e) => setNewPersonalPassword(e.target.value)}
+                placeholder="Create new password"
+              />
+            </label>
+            <label>
+              Confirm personalized password
+              <input
+                type="password"
+                value={confirmPersonalPassword}
+                onChange={(e) => setConfirmPersonalPassword(e.target.value)}
+                placeholder="Confirm new password"
+                onKeyDown={(e) => e.key === "Enter" && onCompletePasswordReset()}
+              />
+            </label>
+            {error && <div className="loginError">{error}</div>}
+            <button className="primary wide" onClick={onCompletePasswordReset}>Save Password and Continue</button>
+          </div>
+        )}
+
         <div className="loginNote">
           <strong>Access is role-based.</strong>
           <span>
@@ -4141,6 +4553,9 @@ html, body, #root { min-height: 100%; }\nbody { margin: 0; background: #f7faf8; 
 .loginForm { display: grid; gap: 12px; }
 .loginForm label { display: grid; gap: 6px; color: var(--muted); font-size: 13px; font-weight: 800; }
 .loginError { background: #fef2f2; color: #b91c1c; border: 1px solid #fecaca; border-radius: 14px; padding: 10px 12px; font-size: 13px; }
+.loginSuccess { background: #ecfdf5; color: #065f46; border: 1px solid #bbf7d0; border-radius: 14px; padding: 10px 12px; font-size: 13px; }
+.linkButton { background: transparent; color: var(--green); border: 0; box-shadow: none; text-decoration: underline; padding: 8px 6px; }
+.linkButton:hover { box-shadow: none; transform: none; }
 .loginNote { margin-top: 16px; background: #f5fbf8; border: 1px solid var(--border); border-radius: 16px; padding: 14px; display: grid; gap: 5px; color: var(--muted); line-height: 1.45; }
 .loginNote strong { color: var(--dark); }
 .demoAccounts { margin-top: 16px; background: #ffffff; border: 1px solid var(--border); border-radius: 16px; padding: 14px; display: grid; gap: 8px; }
@@ -4168,6 +4583,8 @@ main { padding: 26px 28px 18px; min-width: 0; width: 100%; overflow-x: hidden; }
 h1 { margin: 0; font-size: clamp(28px, 3vw, 42px); letter-spacing: -1px; }
 .topbar p { margin: 8px 0 0; color: var(--muted); }
 .actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.topActions { align-items: center; max-width: 760px; }
+.topActions button, .topActions .btn { white-space: nowrap; }
 button, .btn { border: 1px solid var(--border); background: white; color: var(--dark); border-radius: 13px; padding: 10px 12px; display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 700; text-decoration: none; }
 button:hover, .btn:hover { transform: translateY(-1px); box-shadow: 0 10px 22px rgba(0,0,0,.08); }
 .primary { background: var(--green); color: white; border-color: var(--green); }
@@ -4376,10 +4793,16 @@ button:disabled:hover { transform: none; box-shadow: none; }
 .miniRequestList { display: grid; gap: 6px; margin-top: 10px; color: #546b61; font-size: 12px; }
 .lobTrafficSplit { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; align-items: start; }
 .dashboardFloorSection { display: grid; gap: 18px; }
-.largeFloorView { grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); }
+.largeFloorView { grid-template-columns: repeat(auto-fit, minmax(430px, 1fr)); gap: 12px; }
 .lobTrafficHeader { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
-.trafficGrid.production { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); max-height: 620px; overflow: auto; padding-right: 6px; }
-.lobTrafficColumn { border: 1px solid #dceee7; border-radius: 18px; padding: 14px; background: #fbfffd; min-height: 360px; }
+.trafficGrid.production { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); max-height: none; overflow: visible; padding-right: 0; }
+.compactFloor { gap: 8px; }
+.compactFloor .trafficCard { min-height: 74px; padding: 9px 10px 8px 12px; border-radius: 13px; gap: 2px; }
+.compactFloor .trafficCard strong { font-size: 12px; line-height: 1.2; padding-left: 16px; }
+.compactFloor .trafficCard small, .compactFloor .trafficCard em { font-size: 10px; line-height: 1.2; }
+.compactFloor .trafficCard b { font-size: 10px; line-height: 1.2; }
+.compactFloor .trafficDot { top: 11px; left: 10px; width: 8px; height: 8px; }
+.lobTrafficColumn { border: 1px solid #dceee7; border-radius: 18px; padding: 12px; background: #fbfffd; min-height: 220px; }
 .lobTrafficColumn h3 { margin: 0 0 12px; color: #064a36; }
 .trafficGrid.compact { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
 `;
