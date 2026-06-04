@@ -715,9 +715,9 @@ function getBalance(employee, type) {
 }
 
 function balanceField(type) {
-  if (type === "PTO") return "pto_balance";
-  if (type === "Sick Leave") return "sick_balance";
-  if (type === "VTO") return "vto_balance";
+  if (type === "PTO") return "pto_balance_days";
+  if (type === "Sick Leave") return "sick_balance_days";
+  if (type === "VTO") return "vto_balance_days";
   return null;
 }
 
@@ -1190,20 +1190,57 @@ function showSickBalanceForCountry(country) {
   return String(country || "").toLowerCase() === "canada";
 }
 
+function requestDaysValue(request) {
+  return safeNumber(request?.requested_days ?? request?.days ?? 0, 0);
+}
+
 function employeeMonthlyAttendance(employee, timeEntries = [], requests = []) {
   const monthKey = today.slice(0, 7);
-  const entries = timeEntries.filter((entry) => entry.employee_id === employee?.id && String(entry.date || "").startsWith(monthKey));
-  const approvedRequests = requests.filter((request) => request.employee_id === employee?.id && request.status === "Approved" && String(request.start_date || "").startsWith(monthKey));
-  const sickApproved = approvedRequests.filter((request) => request.type === "Sick Leave");
-  const ptoApproved = approvedRequests.filter((request) => request.type === "PTO");
-  const vtoApproved = approvedRequests.filter((request) => request.type === "VTO");
+  const employeeKeys = [
+  employee?.employee_id,
+  employee?.email?.toLowerCase(),
+].filter(Boolean);
+
+  const entries = timeEntries.filter((entry) => {
+    const sameEmployee =
+      employeeKeys.includes(entry.employee_id) ||
+      employeeKeys.includes(entry.employee_email?.toLowerCase());
+
+    return sameEmployee && String(entry.date || entry.clock_in || "").startsWith(monthKey);
+  });
+
+  const approvedRequests = requests.filter((request) => {
+    const sameEmployee =
+      employeeKeys.includes(request.employee_id) ||
+      employeeKeys.includes(request.employee_email?.toLowerCase());
+
+    const isApproved = String(request.status || "").toLowerCase() === "approved";
+    const isSameMonth = String(request.start_date || "").startsWith(monthKey);
+
+    return sameEmployee && isApproved && isSameMonth;
+  });
+
+  const sickApproved = approvedRequests.filter((request) =>
+    ["sick leave", "sick"].includes(String(request.type || request.request_type || "").toLowerCase())
+  );
+
+  const ptoApproved = approvedRequests.filter((request) =>
+    ["pto", "vacation", "paid leave"].includes(String(request.type || request.request_type || "").toLowerCase())
+  );
+
+  const vtoApproved = approvedRequests.filter((request) =>
+    ["vto"].includes(String(request.type || request.request_type || "").toLowerCase())
+  );
+
   return {
     monthLabel: new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" }),
-    workingHours: entries.filter((entry) => entry.category === "Working").reduce((sum, entry) => sum + minutesBetween(entry.category_start, entry.category_end), 0) / 60,
-    sickApprovedDays: sickApproved.reduce((sum, request) => sum + safeNumber(request.requested_days || request.hours / 8, 0), 0),
-    ptoApprovedDays: ptoApproved.reduce((sum, request) => sum + safeNumber(request.requested_days || request.hours / 8, 0), 0),
-    vtoApprovedHours: vtoApproved.reduce((sum, request) => sum + safeNumber(request.hours, 0), 0),
-    approvedRequests: approvedRequests.slice(0, 6),
+    workingHours: entries
+      .filter((entry) => String(entry.category || entry.status || "").toLowerCase() === "working")
+      .reduce((sum, entry) => sum + minutesBetween(entry.category_start || entry.clock_in, entry.category_end || entry.clock_out), 0) / 60,
+    sickApprovedDays: sickApproved.reduce((sum, request) => sum + requestDaysValue(request), 0),
+    ptoApprovedDays: safeNumber(employee?.approved_pto_taken_days ?? 0, 0),
+    vtoApprovedDays: vtoApproved.reduce((sum, request) => sum + requestDaysValue(request), 0),
+    approvedRequests: [],
   };
 }
 
@@ -1494,8 +1531,8 @@ function mapRequestToSupabaseRequest(item, employee = {}) {
     request_type: item.type || item.request_type || "PTO",
     start_date: formatDateOnly(item.start_date || today),
     end_date: formatDateOnly(item.end_date || item.start_date || today),
-    requested_hours: safeNumber(item.hours ?? item.requested_hours, 0),
-    requested_days: safeNumber(item.requested_days, safeNumber(item.hours ?? item.requested_hours, 0)),
+    requested_hours: null,
+    requested_days: safeNumber(item.requested_days ?? item.days ?? item.hours ?? item.requested_hours, 0),
     reason: item.reason || "",
     status: item.status || "Pending",
     manager_notes: item.reason || item.manager_notes || "",
@@ -1565,6 +1602,151 @@ function mapApprovalToSupabaseApproval({ request, approverEmail, status, notes }
     action: status || "Updated",
     notes: notes || "",
   };
+}
+
+function firstKnownValue(row, keys, fallback = "") {
+  for (const key of keys) {
+    if (row && row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== "") return row[key];
+  }
+  return fallback;
+}
+
+function keyForEmployeeRecord(row = {}) {
+  return normalizeEmail(row.email || row.employee_email || row.Auth_Email) || String(row.employee_id || row.Employee_ID || row.id || "").trim().toLowerCase() || String(row.full_name || row.Full_Name || row.name || "").trim().toLowerCase();
+}
+
+function buildIndex(rows = []) {
+  const index = new Map();
+  rows.forEach((row) => {
+    const keys = [
+      normalizeEmail(row.email || row.employee_email || row.Auth_Email),
+      String(row.employee_id || row.Employee_ID || row.id || "").trim().toLowerCase(),
+      String(row.full_name || row.Full_Name || row.name || "").trim().toLowerCase(),
+    ].filter(Boolean);
+    keys.forEach((key) => index.set(key, row));
+  });
+  return index;
+}
+
+function mapSupabaseEmployee(row = {}, balance = {}, schedule = {}, base = {}) {
+  const accessLevel = firstKnownValue(row, ["access_level", "role", "profile"], firstKnownValue(base, ["access_level", "role"], "Employee"));
+  const role = accessLevel === "Employee" ? "Agent" : accessLevel;
+  const appEmployeeId = firstKnownValue(base, ["id", "employee_id", "Employee_ID"], firstKnownValue(row, ["employee_id", "Employee_ID"], row.id || cleanId("EMP")));
+  return {
+    id: appEmployeeId,
+    employee_id: appEmployeeId,
+    supabase_employee_id: firstKnownValue(row, ["employee_id", "Employee_ID"], row.id || ""),
+    full_name: firstKnownValue(row, ["full_name", "name", "employee_name", "Full_Name"], "Unnamed Employee"),
+    email: firstKnownValue(row, ["email", "employee_email", "Auth_Email"], ""),
+    country: firstKnownValue(row, ["country", "site", "location"], "Costa Rica"),
+    lob: firstKnownValue(row, ["lob", "LOB"], "GoDay"),
+    department: firstKnownValue(row, ["department", "area"], firstKnownValue(row, ["team"], "Operations")),
+    sub_department: firstKnownValue(row, ["sub_department", "subDepartment", "queue", "team"], ""),
+    role,
+    access_level: accessLevel,
+    supervisor: firstKnownValue(row, ["supervisor", "team_leader", "team_lead", "tl"], ""),
+    manager: firstKnownValue(row, ["manager", "operations_manager"], ""),
+    hire_date: formatDateOnly(firstKnownValue(row, ["hire_date", "start_date", "date_of_hire"], "")),
+    birthday: formatDateOnly(firstKnownValue(row, ["birthday", "birth_date", "date_of_birth"], "")),
+    employment_status: firstKnownValue(row, ["employment_status", "status"], "Active"),
+    termination_date: formatDateOnly(firstKnownValue(row, ["termination_date"], "")),
+    employment_type: firstKnownValue(row, ["employment_type", "type"], "Full-Time"),
+    off_days: firstKnownValue(schedule, ["off_days", "Off_Days"], firstKnownValue(row, ["off_days", "Off_Days"], defaultOffDays)),
+    shift_start: formatMilitaryTime(firstKnownValue(schedule, ["shift_start", "start_time"], firstKnownValue(row, ["shift_start", "Shift_Start"], "08:00"))),
+    shift_end: formatMilitaryTime(firstKnownValue(schedule, ["shift_end", "end_time"], firstKnownValue(row, ["shift_end", "Shift_End"], "17:00"))),
+    break_start: formatMilitaryTime(firstKnownValue(schedule, ["break_start", "break_1_start"], firstKnownValue(row, ["break_start", "Break_1_Start"], "10:00"))),
+    break_end: formatMilitaryTime(firstKnownValue(schedule, ["break_end", "break_1_end"], firstKnownValue(row, ["break_end", "Break_1_End"], "10:15"))),
+    lunch_start: formatMilitaryTime(firstKnownValue(schedule, ["lunch_start"], firstKnownValue(row, ["lunch_start", "Lunch_Start"], "12:00"))),
+    lunch_end: formatMilitaryTime(firstKnownValue(schedule, ["lunch_end"], firstKnownValue(row, ["lunch_end", "Lunch_End"], "13:00"))),
+    second_break_start: formatMilitaryTime(firstKnownValue(schedule, ["second_break_start", "break_2_start"], firstKnownValue(row, ["second_break_start", "Break_2_Start"], "15:00"))),
+    second_break_end: formatMilitaryTime(firstKnownValue(schedule, ["second_break_end", "break_2_end"], firstKnownValue(row, ["second_break_end", "Break_2_End"], "15:15"))),
+    break_minutes: safeNumber(firstKnownValue(schedule, ["break_minutes"], firstKnownValue(row, ["break_minutes"], 30)), 30),
+    lunch_minutes: safeNumber(firstKnownValue(schedule, ["lunch_minutes"], firstKnownValue(row, ["lunch_minutes"], 60)), 60),
+    pto_balance: safeNumber(firstKnownValue(balance, ["available_hours_reference", "available_hours", "pto_balance", "pto_hours", "vacation_hours"], firstKnownValue(row, ["pto_balance"], 0)), 0),
+    sick_balance: safeNumber(firstKnownValue(balance, ["sick_balance", "sick_hours"], firstKnownValue(row, ["sick_balance"], 0)), 0),
+    vto_balance: safeNumber(firstKnownValue(balance, ["approved_vto_hours", "vto_balance", "vto_hours"], firstKnownValue(row, ["vto_balance"], 0)), 0),
+    pto_balance_days: safeNumber(firstKnownValue(balance, ["available_days", "vacation_balance_days", "vacation_days", "available_days_reference", "pto_balance_days", "pto_days", "available_pto_days", "available_pto", "vacation_balance", "pto_available_days", "vacation_available_days"], firstKnownValue(row, ["pto_balance_days", "pto_days", "vacation_days"], 0)), 0),
+    sick_balance_days: safeNumber(firstKnownValue(balance, ["approved_sick_days", "sick_balance_days", "sick_days", "available_sick_days", "sick_available_days"], firstKnownValue(row, ["sick_balance_days", "sick_days"], 0)), 0),
+    vto_balance_days: safeNumber(firstKnownValue(balance, ["vto_balance_days", "vto_days"], firstKnownValue(row, ["vto_balance_days", "vto_days"], 0)), 0),
+    tenure_days: safeNumber(firstKnownValue(balance, ["days_active", "tenure_days"], firstKnownValue(row, ["days_active", "tenure_days"], 0)), 0),
+    off_day_approved: false,
+    notes: firstKnownValue(row, ["notes"], ""),
+    temp_password: firstKnownValue(row, ["temp_password", "Auth_Password"], DEFAULT_LOGIN_PASSWORD),
+    force_password_change: Boolean(row.force_password_change),
+  };
+}
+
+function mergeSupabaseEmployeeData(baseEmployees = [], supabaseEmployees = [], balances = [], schedules = []) {
+  const balanceIndex = buildIndex(balances);
+  const scheduleIndex = buildIndex(schedules);
+  const baseIndex = buildIndex(baseEmployees);
+  const merged = [];
+  const used = new Set();
+
+  supabaseEmployees.forEach((row) => {
+    const key = keyForEmployeeRecord(row);
+    const emailKey = normalizeEmail(row.email || row.employee_email || row.Auth_Email);
+    const rowEmployeeIdKey = String(row.employee_id || row.Employee_ID || "").trim().toLowerCase();
+    const base = baseIndex.get(key) || baseIndex.get(emailKey) || baseIndex.get(rowEmployeeIdKey) || {};
+    const baseEmployeeIdKey = String(base.id || base.employee_id || base.Employee_ID || "").trim().toLowerCase();
+    const balance =
+      balanceIndex.get(baseEmployeeIdKey) ||
+      balanceIndex.get(rowEmployeeIdKey) ||
+      balanceIndex.get(emailKey) ||
+      balanceIndex.get(key) ||
+      {};
+    const schedule =
+      scheduleIndex.get(baseEmployeeIdKey) ||
+      scheduleIndex.get(rowEmployeeIdKey) ||
+      scheduleIndex.get(emailKey) ||
+      scheduleIndex.get(key) ||
+      {};
+    const mapped = mapSupabaseEmployee(row, balance, schedule, base);
+    merged.push({ ...base, ...mapped });
+    used.add(keyForEmployeeRecord(mapped));
+    if (emailKey) used.add(emailKey);
+    if (baseEmployeeIdKey) used.add(baseEmployeeIdKey);
+  });
+
+  baseEmployees.forEach((employee) => {
+    const key = keyForEmployeeRecord(employee);
+    if (!used.has(key)) merged.push(employee);
+  });
+
+  return merged;
+}
+
+async function loadSupabaseReferenceData(baseEmployees = [], applyEmployees, applyDatabaseStatus) {
+  if (!supabase) return false;
+  try {
+    const [employeesResult, balancesResult, schedulesResult] = await Promise.all([
+      supabase.from("employees").select("*"),
+      supabase.from("employee_balances").select("*"),
+      supabase.from("employee_schedules").select("*"),
+    ]);
+
+    if (employeesResult.error) {
+      console.warn("Supabase employees load skipped:", employeesResult.error.message);
+      return false;
+    }
+
+    const supabaseEmployees = employeesResult.data || [];
+    if (!supabaseEmployees.length) return false;
+
+    const mergedEmployees = mergeSupabaseEmployeeData(
+      baseEmployees.length ? baseEmployees : employeesSeed,
+      supabaseEmployees,
+      balancesResult.data || [],
+      schedulesResult.data || []
+    );
+
+    if (typeof applyEmployees === "function") applyEmployees(mergedEmployees);
+    if (typeof applyDatabaseStatus === "function") applyDatabaseStatus("Supabase database connected live. Employee balances, tenure, schedule fields, requests, approvals, and time logs are loading from production tables.");
+    return true;
+  } catch (error) {
+    console.warn("Supabase reference data load failed:", error?.message || error);
+    return false;
+  }
 }
 
 function mapEmployeeFromSheet(row) {
@@ -2002,7 +2184,8 @@ function HRWorkforceApp() {
       const database = await googleGetDatabase();
 
       if (!database) {
-        setDatabaseStatus("Demo mode active. Using built-in demo users and sample HR data. Workforce roster sync is scheduled for Saturday 5:00 AM or can be run manually by an admin.");
+        const loadedSupabase = await loadSupabaseReferenceData(employeesSeed, setEmployees, setDatabaseStatus);
+        if (!loadedSupabase) setDatabaseStatus("Demo mode active. Using built-in demo users and sample HR data. Workforce roster sync is scheduled for Saturday 5:00 AM or can be run manually by an admin.");
         return;
       }
 
@@ -2014,15 +2197,17 @@ function HRWorkforceApp() {
       const sheetDepartments = (database.departments || []).map((row) => row.Department_Name).filter(Boolean);
       const sheetSubDepartments = (database.subDepartments || database.sub_departments || []).map((row) => row.Sub_Department_Name || row.Sub_Department || row.Name).filter(Boolean);
 
+      const baseEmployees = sheetEmployees.length ? sheetEmployees : employeesSeed;
       if (sheetEmployees.length) setEmployees(sheetEmployees);
       if (sheetTime.length) setTimeEntries(sheetTime);
-      if (sheetRequests.length) setRequests(sheetRequests);
+      if (sheetRequests.length) setRequests(sheetRequests.map((request) => ({ ...request, requested_days: requestDaysValue(request), hours: requestDaysValue(request) })));
       if (sheetRules.length) setRules(sheetRules);
       if (sheetLobs.length) setLobs([...new Set(sheetLobs)]);
       if (sheetDepartments.length) setDepartments([...new Set(sheetDepartments)]);
       if (sheetSubDepartments.length) setSubDepartments([...new Set(sheetSubDepartments)]);
 
-      setDatabaseStatus("Google Sheets database connected live. Workforce roster sync is scheduled for Saturday 5:00 AM or can be run manually by an admin.");
+      const loadedSupabase = await loadSupabaseReferenceData(baseEmployees, setEmployees, setDatabaseStatus);
+      if (!loadedSupabase) setDatabaseStatus("Google Sheets database connected live. Workforce roster sync is scheduled for Saturday 5:00 AM or can be run manually by an admin.");
     }
 
     loadGoogleDatabase();
@@ -2190,14 +2375,13 @@ function HRWorkforceApp() {
   );
 
   const requestPreview = useMemo(() => {
-    const requestedHours = calculateRequestHours(newRequest);
-    const requestedDays = requestedHours / 8;
+    const requestedDays = calculateRequestHours(newRequest);
     const currentBalance = getBalance(selectedEmployee, newRequest.type);
     return {
-      requestedHours,
+      requestedHours: requestedDays,
       requestedDays,
       currentBalance,
-      projectedBalance: currentBalance === null ? null : Math.max(0, currentBalance - requestedHours),
+      projectedBalance: currentBalance === null ? null : Math.max(0, currentBalance - requestedDays),
       impactsBalance: currentBalance !== null,
     };
   }, [newRequest, selectedEmployee]);
@@ -3830,11 +4014,11 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
                     {!showSickBalanceForCountry(selectedEmployee.country) && (
                       <Info label="Approved Sick Status" value={`${employeeMonthlyAttendance(selectedEmployee, timeEntries, requests).sickApprovedDays} day(s)`} />
                     )}
-                    <Info label="Approved VTO" value={`${employeeMonthlyAttendance(selectedEmployee, timeEntries, requests).vtoApprovedHours}h`} />
+                    <Info label="Approved VTO" value={`${employeeMonthlyAttendance(selectedEmployee, timeEntries, requests).vtoApprovedDays} day(s)`} />
                   </div>
                   <div className="miniRequestList">
                     {employeeMonthlyAttendance(selectedEmployee, timeEntries, requests).approvedRequests.length ? employeeMonthlyAttendance(selectedEmployee, timeEntries, requests).approvedRequests.map((request) => (
-                      <span key={request.id}>{request.type}: {formatDateOnly(request.start_date)} · {request.type === "VTO" ? `${request.hours}h` : `${Number(request.requested_days || request.hours / 8).toFixed(1)} day(s)`}</span>
+                      <span key={request.id}>{request.type}: {formatDateOnly(request.start_date)} · {requestDaysValue(request).toFixed(1)} day(s)</span>
                     )) : <span>No approved requests for this month yet.</span>}
                   </div>
                 </div>
@@ -4046,7 +4230,7 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
         {!isAgentOnly && tab === "requests" && (
           <section className="grid split reverse">
             <Card title="Submit PTO / VTO / leave"><p className="helperText">PTO, VTO, and sick requests are approved in full days. Select the start and end dates and the app calculates the number of requested days automatically.</p><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change"].map((x) => <option key={x} disabled={x === "Overtime" && !OT_REQUESTS_ENABLED}>{x === "Overtime" && !OT_REQUESTS_ENABLED ? "Overtime Request (Disabled)" : x}</option>)}</select><input type="date" value={newRequest.start_date} onChange={(e) => setNewRequest({ ...newRequest, start_date: e.target.value })} /><input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} /><input type="number" min="0" step="0.25" title="Requests are now approved in full days." value={newRequest.start_date !== newRequest.end_date ? calculateRequestHours(newRequest) : newRequest.hours} disabled={true} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} /><input placeholder="Reason" value={newRequest.reason} onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })} /><button className="primary wide" onClick={saveRequest}>Submit request</button></FormGrid></Card>
-            <Card title="Request history"><Table headers={["Employee", "Type", "Dates", "Hours", "Days", "Current", "After", "Status"]} rows={filteredRequests.map((r) => [r.employee_name, r.type, `${r.start_date} to ${r.end_date}`, r.hours, Number(r.requested_days || r.hours / 8).toFixed(1), r.current_balance ?? "N/A", r.projected_balance ?? "N/A", <Badge>{r.status}</Badge>])} /></Card>
+            <Card title="Request history"><Table headers={["Employee", "Type", "Dates", "Days", "Current Balance", "After Approval", "Status"]} rows={filteredRequests.map((r) => [r.employee_name, r.type, `${r.start_date} to ${r.end_date}`, `${requestDaysValue(r).toFixed(1)} day(s)`, r.current_balance ?? "N/A", r.projected_balance ?? "N/A", <Badge>{r.status}</Badge>])} /></Card>
           </section>
         )}
 
@@ -4054,7 +4238,7 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
           <section className="grid two">
             <Card title="Approvals Queue - Time-Off & Schedule Requests">
               <p className="helperText">Use this queue for requests submitted by employees, including PTO, VTO, Sick Leave, Paid Leave, Unpaid Leave, Schedule Change, and OT requests submitted as a formal request. Approval updates the Requests tab, creates an Approvals audit record, and deducts balances when applicable.</p>
-              {requests.filter((r) => ["Pending", "Pending Manager Approval"].includes(r.status)).length ? requests.filter((r) => ["Pending", "Pending Manager Approval"].includes(r.status)).map((r) => <Approval key={r.id} title={r.employee_name} detail={`${r.type} · ${formatDateOnly(r.start_date)} to ${formatDateOnly(r.end_date)} · ${r.hours}h / ${Number(r.requested_days || r.hours / 8).toFixed(1)} days · Current: ${r.current_balance ?? "N/A"}h · After: ${r.projected_balance ?? "N/A"}h`} approve={() => setRequestStatus(r.id, "Approved")} deny={() => setRequestStatus(r.id, "Denied")} />) : <p className="muted">No pending employee requests at this time.</p>}
+              {requests.filter((r) => ["Pending", "Pending Manager Approval"].includes(r.status)).length ? requests.filter((r) => ["Pending", "Pending Manager Approval"].includes(r.status)).map((r) => <Approval key={r.id} title={r.employee_name} detail={`${r.type} · ${formatDateOnly(r.start_date)} to ${formatDateOnly(r.end_date)} · ${requestDaysValue(r).toFixed(1)} day(s) · Current: ${r.current_balance ?? "N/A"} day(s) · After: ${r.projected_balance ?? "N/A"} day(s)`} approve={() => setRequestStatus(r.id, "Approved")} deny={() => setRequestStatus(r.id, "Denied")} />) : <p className="muted">No pending employee requests at this time.</p>}
             </Card>
             <Card title="Time Log / Overtime Exception Data Backed Up">
               <p className="helperText">The previous time log and overtime exception approval rule has been removed from this approval view. Time log and overtime records are still retained in Time Logs, payroll review, reporting, and archive/export data for audit purposes.</p>
