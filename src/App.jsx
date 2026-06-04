@@ -3886,10 +3886,21 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
       <style>{styles}</style>
 
       <aside className="sidebar">
-        <div className="logoWrap">
-          <img src={LOGO} alt="CandoContact" />
-          <div><strong>CandoContact</strong><span>HR Workforce</span></div>
-        </div>
+       <div className="logoWrap">
+  <img
+    src={LOGO}
+    alt="Magnemite"
+    style={{
+      width: "80px",
+      height: "80px",
+      objectFit: "contain"
+    }}
+  />
+  <div>
+    <strong>Magnemite</strong>
+    <span>Workforce Management Made Simple</span>
+  </div>
+</div>
         <nav>
           {navItems.map(([key, Icon]) => (
             <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>
@@ -4499,17 +4510,48 @@ function LoginScreen({ logo, email, password, setEmail, setPassword, onLogin, on
     <div className="loginPage">
       <style>{styles}</style>
       <section className="loginCard">
-        <div className="loginBrand">
-          <img src={logo} alt="CandoContact" />
-          <div>
-            <strong>CandoContact</strong>
-            <span>HR Workforce Portal</span>
-          </div>
-        </div>
-        <h1>Sign in</h1>
+        <div
+  className="loginBrand"
+  style={{
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    textAlign: "center",
+    marginBottom: "20px"
+  }}
+>
+  <img
+    src={logo}
+    alt="Magnemite"
+    style={{
+      width: "220px",
+      height: "auto",
+      marginBottom: "12px"
+    }}
+  />
+
+  <strong
+    style={{
+      fontSize: "28px",
+      color: "#0f766e"
+    }}
+  >
+    Magnemite
+  </strong>
+
+  <span
+    style={{
+      color: "#6b7280",
+      fontSize: "14px"
+    }}
+  >
+    Workforce Management Made Simple
+  </span>
+</div>
+        <h1 style={{ textAlign: "center" }}>Welcome Back</h1>
         <p>
-          Access your HR portal, time tracking, PTO/VTO/OT requests, approvals,
-          payroll review, and reporting according to your assigned role.
+          Manage attendance, PTO, payroll review, approvals, reporting,
+and workforce operations from a single platform.
         </p>
         {!passwordResetUser ? (
           <div className="loginForm">
