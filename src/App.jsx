@@ -2649,23 +2649,42 @@ User can now log into the Agent Portal.`
   }
 
 
-  function getAttendanceEmailRecipients(employee) {
-    if (!attendanceEmailSettings.enabled || !employee) return "";
-    if (attendanceEmailSettings.lobFilter !== "All" && employee.lob !== attendanceEmailSettings.lobFilter) return "";
+ function getAttendanceEmailRecipients(employee) {
+  if (!attendanceEmailSettings.enabled || !employee) return "";
+  if (attendanceEmailSettings.lobFilter !== "All" && employee.lob !== attendanceEmailSettings.lobFilter) return "";
 
-    const recipients = [];
-    if (attendanceEmailSettings.includeManager && employee.manager) recipients.push(employee.manager);
-    if (attendanceEmailSettings.includeSupervisor && employee.supervisor) recipients.push(employee.supervisor);
-    if (attendanceEmailSettings.includeHrWfm && attendanceEmailSettings.hrWfmEmails) {
-      attendanceEmailSettings.hrWfmEmails
-        .split(/[;,]/)
-        .map((email) => email.trim())
-        .filter(Boolean)
-        .forEach((email) => recipients.push(email));
-    }
+  const allowedAccessLevels = ["Admin", "Manager", "Supervisor", "Reporting", "TL"];
+  const allowedAccountRoles = ["Manager", "Supervisor", "Reporting", "Admin"];
 
-    return [...new Set(recipients.filter(Boolean))].join(", ");
+  const recipients = employees
+    .filter((emp) => {
+      const isActive = String(emp.status || "").toLowerCase() === "active";
+      const email = String(emp.email || "").trim();
+      const accessLevel = String(emp.access_level || "").trim();
+      const accountRole = String(emp.account_role || "").trim();
+
+      const isManagement =
+        allowedAccessLevels.includes(accessLevel) ||
+        allowedAccountRoles.includes(accountRole);
+
+      const isAgent =
+        accessLevel === "Employee" ||
+        accountRole === "Agent";
+
+      return isActive && email && isManagement && !isAgent;
+    })
+    .map((emp) => String(emp.email).trim());
+
+  if (attendanceEmailSettings.includeHrwfm && attendanceEmailSettings.hrwfmEmails) {
+    attendanceEmailSettings.hrwfmEmails
+      .split(/[,;]/)
+      .map((email) => email.trim())
+      .filter(Boolean)
+      .forEach((email) => recipients.push(email));
   }
+
+  return [...new Set(recipients)].join(", ");
+}
 
   function buildAttendanceEmailNotes(employee, savedEntries = []) {
     const dateKey = getLocalDateKey(new Date());
