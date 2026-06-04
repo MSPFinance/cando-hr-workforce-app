@@ -1549,7 +1549,33 @@ function mapEmailToSupabaseQueue({ recipient, subject, body, status = "Pending" 
     status,
   };
 }
+async function queueEmailNotification({
+  to,
+  subject,
+  body,
+  status = "Pending"
+}) {
+  if (!supabase || !to) return false;
 
+  const { error } = await supabase
+    .from("email_queue")
+    .insert([
+      {
+        recipient: to,
+        subject,
+        body,
+        status,
+        created_at: new Date().toISOString()
+      }
+    ]);
+
+  if (error) {
+    console.error("Email Queue Error:", error);
+    return false;
+  }
+
+  return true;
+}
 
 async function updateSupabaseRequestDecision(localRequest, status, approverEmail, notes = "") {
   if (!supabase || !localRequest) return null;
