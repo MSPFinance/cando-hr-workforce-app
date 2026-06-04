@@ -91,7 +91,7 @@ function isWeeklyWorkforceSyncWindow(date = new Date()) {
 // Production path: this uses the Employees database to identify the user and role.
 // For full enterprise security later, connect this to Google SSO or Supabase Auth.
 const DEFAULT_LOGIN_EMAIL = "agent1@goday.ca";
-const DEFAULT_LOGIN_PASSWORD = "Cando123!";
+const DEFAULT_LOGIN_PASSWORD = "Welcome2026!";
 const ADMIN_ACCESS_LEVELS = ["TL", "Team Lead", "Supervisor", "Manager", "Approvals", "Reporting", "HR", "Payroll", "Admin", "Executive"];
 const OT_REQUESTS_ENABLED = false;
 
@@ -596,6 +596,14 @@ const requestsSeed = [
 function safeNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
+}
+
+function normalizeBoolean(value) {
+  if (value === true) return true;
+  if (value === false) return false;
+  if (value === null || value === undefined) return false;
+  const normalized = String(value).trim().toLowerCase();
+  return ["true", "yes", "y", "1", "required", "pending"].includes(normalized);
 }
 
 function timeToMinutes(value) {
@@ -1191,56 +1199,23 @@ function showSickBalanceForCountry(country) {
 }
 
 function requestDaysValue(request) {
-  return safeNumber(request?.requested_days ?? request?.days ?? 0, 0);
+  return safeNumber(request?.requested_days ?? request?.days ?? request?.hours ?? request?.requested_hours, 0);
 }
 
 function employeeMonthlyAttendance(employee, timeEntries = [], requests = []) {
   const monthKey = today.slice(0, 7);
-  const employeeKeys = [
-  employee?.employee_id,
-  employee?.email?.toLowerCase(),
-].filter(Boolean);
-
-  const entries = timeEntries.filter((entry) => {
-    const sameEmployee =
-      employeeKeys.includes(entry.employee_id) ||
-      employeeKeys.includes(entry.employee_email?.toLowerCase());
-
-    return sameEmployee && String(entry.date || entry.clock_in || "").startsWith(monthKey);
-  });
-
-  const approvedRequests = requests.filter((request) => {
-    const sameEmployee =
-      employeeKeys.includes(request.employee_id) ||
-      employeeKeys.includes(request.employee_email?.toLowerCase());
-
-    const isApproved = String(request.status || "").toLowerCase() === "approved";
-    const isSameMonth = String(request.start_date || "").startsWith(monthKey);
-
-    return sameEmployee && isApproved && isSameMonth;
-  });
-
-  const sickApproved = approvedRequests.filter((request) =>
-    ["sick leave", "sick"].includes(String(request.type || request.request_type || "").toLowerCase())
-  );
-
-  const ptoApproved = approvedRequests.filter((request) =>
-    ["pto", "vacation", "paid leave"].includes(String(request.type || request.request_type || "").toLowerCase())
-  );
-
-  const vtoApproved = approvedRequests.filter((request) =>
-    ["vto"].includes(String(request.type || request.request_type || "").toLowerCase())
-  );
-
+  const entries = timeEntries.filter((entry) => entry.employee_id === employee?.id && String(entry.date || "").startsWith(monthKey));
+  const approvedRequests = requests.filter((request) => request.employee_id === employee?.id && request.status === "Approved" && String(request.start_date || "").startsWith(monthKey));
+  const sickApproved = approvedRequests.filter((request) => request.type === "Sick Leave");
+  const ptoApproved = approvedRequests.filter((request) => request.type === "PTO");
+  const vtoApproved = approvedRequests.filter((request) => request.type === "VTO");
   return {
     monthLabel: new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" }),
-    workingHours: entries
-      .filter((entry) => String(entry.category || entry.status || "").toLowerCase() === "working")
-      .reduce((sum, entry) => sum + minutesBetween(entry.category_start || entry.clock_in, entry.category_end || entry.clock_out), 0) / 60,
+    workingHours: entries.filter((entry) => entry.category === "Working").reduce((sum, entry) => sum + minutesBetween(entry.category_start, entry.category_end), 0) / 60,
     sickApprovedDays: sickApproved.reduce((sum, request) => sum + requestDaysValue(request), 0),
-    ptoApprovedDays: safeNumber(employee?.approved_pto_taken_days ?? 0, 0),
+    ptoApprovedDays: ptoApproved.reduce((sum, request) => sum + requestDaysValue(request), 0),
     vtoApprovedDays: vtoApproved.reduce((sum, request) => sum + requestDaysValue(request), 0),
-    approvedRequests: [],
+    approvedRequests: approvedRequests.slice(0, 6),
   };
 }
 
@@ -1549,33 +1524,7 @@ function mapEmailToSupabaseQueue({ recipient, subject, body, status = "Pending" 
     status,
   };
 }
-async function queueEmailNotification({
-  to,
-  subject,
-  body,
-  status = "Pending"
-}) {
-  if (!supabase || !to) return false;
 
-  const { error } = await supabase
-    .from("email_queue")
-    .insert([
-      {
-        recipient: to,
-        subject,
-        body,
-        status,
-        created_at: new Date().toISOString()
-      }
-    ]);
-
-  if (error) {
-    console.error("Email Queue Error:", error);
-    return false;
-  }
-
-  return true;
-}
 
 async function updateSupabaseRequestDecision(localRequest, status, approverEmail, notes = "") {
   if (!supabase || !localRequest) return null;
@@ -1697,8 +1646,12 @@ function mapSupabaseEmployee(row = {}, balance = {}, schedule = {}, base = {}) {
     tenure_days: safeNumber(firstKnownValue(balance, ["days_active", "tenure_days"], firstKnownValue(row, ["days_active", "tenure_days"], 0)), 0),
     off_day_approved: false,
     notes: firstKnownValue(row, ["notes"], ""),
-    temp_password: firstKnownValue(row, ["temp_password", "Auth_Password"], DEFAULT_LOGIN_PASSWORD),
-    force_password_change: Boolean(row.force_password_change),
+    temp_password: firstKnownValue(row, ["temp_password", "temporary_password", "Auth_Password"], DEFAULT_LOGIN_PASSWORD),
+    temporary_password: firstKnownValue(row, ["temporary_password", "temp_password", "Auth_Password"], DEFAULT_LOGIN_PASSWORD),
+    must_change_password: normalizeBoolean(row.must_change_password) || normalizeBoolean(row.force_password_change) || normalizeBoolean(row.requires_password_reset),
+    force_password_change: normalizeBoolean(row.force_password_change) || normalizeBoolean(row.must_change_password) || normalizeBoolean(row.requires_password_reset),
+    requires_password_reset: normalizeBoolean(row.requires_password_reset) || normalizeBoolean(row.force_password_change) || normalizeBoolean(row.must_change_password),
+    password_last_updated: firstKnownValue(row, ["password_last_updated"], ""),
   };
 }
 
@@ -3604,19 +3557,48 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
 
   function login() {
     const employee = employees.find((e) => normalizeEmail(e.email) === normalizeEmail(loginEmail));
-    const expectedPassword = employee?.temp_password || DEFAULT_LOGIN_PASSWORD;
 
     if (!employee) {
       setAuthError("No active employee profile was found for this email. Please contact HR or your manager.");
       return;
     }
 
-    if (String(loginPassword || "") !== String(expectedPassword || "")) {
+    const employeeStatus = String(employee.employment_status || employee.status || "Active").toLowerCase();
+    if (employeeStatus !== "active") {
+      setAuthError("This employee profile is not active. Please contact HR or your manager.");
+      return;
+    }
+
+    const acceptedPasswords = [
+      employee.temp_password,
+      employee.temporary_password,
+      DEFAULT_LOGIN_PASSWORD,
+    ]
+      .filter((value) => value !== undefined && value !== null && String(value) !== "")
+      .map((value) => String(value));
+
+    if (!acceptedPasswords.includes(String(loginPassword || ""))) {
       setAuthError("Invalid password. Please try again or request a reset from HR/Admin.");
       return;
     }
 
-    if (employee.requires_password_reset) {
+    const loginPasswordValue = String(loginPassword || "");
+    const passwordMatchesTemporary = [
+      employee.temporary_password,
+      DEFAULT_LOGIN_PASSWORD,
+      "Welcome2026!",
+    ]
+      .filter((value) => value !== undefined && value !== null && String(value) !== "")
+      .some((value) => loginPasswordValue === String(value));
+
+    const mustCreatePersonalPassword = Boolean(
+      normalizeBoolean(employee.requires_password_reset) ||
+      normalizeBoolean(employee.force_password_change) ||
+      normalizeBoolean(employee.must_change_password) ||
+      (passwordMatchesTemporary && !employee.password_last_updated)
+    );
+
+    if (mustCreatePersonalPassword) {
       setPasswordResetUser(employee);
       setNewPersonalPassword("");
       setConfirmPersonalPassword("");
@@ -3666,6 +3648,9 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
     const updatedEmployee = {
       ...employee,
       temp_password: temporaryPassword,
+      temporary_password: temporaryPassword,
+      must_change_password: true,
+      force_password_change: true,
       requires_password_reset: true,
       password_reset_status: "Temporary Password Issued",
       password_reset_requested_at: new Date().toISOString(),
@@ -3679,6 +3664,8 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
       if (supabase) {
         const { error: employeeUpdateError } = await supabase.from("employees").update({
           temp_password: temporaryPassword,
+          temporary_password: temporaryPassword,
+          must_change_password: true,
           force_password_change: true,
         }).eq("email", employee.email);
 
@@ -3765,7 +3752,11 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
     const updatedEmployee = {
       ...passwordResetUser,
       temp_password: newPersonalPassword,
+      temporary_password: "",
+      must_change_password: false,
+      force_password_change: false,
       requires_password_reset: false,
+      password_last_updated: new Date().toISOString(),
       password_reset_status: "Completed",
       password_reset_completed_at: new Date().toISOString(),
     };
@@ -3778,7 +3769,10 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
       if (supabase) {
         await supabase.from("employees").update({
           temp_password: newPersonalPassword,
+          temporary_password: null,
+          must_change_password: false,
           force_password_change: false,
+          password_last_updated: new Date().toISOString(),
         }).eq("email", passwordResetUser.email);
       }
 
