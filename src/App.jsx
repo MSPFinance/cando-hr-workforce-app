@@ -778,8 +778,15 @@ function mapWorkforceSyncRow(row) {
         if (String(value || "").trim() !== "")
             payload[field] = formatMilitaryTime(value);
     };
+    const setNumber = (field, keys) => {
+  const value = firstValue(row, keys);
+  if (String(value || "").trim() !== "") {
+    const numericValue = Number(String(value).replace(/[^0-9.-]/g, ""));
+    if (!Number.isNaN(numericValue)) payload[field] = numericValue;
+  }
+};
     setText("country", ["Country", "Site", "Location"]);
-    setText("lob", ["LOB", "Line of Business", "Line_Of_Business", "Client"]);
+        setText("lob", ["LOB", "Line of Business", "Line_Of_Business", "Client"]);
     setText("department", ["Department", "Team", "Area"]);
     setText("sub_department", ["Sub_Department", "Sub Department", "SubDepartment", "Sub Team", "Queue", "Role"]);
     setText("supervisor", ["Supervisor", "TL", "Team_Leader", "Team Leader", "Team Lead", "Direct Supervisor"]);
@@ -787,6 +794,21 @@ function mapWorkforceSyncRow(row) {
     setText("employment_status", ["Employment_Status", "Employment Status", "Status"]);
     setText("employment_type", ["Employment_Type", "Employment Type"]);
     setText("off_days", ["Off_Days", "Off Days", "Rest Days", "Days Off"]);
+    setText("hire_date", ["Hire Date"]);
+setText("birthday", ["Birthday"]);
+
+setNumber("vacation_days", ["Vacations"]);
+setNumber("vacation_taken", ["Vacation taken"]);
+setNumber("available_days", ["Available days"]);
+
+if (payload.vacation_days !== undefined && payload.vacation_taken !== undefined && payload.available_days === undefined) {
+  payload.available_days = payload.vacation_days - payload.vacation_taken;
+}
+
+if (payload.available_days !== undefined) {
+  payload.pto_balance = payload.available_days;
+  payload.pto_balance_days = payload.available_days;
+}
    setTime("shift_start", ["Start Time (EST)", "Shift_Start", "Shift Start", "Scheduled_Shift_Start", "Scheduled Shift Start", "Start Time"]);
 setTime("shift_end", ["End Time (EST)", "Shift_End", "Shift End", "Scheduled_Shift_End", "Scheduled Shift End", "End Time"]);
 
