@@ -19,7 +19,7 @@ const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
 // This reads approved operational fields from the shared workforce sheet while protecting identity/auth fields.
 // Protected fields that are NEVER overwritten by this sync: email, password/temp_password, role, access_level, hire_date, birthday, and employee id.
 const WORKFORCE_SYNC_SHEET_ID = "1cmYlztzC9oc8z6LSD6ER_UqU2F17Lq7fiMAAWLnMy5s";
-const WORKFORCE_SYNC_SHEET_NAMES = ["Roster"];
+const WORKFORCE_SYNC_SHEET_NAMES = ["New Team Roster(Lucho)"];
 const WORKFORCE_SYNC_AUTOMATIC_ENABLED = true;
 const WORKFORCE_SYNC_SCHEDULE_DAY = 6; // Saturday, based on local browser time.
 const WORKFORCE_SYNC_SCHEDULE_TIME = "05:00"; // Saturday morning sync window.
@@ -3256,10 +3256,14 @@ User can now log into the Agent Portal.`);
                     React.createElement("button", { type: "button", onClick: exportRequestsCsv },
                         React.createElement(Download, { size: 14 }),
                         " Requests CSV"),
-                    React.createElement("label", { className: "actionUpload" },
-                        React.createElement(Upload, { size: 14 }),
-                        " Import Employees",
-                        React.createElement("input", { type: "file", accept: ".csv", onChange: importEmployees })),
+                    React.createElement("button", {
+  type: "button",
+  className: "actionUpload",
+  onClick: () => syncWorkforcePlanningSheet({ silent: false, automatic: false })
+},
+  React.createElement(Upload, { size: 14 }),
+  " Sync Roster"
+),
                     React.createElement("button", { type: "button", onClick: createArchiveBackup }, "Create Backup"),
                     React.createElement("button", { type: "button", onClick: logout }, "Logout"))),
                 !isAgentOnly && (React.createElement("section", { className: "filterPanel" },
