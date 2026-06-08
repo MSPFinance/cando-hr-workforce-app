@@ -18,7 +18,7 @@ const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
 // This reads approved operational fields from the master workforce sheet.
 // This reads approved operational fields from the shared workforce sheet while protecting identity/auth fields.
 // Protected fields that are NEVER overwritten by this sync: email, password/temp_password, role, access_level, hire_date, birthday, and employee id.
-const WORKFORCE_SYNC_SHEET_ID = "1cmYlztzC9oc8z6LSD6ER_UqU2F17Lq7fiMAAWLnMy5s";
+const WORKFORCE_SYNC_SHEET_ID = "1kHPJIXQ531QEZOYgy9wn5BCgvNnzg5MkSztSFN3ukpE";
 const WORKFORCE_SYNC_SHEET_NAMES = ["New Team Roster(Lucho)"];
 const WORKFORCE_SYNC_AUTOMATIC_ENABLED = true;
 const WORKFORCE_SYNC_SCHEDULE_DAY = 6; // Saturday, based on local browser time.
@@ -749,6 +749,16 @@ function firstValue(row, keys) {
     }
     return "";
 }
+function splitTimeRange(value) {
+  const text = String(value || "").trim();
+  if (!text || text.toUpperCase() === "OFF") return { start: "", end: "" };
+
+  const parts = text.split("-").map((part) => part.trim());
+  return {
+    start: parts[0] || "",
+    end: parts[1] || ""
+  };
+}
 function mapWorkforceSyncRow(row) {
     const employeeId = String(firstValue(row, ["Employee_ID", "Employee ID", "ID", "employee_id", "Employee Id"]) || "").trim();
     const fullName = String(firstValue(row, ["Full_Name", "Full Name", "Employee", "Employee Name", "Name", "Agent", "Agent Name"]) || "").trim();
@@ -777,14 +787,25 @@ function mapWorkforceSyncRow(row) {
     setText("employment_status", ["Employment_Status", "Employment Status", "Status"]);
     setText("employment_type", ["Employment_Type", "Employment Type"]);
     setText("off_days", ["Off_Days", "Off Days", "Rest Days", "Days Off"]);
-    setTime("shift_start", ["Shift_Start", "Shift Start", "Scheduled_Shift_Start", "Scheduled Shift Start", "Start Time"]);
-    setTime("shift_end", ["Shift_End", "Shift End", "Scheduled_Shift_End", "Scheduled Shift End", "End Time"]);
-    setTime("break_start", ["Break_1_Start", "Break 1 Start", "First Break Start"]);
-    setTime("break_end", ["Break_1_End", "Break 1 End", "First Break End"]);
-    setTime("lunch_start", ["Lunch_Start", "Lunch Start"]);
-    setTime("lunch_end", ["Lunch_End", "Lunch End"]);
-    setTime("second_break_start", ["Break_2_Start", "Break 2 Start", "Second Break Start"]);
-    setTime("second_break_end", ["Break_2_End", "Break 2 End", "Second Break End"]);
+   setTime("shift_start", ["Start Time (EST)", "Shift_Start", "Shift Start", "Scheduled_Shift_Start", "Scheduled Shift Start", "Start Time"]);
+setTime("shift_end", ["End Time (EST)", "Shift_End", "Shift End", "Scheduled_Shift_End", "Scheduled Shift End", "End Time"]);
+
+const lunchRange = firstValue(row, ["Lunch"]);
+const firstBreakRange = firstValue(row, ["First Break"]);
+const secondBreakRange = firstValue(row, ["Second Break"]);
+
+const lunch = splitTimeRange(lunchRange);
+const firstBreak = splitTimeRange(firstBreakRange);
+const secondBreak = splitTimeRange(secondBreakRange);
+
+if (lunch.start) payload.lunch_start = formatMilitaryTime(lunch.start);
+if (lunch.end) payload.lunch_end = formatMilitaryTime(lunch.end);
+
+if (firstBreak.start) payload.break_start = formatMilitaryTime(firstBreak.start);
+if (firstBreak.end) payload.break_end = formatMilitaryTime(firstBreak.end);
+
+if (secondBreak.start) payload.second_break_start = formatMilitaryTime(secondBreak.start);
+if (secondBreak.end) payload.second_break_end = formatMilitaryTime(secondBreak.end);
     if (payload.break_start && payload.break_end) {
         payload.break_minutes = minutesBetween(payload.break_start, payload.break_end);
     }
