@@ -14,11 +14,12 @@ const LOGO = "/cando-logo.png";
 // When you are ready to reconnect live Google Sheets, replace "" with your working /exec Apps Script URL.
 const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
 // WORKFORCE PLANNING SHEET SYNC
-// Source: Google Sheet tab "New Team Roster(Lucho)" in GoDay & LC Team Schedules.
+// Source: Google Sheet tab "Roster".
+// This reads approved operational fields from the master workforce sheet.
 // This reads approved operational fields from the shared workforce sheet while protecting identity/auth fields.
 // Protected fields that are NEVER overwritten by this sync: email, password/temp_password, role, access_level, hire_date, birthday, and employee id.
-const WORKFORCE_SYNC_SHEET_ID = "1kHPJIXQ531QEZOYgy9wn5BCgvNnzg5MkSztSFN3ukpE";
-const WORKFORCE_SYNC_SHEET_NAMES = ["New Team Roster(Lucho)"];
+const WORKFORCE_SYNC_SHEET_ID = "1cmYlztzC9oc8z6LSD6ER_UqU2F17Lq7fiMAAWLnMy5s";
+const WORKFORCE_SYNC_SHEET_NAMES = ["Roster"];
 const WORKFORCE_SYNC_AUTOMATIC_ENABLED = true;
 const WORKFORCE_SYNC_SCHEDULE_DAY = 6; // Saturday, based on local browser time.
 const WORKFORCE_SYNC_SCHEDULE_TIME = "05:00"; // Saturday morning sync window.
