@@ -925,8 +925,8 @@ function mergeWorkforceRowsIntoEmployees(currentEmployees, workforceRows, option
             temp_password: employee.temp_password,
             role: employee.role,
             access_level: employee.access_level,
-            hire_date: safePayload.hire_date || employee.hire_date,
-            birthday: safePayload.birthday || employee.birthday,
+            hire_date: employee.hire_date,
+            birthday: employee.birthday,
             last_sync_date: getLocalDateKey(new Date()),
             last_sync_source: "New Team Roster(Lucho)",
         };
@@ -1172,14 +1172,25 @@ function getAccessProfile(employee) {
     return ROLE_ACCESS_PROFILES[key] || ROLE_ACCESS_PROFILES.Employee;
 }
 function balanceDays(employee, type) {
-    if (!employee)
-        return 0;
-    if (type === "PTO")
-        return safeNumber(employee.pto_balance_days ?? safeNumber(employee.pto_balance, 0) / 8, 0);
-    if (type === "Sick Leave")
+    if (!employee) return 0;
+
+    if (type === "PTO") {
+        return safeNumber(
+            employee.available_days ??
+            employee.pto_balance_days ??
+            employee.pto_balance,
+            0
+        );
+    }
+
+    if (type === "Sick Leave") {
         return safeNumber(employee.sick_balance_days ?? safeNumber(employee.sick_balance, 0) / 8, 0);
-    if (type === "VTO")
+    }
+
+    if (type === "VTO") {
         return safeNumber(employee.vto_balance_days ?? safeNumber(employee.vto_balance, 0) / 8, 0);
+    }
+
     return 0;
 }
 function balanceFieldDays(type) {
