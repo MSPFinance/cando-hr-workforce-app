@@ -44,6 +44,13 @@ const WORKFORCE_SYNC_ALLOWED_FIELDS = [
     "supervisor",
     "manager",
     "employment_status",
+    "hire_date",
+"birthday",
+"vacation_days",
+"vacation_taken",
+"available_days",
+"pto_balance",
+"pto_balance_days",
     "employment_type",
     "off_days",
     "shift_start",
@@ -56,6 +63,7 @@ const WORKFORCE_SYNC_ALLOWED_FIELDS = [
     "second_break_end",
     "break_minutes",
     "lunch_minutes",
+    
 ];
 function getLocalDateKey(date = new Date()) {
     const year = date.getFullYear();
@@ -762,7 +770,7 @@ function splitTimeRange(value) {
 function mapWorkforceSyncRow(row) {
     const employeeId = String(firstValue(row, ["Employee_ID", "Employee ID", "ID", "employee_id", "Employee Id"]) || "").trim();
     const fullName = String(firstValue(row, ["Full_Name", "Full Name", "Employee", "Employee Name", "Name", "Agent", "Agent Name"]) || "").trim();
-    const sourceEmail = String(firstValue(row, ["Email", "Auth_Email", "Work Email", "Company Email"]) || "").trim();
+    const sourceEmail = String(firstValue(row, ["Email Address", "Email", "Auth_Email", "Work Email", "Company Email"]) || "").trim();
     // For production the preferred match key is Employee_ID.
     // During staging/demo, Full Name can be used as a safe fallback so roster sync can be tested before real users exist.
     if (!employeeId && !fullName && !sourceEmail)
@@ -917,8 +925,8 @@ function mergeWorkforceRowsIntoEmployees(currentEmployees, workforceRows, option
             temp_password: employee.temp_password,
             role: employee.role,
             access_level: employee.access_level,
-            hire_date: employee.hire_date,
-            birthday: employee.birthday,
+            hire_date: safePayload.hire_date || employee.hire_date,
+            birthday: safePayload.birthday || employee.birthday,
             last_sync_date: getLocalDateKey(new Date()),
             last_sync_source: "New Team Roster(Lucho)",
         };
