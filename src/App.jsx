@@ -1008,17 +1008,24 @@ function formatOffDays(value) {
     const days = normalizeOffDays(value);
     return days.length ? days.join(", ") : "None assigned";
 }
-function getStableSchedule(employee) {
+function getStableSchedule(employee, employeeSchedules = []) {
+    const scheduleRecord = employeeSchedules.find((schedule) =>
+        String(schedule.employee_id || "").trim() === String(employee?.employee_id || "").trim() ||
+        String(schedule.employee_email || "").toLowerCase().trim() === String(employee?.email || "").toLowerCase().trim()
+    );
+
+    const source = scheduleRecord || employee || {};
+
     return {
-        shift_start: formatMilitaryTime(employee?.shift_start || "08:00"),
-        shift_end: formatMilitaryTime(employee?.shift_end || "17:00"),
-        break_start: formatMilitaryTime(employee?.break_start || "10:00"),
-        break_end: formatMilitaryTime(employee?.break_end || "10:15"),
-        lunch_start: formatMilitaryTime(employee?.lunch_start || "12:00"),
-        lunch_end: formatMilitaryTime(employee?.lunch_end || "13:00"),
-        second_break_start: formatMilitaryTime(employee?.second_break_start || "15:00"),
-        second_break_end: formatMilitaryTime(employee?.second_break_end || "15:15"),
-        off_days: employee?.off_days || "",
+        shift_start: formatMilitaryTime(source.shift_start || source.start_time || "08:00"),
+        shift_end: formatMilitaryTime(source.shift_end || source.end_time || "17:00"),
+        break_start: formatMilitaryTime(source.break_start || "10:00"),
+        break_end: formatMilitaryTime(source.break_end || "10:15"),
+        lunch_start: formatMilitaryTime(source.lunch_start || "12:00"),
+        lunch_end: formatMilitaryTime(source.lunch_end || "13:00"),
+        second_break_start: formatMilitaryTime(source.second_break_start || "15:00"),
+        second_break_end: formatMilitaryTime(source.second_break_end || "15:15"),
+        off_days: source.off_days || "",
         sub_department: employee?.sub_department || "",
     };
 }
@@ -1095,7 +1102,7 @@ function getShiftStartOrNow(employee, time) {
 function getTodayShiftSummary(employee) {
     if (!employee)
         return { isOff: false, label: "No schedule", detail: "No employee selected." };
-    const schedule = getStableSchedule(employee);
+    const schedule = getStableSchedule(employee, employeeSchedules);
     if (isTodayOffDay(employee)) {
         return {
             isOff: true,
