@@ -1105,7 +1105,7 @@ function getTodayShiftSummary(employee) {
     if (!employee)
         return { isOff: false, label: "No schedule", detail: "No employee selected." };
     const schedule = getStableSchedule(employee, employeeSchedules);
-console.log("Today Shift Debug", {
+console.log("Today Shift Debug v2", {
   employee_id: employee?.employee_id,
   email: employee?.email,
   schedule,
