@@ -836,6 +836,18 @@ if (firstBreak.end) payload.break_end = formatMilitaryTime(firstBreak.end);
 
 if (secondBreak.start) payload.second_break_start = formatMilitaryTime(secondBreak.start);
 if (secondBreak.end) payload.second_break_end = formatMilitaryTime(secondBreak.end);
+if (
+  employeeId === "53002263" ||
+  sourceEmail.toLowerCase() === "mpenon@goday.ca"
+) {
+  console.log("ROSTER SYNC TEST - Maggie", {
+    employeeId,
+    fullName,
+    sourceEmail,
+    payload,
+    rawRow: row,
+  });
+}
     if (payload.break_start && payload.break_end) {
         payload.break_minutes = minutesBetween(payload.break_start, payload.break_end);
     }
