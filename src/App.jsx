@@ -1798,7 +1798,7 @@ function HRWorkforceApp() {
                 return;
             }
             const sheetEmployees = (database.employees || []).map(mapEmployeeFromSheet);
-            const sheetEmployeeSchedules = (database.employee_schedules || database.employeeSchedules || []).map(mapEmployeeScheduleFromSheet);
+            const sheetEmployeeSchedules = database.employee_schedules || database.employeeSchedules || [];
             const sheetTime = (database.timeLogs || []).map(mapTimeFromSheet);
             const sheetRequests = (database.requests || []).map(mapRequestFromSheet);
             const sheetRules = (database.staffingRules || []).map(mapRuleFromSheet);
