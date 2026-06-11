@@ -1798,6 +1798,7 @@ function HRWorkforceApp() {
                 return;
             }
             const sheetEmployees = (database.employees || []).map(mapEmployeeFromSheet);
+            const sheetEmployeeSchedules = (database.employee_schedules || database.employeeSchedules || []).map(mapEmployeeScheduleFromSheet);
             const sheetTime = (database.timeLogs || []).map(mapTimeFromSheet);
             const sheetRequests = (database.requests || []).map(mapRequestFromSheet);
             const sheetRules = (database.staffingRules || []).map(mapRuleFromSheet);
@@ -1806,6 +1807,8 @@ function HRWorkforceApp() {
             const sheetSubDepartments = (database.subDepartments || database.sub_departments || []).map((row) => row.Sub_Department_Name || row.Sub_Department || row.Name).filter(Boolean);
             if (sheetEmployees.length)
                 setEmployees(sheetEmployees);
+            if (sheetEmployeeSchedules.length)
+  setEmployeeSchedules(sheetEmployeeSchedules);
             if (sheetTime.length)
                 setTimeEntries(sheetTime);
             if (sheetRequests.length)
