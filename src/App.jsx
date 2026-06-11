@@ -3395,6 +3395,7 @@ User can now log into the Agent Portal.`);
                             React.createElement(Info, { label: "Country", value: selectedEmployee.country }),
                             React.createElement(Info, { label: "Employment Status", value: selectedEmployee.employment_status }))),
                     React.createElement("div", { className: `agentShiftCard ${isTodayOffDay(selectedEmployee) ? "offDay" : ""}` },
+                    
                         React.createElement("span", null, isTodayOffDay(selectedEmployee) ? "Today’s Status" : "Today’s Shift"),
                         React.createElement("strong", null, isTodayOffDay(selectedEmployee) ? `OFF · ${todayDayName()}` : formatTimeRange(selectedEmployee.shift_start, selectedEmployee.shift_end)),
                         isTodayOffDay(selectedEmployee) ? (React.createElement("small", { className: "shiftDetails offDetails" },
