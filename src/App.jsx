@@ -807,7 +807,7 @@ setText("birthday", ["Birthday"]);
 
 setNumber("vacation_days", ["Vacations"]);
 setNumber("vacation_taken", ["Vacation taken", "Vacation Taken"]);
-setNumber("available_days", ["Available days", "Available Days"]);
+setNumber("available_days", ["Available days", "Available Days", "Available_Days"]);
 setNumber("available_days", ["Available days"]);
 
 if (payload.vacation_days !== undefined && payload.vacation_taken !== undefined && payload.available_days === undefined) {
