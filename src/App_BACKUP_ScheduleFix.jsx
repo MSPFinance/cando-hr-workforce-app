@@ -2559,130 +2559,16 @@ function HRWorkforceApp() {
       (filters.country === "All" || employee.country === filters.country)
     );
   });
-const scheduleRows =
-  filters.employee !== "All"
-    ? WEEK_DAYS.map((day) => {
-        const employee = filteredVisibleEmployees[0] || selectedEmployee;
 
-        return {
-          employee,
-          day,
-          schedule: getStableSchedule(employee, [], day),
-        };
-      })
-    : filteredVisibleEmployees.map((employee) => ({
-        employee,
-        day: todayDayName(),
-        schedule: getStableSchedule(employee, [], todayDayName()),
-      }));
   async function refreshLiveData() {
-  const loadedSupabase = await loadSupabaseReferenceData(
-    employees,
-    setEmployees,
-    setDatabaseStatus
-  );
-
-if (supabase) {
-  const { data: latestLogs, error: logsError } = await supabase
-    .from("time_logs")
-    .select("*");
-
-  if (!logsError) {
-    setTimeEntries(
-      (latestLogs || []).sort((a, b) => {
-        const aStamp = `${a.date || ""} ${a.time || ""} ${a.created_at || ""}`;
-        const bStamp = `${b.date || ""} ${b.time || ""} ${b.created_at || ""}`;
-        return bStamp.localeCompare(aStamp);
-      })
-    );
-  } else {
-    console.warn("Time logs refresh failed:", logsError);
-  }
-
-  const { data: latestRequests, error: requestsError } = await supabase
-    .from("requests")
-    .select("*");
-
-  if (!requestsError) {
-    setRequests(latestRequests || []);
-  } else {
-    console.warn("Requests refresh failed:", requestsError);
-  }
-}
-
-  if (loadedSupabase) {
-    showToast(
-      "Live data refreshed",
-      "Latest Supabase employee, balance, schedule, request, and time log data loaded.",
-      "success"
-    );
-    return;
-  }
-
-  await syncWorkforcePlanningSheet({ silent: false, automatic: false });
-}
-useEffect(() => {
-  if (!supabase) return undefined;
-
-  const reloadLiveLogsOnly = async () => {
-    const { data: latestLogs, error } = await supabase
-      .from("time_logs")
-      .select("*");
-
-    if (!error) {
-      setTimeEntries(
-        (latestLogs || []).sort((a, b) => {
-          const aStamp = `${a.date || ""} ${a.time || ""} ${a.created_at || ""}`;
-          const bStamp = `${b.date || ""} ${b.time || ""} ${b.created_at || ""}`;
-          return bStamp.localeCompare(aStamp);
-        })
-      );
-    } else {
-      console.warn("Realtime time_logs reload failed:", error);
+    const loadedSupabase = await loadSupabaseReferenceData(employees, setEmployees, setDatabaseStatus);
+    if (loadedSupabase) {
+      showToast("Live data refreshed", "Latest Supabase employee, balance, and schedule data loaded.", "success");
+      return;
     }
-  };
+    await syncWorkforcePlanningSheet({ silent: false, automatic: false });
+  }
 
-  const channel = supabase
-    .channel("magnemite-live-dashboard")
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "time_logs" },
-      reloadLiveLogsOnly
-    )
-    .subscribe();
-
-  return () => {
-    supabase.removeChannel(channel);
-  };
-}, []);
-useEffect(() => {
-  if (!supabase) return undefined;
-
-  const reloadLiveLogsOnly = async () => {
-    const { data: latestLogs, error } = await supabase
-      .from("time_logs")
-      .select("*");
-
-    if (!error) {
-      setTimeEntries(
-        (latestLogs || []).sort((a, b) => {
-          const aStamp = `${a.date || ""} ${a.time || ""} ${a.created_at || ""}`;
-          const bStamp = `${b.date || ""} ${b.time || ""} ${b.created_at || ""}`;
-          return bStamp.localeCompare(aStamp);
-        })
-      );
-    } else {
-      console.warn("5-second time_logs refresh failed:", error);
-    }
-  };
-
-  reloadLiveLogsOnly();
-  const intervalId = window.setInterval(reloadLiveLogsOnly, 5000);
-
-  return () => {
-    window.clearInterval(intervalId);
-  };
-}, []);
   function resetFilters() {
     setFilters({ lob: "All", department: "All", subDepartment: "All", employee: "All", country: "All", category: "All", startDate: "", endDate: "" });
   }
@@ -4582,29 +4468,13 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
                         employee.lob === lob
                     );
 
-                    const liveLobEmployees = lobEmployees.map((employee) => ({
-  employee,
-  live: getAgentLiveStatus(employee, timeEntries, requests)
-}));
+                    const liveLobEmployees = lobEmployees
+                      .map((employee) => ({
+                        employee,
+                        live: getAgentLiveStatus(employee, activityLog, requests),
+                      }))
+                      .filter(({ live }) => live.type !== "gray" && String(live.label || "").toUpperCase() !== "OFF DAY");
 
-const alerts = liveLobEmployees.filter(({ live }) =>
-  live.type === "red" || String(live.label || "").toLowerCase().includes("alert")
-);
-
-const active = liveLobEmployees.filter(({ live }) => live.type === "green");
-
-const away = liveLobEmployees.filter(({ live }) =>
-  live.type === "yellow" ||
-  ["break", "lunch", "bathroom"].some((word) =>
-    String(live.label || "").toLowerCase().includes(word)
-  )
-);
-
-const noActivity = liveLobEmployees.filter(({ live }) =>
-  live.type === "gray" ||
-  String(live.label || "").toLowerCase().includes("offline") ||
-  String(live.label || "").toLowerCase().includes("no activity")
-);
                     return (
                       <section className="lobTrafficColumn" key={lob}>
                         <div className="lobTrafficHeader">
@@ -4612,50 +4482,29 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
                           <Badge>{liveLobEmployees.length} on floor / {lobEmployees.length} active</Badge>
                         </div>
 
-                        
+                        <div className="trafficGrid production compactFloor">
+                          {liveLobEmployees.map(({ employee, live }) => (
+                            <div
+                              className={`trafficCard ${live.type || "gray"}`}
+                              key={employee.id}
+                            >
+                              <span className="trafficDot" />
+                              <strong>{employee.full_name}</strong>
+                              <small>
+                                {employee.department} ·{" "}
+                                {employee.sub_department || "N/A"}
+                              </small>
+                              <b>{live.label || "Working"}</b>
+                              <em>{live.detail || ""}</em>
+                            </div>
+                          ))}
 
-                        <div className="trafficKpiBar">
-  <span>🚨 Alerts: {alerts.length}</span>
-  <span>🟢 Active: {active.length}</span>
-  <span>🟡 Break/Lunch/Bathroom: {away.length}</span>
-  <span>⚪ No Activity: {noActivity.length}</span>
-</div>
-
-{[
-  ["🚨 Alerts", alerts],
-  ["🟢 Active", active],
-  ["🟡 Break / Lunch / Bathroom", away],
-  ["⚪ No Activity", noActivity],
-]
-.filter(([title, list]) => list.length > 0)
-.map(([title, list]) => (
-  <details
-  className="trafficStatusGroup"
-  key={`${lob}-${title}`}
-  open={title === "⚪ No Activity"}
->
-    <summary className="trafficStatusHeader">
-      <strong>{title}</strong>
-      <span>{list.length}</span>
-    </summary>
-
-    {list.length ? (
-      <div className="trafficGrid production compactFloor">
-        {list.map(({ employee, live }) => (
-          <div className={`trafficCard ${live.type || "gray"}`} key={`${title}-${employee.id}`}>
-            <span className="trafficDot" />
-            <strong>{employee.full_name}</strong>
-            <small>{employee.department} · {employee.sub_department || "N/A"}</small>
-            <b>{live.label || "No Activity"}</b>
-            <em>{live.detail || ""}</em>
-          </div>
-        ))}
-      </div>
-    ) : (
-      <p className="muted">No agents in this category.</p>
-    )}
-  </details>
-))}
+                          {!liveLobEmployees.length && (
+                            <p className="muted">
+                              No agents currently on floor for this LOB. Off-day agents are hidden from this view.
+                            </p>
+                          )}
+                        </div>
                       </section>
                     );
                   })}
@@ -4716,20 +4565,19 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
             <Card title="Employee schedule management">
               <p className="helperText">Edit each employee’s assigned shift, break, lunch, second break, off days, LOB, department, and sub-department. Updates are reflected in the Agent Portal, reporting, payroll review, staffing rules, and Google Sheets when live sync is connected.</p>
               <Table
-                headers={["Employee", "Day", "LOB", "Department", "Sub-Department", "Off Days", "Today", "Shift Start", "Shift End", "Break 1", "Lunch", "Break 2", "Break Min", "Lunch Min"]}
-                rows={scheduleRows.map(({ employee: e, day, schedule }) => [
+                headers={["Employee", "LOB", "Department", "Sub-Department", "Off Days", "Today", "Shift Start", "Shift End", "Break 1", "Lunch", "Break 2", "Break Min", "Lunch Min"]}
+                rows={filteredVisibleEmployees.map((e) => [
                   <strong>{e.full_name}</strong>,
-                  day,
                   <select value={e.lob} onChange={(event) => updateEmployeeSchedule(e.id, "lob", event.target.value)}>{lobs.map((lob) => <option key={lob}>{lob}</option>)}</select>,
                   <select value={e.department} onChange={(event) => updateEmployeeSchedule(e.id, "department", event.target.value)}>{departments.map((department) => <option key={department}>{department}</option>)}</select>,
                   <select value={e.sub_department || ""} onChange={(event) => updateEmployeeSchedule(e.id, "sub_department", event.target.value)}>{subDepartments.map((subDepartment) => <option key={subDepartment}>{subDepartment}</option>)}</select>,
                   <input value={e.off_days || ""} onChange={(event) => updateEmployeeSchedule(e.id, "off_days", event.target.value)} placeholder="Saturday, Sunday" />,
                   <Badge danger={isTodayOffDay(e)} muted={!isTodayOffDay(e)}>{isTodayOffDay(e) ? "Off Today" : "Scheduled"}</Badge>,
-                  <input type="time" value={schedule.shift_start} disabled={!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")} onChange={(event) => updateEmployeeSchedule(e.id, "shift_start", event.target.value)} />,
-                  <input type="time" value={schedule.shift_end} disabled={!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")} onChange={(event) => updateEmployeeSchedule(e.id, "shift_end", event.target.value)} />,
-                  <div className="miniTimes"><input type="time" value={schedule.break_start} onChange={(event) => updateEmployeeSchedule(e.id, "break_start", event.target.value)} /><input type="time" value={schedule.break_end} onChange={(event) => updateEmployeeSchedule(e.id, "break_end", event.target.value)} /></div>,
-                  <div className="miniTimes"><input type="time" value={schedule.lunch_start} onChange={(event) => updateEmployeeSchedule(e.id, "lunch_start", event.target.value)} /><input type="time" value={schedule.lunch_end} onChange={(event) => updateEmployeeSchedule(e.id, "lunch_end", event.target.value)} /></div>,
-                  <div className="miniTimes"><input type="time" value={schedule.second_break_start} onChange={(event) => updateEmployeeSchedule(e.id, "second_break_start", event.target.value)} /><input type="time" value={schedule.second_break_end} onChange={(event) => updateEmployeeSchedule(e.id, "second_break_end", event.target.value)} /></div>,
+                  <input type="time" value={e.shift_start} disabled={!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")} onChange={(event) => updateEmployeeSchedule(e.id, "shift_start", event.target.value)} />,
+                  <input type="time" value={e.shift_end} disabled={!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")} onChange={(event) => updateEmployeeSchedule(e.id, "shift_end", event.target.value)} />,
+                  <div className="miniTimes"><input type="time" value={e.break_start} onChange={(event) => updateEmployeeSchedule(e.id, "break_start", event.target.value)} /><input type="time" value={e.break_end} onChange={(event) => updateEmployeeSchedule(e.id, "break_end", event.target.value)} /></div>,
+                  <div className="miniTimes"><input type="time" value={e.lunch_start} onChange={(event) => updateEmployeeSchedule(e.id, "lunch_start", event.target.value)} /><input type="time" value={e.lunch_end} onChange={(event) => updateEmployeeSchedule(e.id, "lunch_end", event.target.value)} /></div>,
+                  <div className="miniTimes"><input type="time" value={e.second_break_start} onChange={(event) => updateEmployeeSchedule(e.id, "second_break_start", event.target.value)} /><input type="time" value={e.second_break_end} onChange={(event) => updateEmployeeSchedule(e.id, "second_break_end", event.target.value)} /></div>,
                   `${e.break_minutes} min`,
                   `${e.lunch_minutes} min`,
                 ])}
@@ -5146,41 +4994,12 @@ function getAgentLiveStatus(agent, statusLogs = [], approvals = []) {
   const dateKey = getLocalDateKey(new Date());
   const nowMinutes = timeToMinutes(new Date().toTimeString().slice(0, 5));
 
-  const cleanKey = (value) =>
-  String(value || "").trim().toLowerCase();
-
-const agentIds = [
-  agent.id,
-  agent.employee_id,
-  agent.employeeId,
-  agent.employeeID
-].map(cleanKey).filter(Boolean);
-
-const agentName = cleanKey(agent.full_name || agent.name);
-const agentEmail = cleanKey(agent.email);
-
-const agentLogs = (statusLogs || [])
-  .filter((log) => {
-    const logDate = String(log.date || log.log_date || log.created_at || "").slice(0, 10);
-
-    const logIds = [
-      log.employee_id,
-      log.employeeId,
-      log.employeeID,
-      log.id
-    ].map(cleanKey).filter(Boolean);
-
-    const idMatch = logIds.some((id) => agentIds.includes(id));
-    const nameMatch = cleanKey(log.employee_name || log.full_name || log.name) === agentName;
-    const emailMatch = cleanKey(log.employee_email || log.email) === agentEmail;
-
-    return logDate === dateKey && (idMatch || nameMatch || emailMatch);
-  })
-  .sort((a, b) => {
-    const aStamp = `${a.date || ""} ${a.time || ""} ${a.created_at || ""}`;
-    const bStamp = `${b.date || ""} ${b.time || ""} ${b.created_at || ""}`;
-    return bStamp.localeCompare(aStamp);
-  });
+  const agentLogs = statusLogs
+    .filter((log) =>
+      String(log.employee_id || log.employeeId) === String(agent.employee_id || agent.id) &&
+      String(log.date || "").slice(0, 10) === dateKey
+    )
+    .sort((a, b) => String(b.time || "00:00").localeCompare(String(a.time || "00:00")));
 
   const approvedOverride = approvals.some((approval) =>
     String(approval.employee_id || approval.employeeId) === String(agent.employee_id || agent.id) &&
@@ -5189,66 +5008,19 @@ const agentLogs = (statusLogs || [])
     requestCoversDate(approval, dateKey)
   );
 
-  const latestStatus = agentLogs
-  .filter((log) => log.status || log.category || log.notes)
-  .sort((a, b) => {
-    const aStamp = `${a.date || ""} ${a.time || ""} ${a.created_at || ""}`;
-    const bStamp = `${b.date || ""} ${b.time || ""} ${b.created_at || ""}`;
-    return bStamp.localeCompare(aStamp);
-  })[0];
-
-
+  const latestStatus = agentLogs[0];
 
   if (!latestStatus && !approvedOverride) {
     return { label: "OFFLINE", type: "gray", detail: "No live activity logged today" };
   }
 
-const rawStatusText = [
-  latestStatus?.status,
-  latestStatus?.category,
-  latestStatus?.notes,
-  latestStatus?.disposition,
-  latestStatus?.description
-]
-  .filter(Boolean)
-  .join(" ")
-  .toUpperCase();
-
-let status = "Working";
-
-const statusOnly = String(latestStatus?.status || "").toUpperCase();
-const notesOnly = String(latestStatus?.notes || latestStatus?.disposition || latestStatus?.description || "").toUpperCase();
-
-const statusSource = `${statusOnly} ${notesOnly}`;
-
-if (statusSource.includes("LUNCH")) {
-  status = "Lunch";
-} else if (statusSource.includes("BREAK")) {
-  status = "Break";
-} else if (statusSource.includes("BATHROOM")) {
-  status = "Bathroom";
-} else if (statusSource.includes("MEETING")) {
-  status = "Meeting";
-} else if (statusSource.includes("TRAINING")) {
-  status = "Training";
-} else if (statusSource.includes("COACHING")) {
-  status = "Coaching";
-} else if (statusSource.includes("WORKING") || statusSource.includes("SHIFT STARTED")) {
-  status = "Working";
-} else if (statusOnly === "OVERTIME") {
-  status = "Working";
-}
+  const status = String(latestStatus?.status || "Working");
   const statusUpper = status.toUpperCase();
-  const latestStatusTime =
-  latestStatus?.time ||
-  String(latestStatus?.clock_in || "").slice(11, 16) ||
-  String(latestStatus?.created_at || "").slice(11, 16);
-
-const statusStart = timeToMinutes(latestStatusTime);
+  const statusStart = timeToMinutes(latestStatus?.time);
   const elapsed = nowMinutes !== null && statusStart !== null ? Math.max(0, nowMinutes - statusStart) : 0;
   const scheduledBreak = safeNumber(agent.break_minutes, 30);
   const scheduledLunch = safeNumber(agent.lunch_minutes, 60);
-  const bathroomLimit = 10;
+  const bathroomLimit = 30;
 
   if (statusUpper === "LUNCH" && elapsed > scheduledLunch) {
     return { label: "LUNCH ALERT", type: "red", detail: `${elapsed} min on lunch · limit ${scheduledLunch} min` };
@@ -5624,48 +5396,4 @@ button:disabled:hover { transform: none; box-shadow: none; }
 .lobTrafficColumn { border: 1px solid #dceee7; border-radius: 18px; padding: 12px; background: #fbfffd; min-height: 220px; }
 .lobTrafficColumn h3 { margin: 0 0 12px; color: #064a36; }
 .trafficGrid.compact { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
-.trafficGrid.compact {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-}
-
-.trafficKpiBar {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 10px 0 12px;
-}
-
-.trafficKpiBar span {
-  border: 1px solid #dceee7;
-  background: #f8fffc;
-  border-radius: 999px;
-  padding: 6px 10px;
-  font-weight: 900;
-  font-size: 12px;
-  color: #064a36;
-}
-
-.trafficStatusGroup {
-  margin-top: 10px;
-  border: 1px solid #dceee7;
-  border-radius: 14px;
-  padding: 10px;
-  background: #fbfffd;
-}
-
-.trafficStatusHeader {
-  cursor: pointer;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  color: #064a36;
-  font-size: 13px;
-}
-
-.trafficStatusHeader span {
-  background: #e6fff2;
-  border-radius: 999px;
-  padding: 3px 9px;
-  font-weight: 900;
-
 `;
