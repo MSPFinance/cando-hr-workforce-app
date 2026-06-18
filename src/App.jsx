@@ -1273,6 +1273,35 @@ function formatOffDays(value) {
   return days.length ? days.join(", ") : "None assigned";
 }
 
+function convertESTToEmployeeLocal(timeValue, employee) {
+  const formatted = formatMilitaryTime(timeValue);
+
+  if (!formatted || formatted === "Not Available") {
+    return formatted;
+  }
+
+  const country = String(employee?.country || "")
+    .trim()
+    .toUpperCase();
+
+  // CR and MX operate one hour behind EST
+  if (country !== "CR" && country !== "MX") {
+    return formatted;
+  }
+
+  const [h, m] = formatted.split(":").map(Number);
+
+  let total = h * 60 + m - 60;
+
+  while (total < 0) total += 1440;
+  total %= 1440;
+
+  const hh = String(Math.floor(total / 60)).padStart(2, "0");
+  const mm = String(total % 60).padStart(2, "0");
+
+  return `${hh}:${mm}`;
+}
+
 function getStableSchedule(employee, schedules = [], dayName = todayDayName()) {
   const normalizedDay = normalizeDayName(dayName);
   const dayBreaks = employee?.breaks_by_day?.[normalizedDay] || {};
@@ -1283,17 +1312,21 @@ function getStableSchedule(employee, schedules = [], dayName = todayDayName()) {
   };
 
   return {
-    shift_start: formatMilitaryTime(employee?.shift_start || "08:00"),
-    shift_end: formatMilitaryTime(employee?.shift_end || "17:00"),
-    break_start: valueOrDefault(dayBreaks.first_break_start, employee?.break_start || "Not Available"),
-    break_end: valueOrDefault(dayBreaks.first_break_end, employee?.break_end || "Not Available"),
-    lunch_start: valueOrDefault(dayBreaks.second_break_start, employee?.lunch_start || "Not Available"),
-    lunch_end: valueOrDefault(dayBreaks.second_break_end, employee?.lunch_end || "Not Available"),
-    second_break_start: valueOrDefault(dayBreaks.third_break_start, employee?.second_break_start || "Not Available"),
-    second_break_end: valueOrDefault(dayBreaks.third_break_end, employee?.second_break_end || "Not Available"),
-    off_days: employee?.off_days || "",
-    sub_department: employee?.sub_department || "",
-  };
+  shift_start: convertESTToEmployeeLocal(employee?.shift_start || "08:00", employee),
+  shift_end: convertESTToEmployeeLocal(employee?.shift_end || "17:00", employee),
+
+  break_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.first_break_start, employee?.break_start || "Not Available"), employee),
+  break_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.first_break_end, employee?.break_end || "Not Available"), employee),
+
+  lunch_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.second_break_start, employee?.lunch_start || "Not Available"), employee),
+  lunch_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.second_break_end, employee?.lunch_end || "Not Available"), employee),
+
+  second_break_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.third_break_start, employee?.second_break_start || "Not Available"), employee),
+  second_break_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.third_break_end, employee?.second_break_end || "Not Available"), employee),
+
+  off_days: employee?.off_days || "",
+  sub_department: employee?.sub_department || "",
+};
 }
 
 function getScheduleChangePayload(request) {
@@ -1374,19 +1407,31 @@ function getShiftStartOrNow(employee, time) {
 }
 
 function getTodayShiftSummary(employee) {
-  if (!employee) return { isOff: false, label: "No schedule", detail: "No employee selected." };
-  const schedule = getStableSchedule(employee);
+  if (!employee) {
+    return {
+      isOff: false,
+      label: "No schedule",
+      detail: "No employee selected."
+    };
+  }
+
+  const schedule = getStableSchedule(employee, [], todayDayName());
+
   if (isTodayOffDay(employee)) {
     return {
       isOff: true,
       label: `OFF · ${todayDayName()}`,
-      detail: `Assigned off days: ${formatOffDays(schedule.off_days)}`,
+      detail: `Assigned off days: ${formatOffDays(schedule.off_days)}`
     };
   }
+
   return {
     isOff: false,
     label: formatTimeRange(schedule.shift_start, schedule.shift_end),
-    detail: `Break 1: ${formatTimeRange(schedule.break_start, schedule.break_end)} · Lunch: ${formatTimeRange(schedule.lunch_start, schedule.lunch_end)} · Break 2: ${formatTimeRange(schedule.second_break_start, schedule.second_break_end)} · Off days: ${formatOffDays(schedule.off_days)}`,
+    detail:
+      `Break 1: ${formatTimeRange(schedule.break_start, schedule.break_end)} · ` +
+      `Lunch: ${formatTimeRange(schedule.lunch_start, schedule.lunch_end)} · ` +
+      `Break 2: ${formatTimeRange(schedule.second_break_start, schedule.second_break_end)}`
   };
 }
 
@@ -4632,7 +4677,7 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
   <details
   className="trafficStatusGroup"
   key={`${lob}-${title}`}
-  open={title === "⚪ No Activity"}
+  open={title === "Alerts" ? list.length > 0 : title === "No Activity"}
 >
     <summary className="trafficStatusHeader">
       <strong>{title}</strong>
@@ -5245,17 +5290,39 @@ if (statusSource.includes("LUNCH")) {
   String(latestStatus?.created_at || "").slice(11, 16);
 
 const statusStart = timeToMinutes(latestStatusTime);
-  const elapsed = nowMinutes !== null && statusStart !== null ? Math.max(0, nowMinutes - statusStart) : 0;
-  const scheduledBreak = safeNumber(agent.break_minutes, 30);
-  const scheduledLunch = safeNumber(agent.lunch_minutes, 60);
-  const bathroomLimit = 10;
+const elapsed = nowMinutes !== null && statusStart !== null
+  ? Math.max(0, nowMinutes - statusStart)
+  : 0;
 
-  if (statusUpper === "LUNCH" && elapsed > scheduledLunch) {
-    return { label: "LUNCH ALERT", type: "red", detail: `${elapsed} min on lunch · limit ${scheduledLunch} min` };
+const scheduleForToday = getStableSchedule(agent, [], todayDayName());
+
+const firstBreakMinutes = minutesBetween(scheduleForToday.break_start, scheduleForToday.break_end);
+const secondBreakMinutes = minutesBetween(scheduleForToday.second_break_start, scheduleForToday.second_break_end);
+
+const scheduledBreak =
+  statusUpper === "BREAK"
+    ? Math.max(firstBreakMinutes, secondBreakMinutes, safeNumber(agent.break_minutes, 30))
+    : firstBreakMinutes + secondBreakMinutes;
+
+const scheduledLunch =
+  minutesBetween(scheduleForToday.lunch_start, scheduleForToday.lunch_end);
+
+const breakLimit = scheduledBreak > 0
+  ? scheduledBreak
+  : safeNumber(agent.break_minutes, 30);
+
+const lunchLimit = scheduledLunch > 0
+  ? scheduledLunch
+  : safeNumber(agent.lunch_minutes, 60);
+
+const bathroomLimit = 10;
+
+  if (statusUpper === "LUNCH" && elapsed > lunchLimit) {
+    return { label: "LUNCH ALERT", type: "red", detail: `${elapsed} min on lunch · limit ${lunchLimit} min` };
   }
 
-  if (statusUpper === "BREAK" && elapsed > scheduledBreak) {
-    return { label: "BREAK ALERT", type: "red", detail: `${elapsed} min on break · limit ${scheduledBreak} min` };
+  if (statusUpper === "BREAK" && elapsed > breakLimit) {
+    return { label: "BREAK ALERT", type: "red", detail: `${elapsed} min on break · limit ${breakLimit} min` };
   }
 
   if (statusUpper === "BATHROOM" && elapsed > bathroomLimit) {
