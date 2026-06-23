@@ -1381,17 +1381,17 @@ function getStableSchedule(employee, schedules = [], dayName = todayDayName()) {
   const dayBreaks = breaksByDay[normalizedDay] || {};
 
   return {
-    shift_start: convertESTToEmployeeLocal(employee?.shift_start || "Not Available", employee),
-    shift_end: convertESTToEmployeeLocal(employee?.shift_end || "Not Available", employee),
+    shift_start: employee?.shift_start || "Not Available",
+    shift_end: employee?.shift_end || "Not Available",
 
-    break_start: convertESTToEmployeeLocal(dayBreaks.first_break_start || "Not Available", employee),
-    break_end: convertESTToEmployeeLocal(dayBreaks.first_break_end || "Not Available", employee),
+    break_start: dayBreaks.first_break_start || "Not Available",
+    break_end: dayBreaks.first_break_end || "Not Available",
 
-    lunch_start: convertESTToEmployeeLocal(dayBreaks.lunch_start || "Not Available", employee),
-    lunch_end: convertESTToEmployeeLocal(dayBreaks.lunch_end || "Not Available", employee),
+    lunch_start: dayBreaks.lunch_start || "Not Available",
+    lunch_end: dayBreaks.lunch_end || "Not Available",
 
-    second_break_start: convertESTToEmployeeLocal(dayBreaks.second_break_start || "Not Available", employee),
-    second_break_end: convertESTToEmployeeLocal(dayBreaks.second_break_end || "Not Available", employee),
+    second_break_start: dayBreaks.second_break_start || "Not Available",
+    second_break_end: dayBreaks.second_break_end || "Not Available",
 
     off_days: employee?.off_days || "",
     sub_department: employee?.sub_department || "",
