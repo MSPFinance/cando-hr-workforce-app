@@ -1421,8 +1421,9 @@ function getAutoWorkClassification(employee, currentTime) {
   }
 
   const nowMinutes = timeToMinutes(currentTime);
-  const shiftStart = timeToMinutes(employee.shift_start);
-  const shiftEnd = timeToMinutes(employee.shift_end);
+  const schedule = getStableSchedule(employee);
+const shiftStart = timeToMinutes(schedule.shift_start);
+const shiftEnd = timeToMinutes(schedule.shift_end);
 
   if (isTodayOffDay(employee)) {
     return {
