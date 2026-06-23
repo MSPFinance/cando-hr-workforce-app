@@ -938,15 +938,23 @@ async function fetchWorkforceSheetRows() {
 }
 
 function mapBreaksSyncRow(row) {
-  const employeeId = String(firstValue(row, ["ID", "Employee_ID", "Employee ID"]) || "").trim();
+  const employeeId = String(firstValue(row, ["ID", "Employee_ID", "Employee ID", "F"]) || "").trim();
   const fullName = String(firstValue(row, ["Name", "Employee", "Employee Name", "Full Name"]) || "").trim();
   const day = normalizeDayName(firstValue(row, ["Day"]));
 
   if ((!employeeId && !fullName) || !day) return null;
 
-  const firstBreak = splitTimeRange(firstValue(row, ["First Break"]));
-  const secondBreak = splitTimeRange(firstValue(row, ["Second Break"]));
-  const thirdBreak = splitTimeRange(firstValue(row, ["Third Break"]));
+  const firstBreak = splitTimeRange(
+  firstValue(row, ["First Break", "Break 1", "First Break Start", "C"])
+);
+
+const secondBreak = splitTimeRange(
+  firstValue(row, ["Second Break", "Lunch", "Lunch Break", "Break 2", "D"])
+);
+
+const thirdBreak = splitTimeRange(
+  firstValue(row, ["Third Break", "Break 3", "Second Break", "E"])
+);
   const unavailable = "Not Available";
 
   return {
