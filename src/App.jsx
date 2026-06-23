@@ -973,18 +973,23 @@ const thirdBreak = splitTimeRange(
     employeeId,
     fullName,
     sourceEmail: "",
-    payload: {
-      breaks_by_day: {
-        [day]: {
-          first_break_start: firstBreak.start ? formatMilitaryTime(firstBreak.start) : unavailable,
-          first_break_end: firstBreak.end ? formatMilitaryTime(firstBreak.end) : unavailable,
-          lunch_start: secondBreak.start ? formatMilitaryTime(secondBreak.start) : unavailable,
-          lunch_end: secondBreak.end ? formatMilitaryTime(secondBreak.end) : unavailable,
-          second_break_start: thirdBreak.start ? formatMilitaryTime(thirdBreak.start) : unavailable,
-          second_break_end: thirdBreak.end ? formatMilitaryTime(thirdBreak.end) : unavailable,
-        },
-      },
+ payload: {
+  breaks_by_day: {
+    [day]: {
+      first_break_start: firstBreak.start ? formatMilitaryTime(firstBreak.start) : unavailable,
+      first_break_end: firstBreak.end ? formatMilitaryTime(firstBreak.end) : unavailable,
+
+      lunch_start: unavailable,
+      lunch_end: unavailable,
+
+      second_break_start: secondBreak.start ? formatMilitaryTime(secondBreak.start) : unavailable,
+      second_break_end: secondBreak.end ? formatMilitaryTime(secondBreak.end) : unavailable,
+
+      third_break_start: thirdBreak.start ? formatMilitaryTime(thirdBreak.start) : unavailable,
+      third_break_end: thirdBreak.end ? formatMilitaryTime(thirdBreak.end) : unavailable,
     },
+  },
+},
   };
 }
 
