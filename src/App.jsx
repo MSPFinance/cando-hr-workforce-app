@@ -938,22 +938,34 @@ async function fetchWorkforceSheetRows() {
 }
 
 function mapBreaksSyncRow(row) {
-  const employeeId = String(firstValue(row, ["ID", "Employee_ID", "Employee ID", "F"]) || "").trim();
-  const fullName = String(firstValue(row, ["Name", "Employee", "Employee Name", "Full Name"]) || "").trim();
-  const day = normalizeDayName(firstValue(row, ["Day"]));
+  const employeeId = String(
+  firstValue(row, ["ID", "Employee_ID", "Employee ID", "Employee Id", "employee_id", "F"])
+  || row.F
+  || row[5]
+  || ""
+).trim();
 
-  if ((!employeeId && !fullName) || !day) return null;
+const fullName = String(
+  firstValue(row, ["Name", "Employee", "Employee Name", "Full Name", "A"])
+  || row.A
+  || row[0]
+  || ""
+).trim();
 
-  const firstBreak = splitTimeRange(
-  firstValue(row, ["First Break", "Break 1", "First Break Start", "C"])
+const day = normalizeDayName(
+  firstValue(row, ["Day", "B"]) || row.B || row[1]
+);
+
+const firstBreak = splitTimeRange(
+  firstValue(row, ["First Break", "Break 1", "C"]) || row.C || row[2]
 );
 
 const secondBreak = splitTimeRange(
-  firstValue(row, ["Second Break", "Lunch", "Lunch Break", "Break 2", "D"])
+  firstValue(row, ["Second Break", "Lunch", "Lunch Break", "Break 2", "D"]) || row.D || row[3]
 );
 
 const thirdBreak = splitTimeRange(
-  firstValue(row, ["Third Break", "Break 3", "Second Break", "E"])
+  firstValue(row, ["Third Break", "Break 3", "E"]) || row.E || row[4]
 );
   const unavailable = "Not Available";
 
@@ -3579,6 +3591,47 @@ const resolvedStatus =
 
     const key = `agent-action-${selectedEmployee.id}-${action}-${resolvedStatus}-${time}`;
     return runProtectedAction(key, action, async () => {
+      const openLog = timeEntries.find(
+  (entry) =>
+    String(entry.employee_id) === String(selectedEmployee.id) &&
+    !entry.clock_out
+);
+
+if (openLog) {
+  const clockOut = now.toISOString();
+  const clockIn = new Date(openLog.clock_in || openLog.category_start);
+  const durationMinutes = Math.max(
+    0,
+    Math.round((new Date(clockOut) - clockIn) / 60000)
+  );
+
+  const closedLog = {
+    ...openLog,
+    clock_out: clockOut,
+    category_end: time,
+    duration_minutes: durationMinutes,
+  };
+
+  setTimeEntries((current) =>
+    current.map((entry) => (entry.id === openLog.id ? closedLog : entry))
+  );
+
+  if (supabase) {
+    await supabase
+      .from("time_logs")
+      .update({
+        clock_out: clockOut,
+        duration_minutes: durationMinutes,
+      })
+      .eq("id", openLog.id);
+  }
+
+  try {
+    await googleAddRow("Time_Logs", mapTimeLogToSheet(closedLog));
+  } catch (error) {
+    console.warn("Google Sheet close log update skipped:", error);
+  }
+}
       const duplicate = timeEntries.some(
         (entry) =>
           entry.employee_id === selectedEmployee.id &&
