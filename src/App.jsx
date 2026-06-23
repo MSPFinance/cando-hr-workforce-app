@@ -103,7 +103,7 @@ const DEFAULT_LOGIN_EMAIL = "agent1@goday.ca";
 const DEFAULT_LOGIN_PASSWORD = "Welcome2026!";
 const ADMIN_ACCESS_LEVELS = ["TL", "Team Lead", "Supervisor", "Manager", "Approvals", "Reporting", "HR", "Payroll", "Admin", "Executive"];
 const OT_REQUESTS_ENABLED = false;
-const EARLY_SHIFT_START_GRACE_MINUTES = 5;
+const EARLY_SHIFT_START_GRACE_MINUTES = 10;
 const REQUEST_TYPE_OPTIONS = ["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave"];
 
 const ROLE_PROFILE_OPTIONS = ["Employee", "TL", "Manager", "Approvals", "Reporting", "HR", "Payroll", "Admin", "Executive"];
