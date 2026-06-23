@@ -1045,6 +1045,44 @@ async function fetchBalanceSheetRows() {
   return [];
 }
 
+function buildEmployeeBreakRowsForSupabase(employeesList = []) {
+  const rows = [];
+
+  const cleanBreakTime = (value) => {
+  if (!value || value === "Not Available" || value === "00:00" || value === "00:00:00") {
+    return null;
+  }
+  return String(value).trim();
+};
+
+  employeesList.forEach((employee) => {
+    const breaksByDay = employee.breaks_by_day || {};
+
+    WEEK_DAYS.forEach((day) => {
+      const dayBreaks = breaksByDay[day] || {};
+
+      rows.push({
+        employee_id: String(employee.id || employee.employee_id || ""),
+        employee_name: employee.full_name || "",
+        day_name: day,
+
+        first_break_start: cleanBreakTime(dayBreaks.first_break_start),
+first_break_end: cleanBreakTime(dayBreaks.first_break_end),
+
+lunch_start: cleanBreakTime(dayBreaks.second_break_start),
+lunch_end: cleanBreakTime(dayBreaks.second_break_end),
+
+second_break_start: cleanBreakTime(dayBreaks.third_break_start),
+second_break_end: cleanBreakTime(dayBreaks.third_break_end),
+
+        source: "Google Sheet bBreaks Tab",
+        updated_at: new Date().toISOString(),
+      });
+    });
+  });
+
+  return rows.filter((row) => row.employee_id);
+}
 
 function mergeWorkforceRowsIntoEmployees(currentEmployees, workforceRows, options = {}) {
   const { importMissing = true } = options;
@@ -1191,8 +1229,10 @@ function mergeBreakRowsIntoEmployees(currentEmployees, breakRows) {
       const key = normalizeIdKey(row.employeeId);
       byId.set(key, [...(byId.get(key) || []), row]);
     }
-    if (row.fullName) {
-      const key = normalizeNameKey(row.fullName);
+    const rowName = row.fullName || row.employee_name || row.name;
+
+if (rowName) {
+      const key = normalizeNameKey(rowName);
       byName.set(key, [...(byName.get(key) || []), row]);
     }
   });
@@ -1284,10 +1324,18 @@ function convertESTToEmployeeLocal(timeValue, employee) {
     .trim()
     .toUpperCase();
 
-  // CR and MX operate one hour behind EST
-  if (country !== "CR" && country !== "MX") {
-    return formatted;
-  }
+// CR and MX operate one hour behind EST.
+// Accept both country codes and full country names from Google Sheets/Supabase.
+const countriesOneHourBehindEST = [
+  "CR",
+  "COSTA RICA",
+  "MX",
+  "MEXICO",
+];
+
+if (!countriesOneHourBehindEST.includes(country)) {
+  return formatted;
+}
 
   const [h, m] = formatted.split(":").map(Number);
 
@@ -1304,7 +1352,13 @@ function convertESTToEmployeeLocal(timeValue, employee) {
 
 function getStableSchedule(employee, schedules = [], dayName = todayDayName()) {
   const normalizedDay = normalizeDayName(dayName);
-  const dayBreaks = employee?.breaks_by_day?.[normalizedDay] || {};
+  const breaksByDay = employee?.breaks_by_day || {};
+
+  const dayBreaks =
+    breaksByDay[normalizedDay] ||
+    breaksByDay[dayName] ||
+    breaksByDay[String(dayName || "").trim()] ||
+    {};
 
   const valueOrDefault = (value, defaultValue = "Not Available") => {
     if (value === null || value === undefined || value === "") return defaultValue;
@@ -1315,14 +1369,14 @@ function getStableSchedule(employee, schedules = [], dayName = todayDayName()) {
   shift_start: convertESTToEmployeeLocal(employee?.shift_start || "08:00", employee),
   shift_end: convertESTToEmployeeLocal(employee?.shift_end || "17:00", employee),
 
-  break_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.first_break_start, employee?.break_start || "Not Available"), employee),
-  break_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.first_break_end, employee?.break_end || "Not Available"), employee),
+ break_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.first_break_start), employee),
+break_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.first_break_end), employee),
 
-  lunch_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.second_break_start, employee?.lunch_start || "Not Available"), employee),
-  lunch_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.second_break_end, employee?.lunch_end || "Not Available"), employee),
+lunch_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.lunch_start), employee),
+lunch_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.lunch_end), employee),
 
-  second_break_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.third_break_start, employee?.second_break_start || "Not Available"), employee),
-  second_break_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.third_break_end, employee?.second_break_end || "Not Available"), employee),
+second_break_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.second_break_start), employee),
+second_break_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.second_break_end), employee),
 
   off_days: employee?.off_days || "",
   sub_department: employee?.sub_department || "",
@@ -1429,9 +1483,9 @@ function getTodayShiftSummary(employee) {
     isOff: false,
     label: formatTimeRange(schedule.shift_start, schedule.shift_end),
     detail:
-      `Break 1: ${formatTimeRange(schedule.break_start, schedule.break_end)} · ` +
-      `Lunch: ${formatTimeRange(schedule.lunch_start, schedule.lunch_end)} · ` +
-      `Break 2: ${formatTimeRange(schedule.second_break_start, schedule.second_break_end)}`
+  `Break 1: ${formatTimeRange(schedule.break_start, schedule.break_end)} · ` +
+  `Lunch: ${formatTimeRange(schedule.lunch_start, schedule.lunch_end)} · ` +
+  `Break 2: ${formatTimeRange(schedule.second_break_start, schedule.second_break_end)}`
   };
 }
 
@@ -2306,7 +2360,7 @@ function ManagerOverrideModal({ title, message, onCancel, onConfirm }) {
 }
 
 function HRWorkforceApp() {
-  const [employees, setEmployees] = useState(employeesSeed);
+  const [employees, setEmployees] = useState([]);
   const [timeEntries, setTimeEntries] = useState(timeSeed);
   const [requests, setRequests] = useState(requestsSeed);
   const [activityLog, setActivityLog] = useState(activitySeed);
@@ -2387,7 +2441,9 @@ function HRWorkforceApp() {
   const overrideResolverRef = useRef(null);
   const dailyTimerStopRef = useRef("");
   const weeklyWorkforceSyncRef = useRef(localStorage.getItem(WORKFORCE_SYNC_LAST_RUN_KEY) || "");
+  const liveAutoSyncRef = useRef(false);
   const attendanceEmailQueueRef = useRef(new Set());
+  const [startupLoading, setStartupLoading] = useState(true);
 
 
   async function syncWorkforcePlanningSheet(options = {}) {
@@ -2415,12 +2471,82 @@ function HRWorkforceApp() {
       let breakResult = { employees, updatedCount: 0, missingCount: 0 };
       let balanceResult = { employees, updatedCount: 0, missingCount: 0 };
 
-      setEmployees((current) => {
-        rosterResult = mergeWorkforceRowsIntoEmployees(current, workforceRows, { importMissing: true });
-        breakResult = mergeBreakRowsIntoEmployees(rosterResult.employees, breakRows);
-        balanceResult = mergeBalanceRowsIntoEmployees(breakResult.employees, balanceRows);
-        return balanceResult.employees;
-      });
+      let finalSyncedEmployees = [];
+
+rosterResult = mergeWorkforceRowsIntoEmployees(employees, workforceRows, { importMissing: true });
+breakResult = mergeBreakRowsIntoEmployees(rosterResult.employees, breakRows);
+balanceResult = mergeBalanceRowsIntoEmployees(breakResult.employees, balanceRows);
+
+finalSyncedEmployees = balanceResult.employees;
+setEmployees(finalSyncedEmployees);
+if (supabase && finalSyncedEmployees.length) {
+  const employeesForBreakSync =
+  finalSyncedEmployees.length ? finalSyncedEmployees : breakResult.employees;
+
+const breakRowsForSupabase =
+  buildEmployeeBreakRowsForSupabase(employeesForBreakSync);
+
+console.log(
+  "Break rows prepared for Supabase:",
+  breakRowsForSupabase.length,
+  breakRowsForSupabase.slice(0, 5)
+);
+
+
+  console.log(
+  "Break rows prepared for Supabase:",
+  breakRowsForSupabase.length,
+  breakRowsForSupabase.slice(0,5)
+);
+
+console.log("Break rows ready before upsert:", breakRowsForSupabase.length);
+console.log("SUPABASE READY?", !!supabase);
+console.log("BREAK ROWS READY?", breakRowsForSupabase.length);
+console.log("FIRST BREAK ROW:", breakRowsForSupabase[0]);
+
+const uniqueBreakRowsForSupabase = Array.from(
+  new Map(
+    breakRowsForSupabase.map((row) => [
+      `${row.employee_id}-${row.day_name}`,
+      row
+    ])
+  ).values()
+);
+
+console.log(
+  "Unique break rows ready before upsert:",
+  uniqueBreakRowsForSupabase.length
+);
+
+  if (breakRowsForSupabase.length) {
+    
+    const { data: breakUpsertData, error: breakUpsertError } = await supabase
+  .from("employee_breaks")
+  .upsert(uniqueBreakRowsForSupabase, {
+    onConflict: "employee_id,day_name",
+  })
+  .select();
+
+console.log("Employee breaks upsert result:", {
+  count: breakUpsertData?.length || 0,
+  error: breakUpsertError,
+});
+
+if (typeof refreshLiveData === "function") {
+  await refreshLiveData();
+}
+
+    if (breakUpsertError) {
+      console.warn("Employee breaks Supabase sync failed:", breakUpsertError.message);
+    }
+  }
+
+  try {
+  console.log("Employee sync timestamp update skipped for pilot stability.");
+} catch (error) {
+  console.warn("Employee sync timestamp update skipped:", error);
+}
+}
 
       const syncDate = getLocalDateKey(new Date());
       const syncedAt = new Date().toLocaleString();
@@ -2452,6 +2578,9 @@ function HRWorkforceApp() {
           "success"
         );
       }
+if (finalSyncedEmployees?.length) {
+  setEmployees(finalSyncedEmployees);
+}
 
       return syncResult;
     } catch (error) {
@@ -2587,15 +2716,28 @@ function HRWorkforceApp() {
   const canAccessAdmin = hasAdminAccess(currentUser);
   const isAuthenticated = Boolean(sessionUserEmail && currentUser);
   const isAgentOnly = !canAccessAdmin;
-  const [selectedEmployeeId, setSelectedEmployeeId] = useState(currentUser.id);
-  const selectedEmployee = isAgentOnly ? currentUser : employees.find((e) => e.id === selectedEmployeeId) || currentUser;
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState(currentUser?.id || "");
+const selectedEmployee = isAgentOnly
+  ? currentUser
+  : employees.find((e) => e.id === selectedEmployeeId) || currentUser || null;
 
-  const visibleEmployees = isAgentOnly ? [currentUser] : employees;
-  const visibleTime = isAgentOnly ? timeEntries.filter((t) => t.employee_id === currentUser.id) : timeEntries;
-  const visibleRequests = isAgentOnly ? requests.filter((r) => r.employee_id === currentUser.id) : requests;
-  const visibleActivity = isAgentOnly ? activityLog.filter((a) => a.employee_id === currentUser.id) : activityLog;
+  const visibleEmployees = isAgentOnly && currentUser
+  ? [currentUser]
+  : employees.filter(Boolean);
+ const visibleTime = isAgentOnly && currentUser?.id
+  ? timeEntries.filter((t) => t.employee_id === currentUser.id)
+  : timeEntries;
+
+const visibleRequests = isAgentOnly && currentUser?.id
+  ? requests.filter((r) => r.employee_id === currentUser.id)
+  : requests;
+
+const visibleActivity = isAgentOnly && currentUser?.id
+  ? activityLog.filter((a) => a.employee_id === currentUser.id)
+  : activityLog;
 
   const filteredVisibleEmployees = visibleEmployees.filter((employee) => {
+  if (!employee) return false;
     return (
       (filters.lob === "All" || employee.lob === filters.lob) &&
       (filters.department === "All" || employee.department === filters.department) &&
@@ -2627,7 +2769,7 @@ const scheduleRows =
     setDatabaseStatus
   );
 
-if (supabase) {
+  if (supabase) {
   const { data: latestLogs, error: logsError } = await supabase
     .from("time_logs")
     .select("*");
@@ -2664,8 +2806,49 @@ if (supabase) {
     return;
   }
 
-  await syncWorkforcePlanningSheet({ silent: false, automatic: false });
+ 
 }
+
+useEffect(() => {
+  if (!supabase || !isAuthenticated || isAgentOnly) {
+    setStartupLoading(false);
+    return;
+  }
+
+  let cancelled = false;
+
+  const runLiveStartupSync = async () => {
+    if (liveAutoSyncRef.current) return;
+    liveAutoSyncRef.current = true;
+
+    try {
+      setStartupLoading(true);
+
+      await syncWorkforcePlanningSheet({
+        silent: true,
+        automatic: true,
+      });
+
+      if (!cancelled) {
+        await refreshLiveData();
+        console.log("Live startup sync completed and data refreshed.");
+      }
+    } catch (error) {
+      console.warn("Live startup sync failed:", error);
+    } finally {
+      if (!cancelled) {
+        setStartupLoading(false);
+      }
+    }
+  };
+
+  runLiveStartupSync();
+
+  return () => {
+    cancelled = true;
+  };
+}, [supabase, isAuthenticated, isAgentOnly]);
+
 useEffect(() => {
   if (!supabase) return undefined;
 
@@ -2699,42 +2882,55 @@ useEffect(() => {
   return () => {
     supabase.removeChannel(channel);
   };
-}, []);
-useEffect(() => {
-  if (!supabase) return undefined;
+  }, []);
+  
+  useEffect(() => {
+  if (!supabase || isAgentOnly) return undefined;
 
-  const reloadLiveLogsOnly = async () => {
-    const { data: latestLogs, error } = await supabase
-      .from("time_logs")
-      .select("*");
+  const runInitialScheduleSync = async () => {
+    const todayKey = getLocalDateKey(new Date());
+    const lastSync = localStorage.getItem("MAGNEMITE_SCHEDULE_SYNC_DATE");
 
-    if (!error) {
-      setTimeEntries(
-        (latestLogs || []).sort((a, b) => {
-          const aStamp = `${a.date || ""} ${a.time || ""} ${a.created_at || ""}`;
-          const bStamp = `${b.date || ""} ${b.time || ""} ${b.created_at || ""}`;
-          return bStamp.localeCompare(aStamp);
-        })
-      );
-    } else {
-      console.warn("5-second time_logs refresh failed:", error);
-    }
+    if (lastSync === todayKey) return;
+
+    localStorage.setItem("MAGNEMITE_SCHEDULE_SYNC_DATE", todayKey);
+
+    await syncWorkforcePlanningSheet({
+  silent: false,
+  automatic: false,
+  importMissing: true,
+});
   };
 
-  reloadLiveLogsOnly();
-  const intervalId = window.setInterval(reloadLiveLogsOnly, 5000);
+  runInitialScheduleSync();
 
-  return () => {
-    window.clearInterval(intervalId);
-  };
-}, []);
+  return undefined;
+}, [supabase, isAgentOnly]);
+
   function resetFilters() {
     setFilters({ lob: "All", department: "All", subDepartment: "All", employee: "All", country: "All", category: "All", startDate: "", endDate: "" });
   }
 
   useEffect(() => {
-    if (!isAuthenticated || isAgentOnly) return undefined;
+    if (!isAuthenticated || isAgentOnly || startupLoading || !employees.length) return;
+  const initialRosterSync = async () => {
+    const todayKey = getLocalDateKey(new Date());
+    const lastInitialSync = localStorage.getItem("MAGNEMITE_INITIAL_ROSTER_SYNC");
 
+    if (lastInitialSync === todayKey) {
+  console.log("Daily sync already ran, refreshing current synced employee state.");
+}
+
+    await syncWorkforcePlanningSheet({
+      silent: true,
+      automatic: true
+});
+
+    localStorage.setItem("MAGNEMITE_INITIAL_ROSTER_SYNC", todayKey);
+    setEmployees((current) => [...current]);
+  };
+
+  initialRosterSync();
     const checkWeeklySync = () => {
       const now = new Date();
       if (!isWeeklyWorkforceSyncWindow(now)) return;
@@ -2742,7 +2938,7 @@ useEffect(() => {
       const todayKey = getLocalDateKey(now);
       const lastStoredSync = localStorage.getItem(WORKFORCE_SYNC_LAST_RUN_KEY);
 
-      if (lastStoredSync === todayKey || weeklyWorkforceSyncRef.current === todayKey) return;
+      // Always run on page load so refreshed browser shows the latest schedule
 
       weeklyWorkforceSyncRef.current = todayKey;
       syncWorkforcePlanningSheet({ silent: true, automatic: true });
@@ -2751,7 +2947,7 @@ useEffect(() => {
     checkWeeklySync();
     const interval = window.setInterval(checkWeeklySync, 60000);
     return () => window.clearInterval(interval);
-  }, [isAuthenticated, isAgentOnly]);
+  }, [isAuthenticated, isAgentOnly, startupLoading, employees.length]);
 
   const lobOptions = ["All", ...new Set([...lobs, ...visibleEmployees.map((e) => e.lob).filter(Boolean)])];
   const departmentOptions = ["All", ...new Set([...departments, ...visibleEmployees.map((e) => e.department).filter(Boolean)])];
@@ -3288,6 +3484,12 @@ User can now log into the Agent Portal.`
       return null;
     }
 
+  // Prevent crash if no employee is selected yet
+  if (!selectedEmployee?.id) {
+    console.warn("No selected employee. Agent action stopped.");
+    return;
+  }
+
     const now = new Date();
     const time = now.toTimeString().slice(0, 5);
     const schedule = getStableSchedule(selectedEmployee);
@@ -3298,7 +3500,7 @@ User can now log into the Agent Portal.`
       ["Shift Started", "Status Changed"].includes(action) &&
       ["Off-Day Unscheduled", "Early Unscheduled"].includes(autoClass.category) &&
       !requests.some((request) =>
-  String(request.employee_id) === String(selectedEmployee.id) &&
+  String(request.employee_id) === String(selectedEmployee?.id) &&
   request.type === "Schedule Override" &&
   request.status === "Approved" &&
   String(request.requested_at || request.date || request.created_at || "").slice(0, 10) === today
@@ -3309,7 +3511,7 @@ User can now log into the Agent Portal.`
           ? "Attempted login on scheduled off day"
           : "Attempted login before scheduled shift start";
 
-      if (!hasPendingScheduleOverride(requests, selectedEmployee.id)) {
+      if (!hasPendingScheduleOverride(requests, selectedEmployee?.id)) {
         const overrideRequest = buildScheduleOverrideRequest(selectedEmployee, reason);
         setRequests((current) => [overrideRequest, ...current]);
 
@@ -3341,7 +3543,7 @@ User can now log into the Agent Portal.`
     }
 
     const hasApprovedScheduleOverride = requests.some((request) =>
-  String(request.employee_id) === String(selectedEmployee.id) &&
+  String(request.employee_id) === String(selectedEmployee?.id) &&
   request.type === "Schedule Override" &&
   request.status === "Approved" &&
   String(request.requested_at || request.date || "").slice(0, 10) === today
@@ -4397,7 +4599,18 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
       />
     );
   }
-
+if (startupLoading) {
+  return (
+    <div className="appShell">
+      <main className="mainArea">
+        <section className="card">
+          <h2>Loading Magnemite...</h2>
+          <p>Refreshing the latest schedule and break data.</p>
+        </section>
+      </main>
+    </div>
+  );
+}
   return (
     <div className="app">
       <style>{styles}</style>
