@@ -900,7 +900,17 @@ function mapWorkforceSyncRow(row) {
   if (!payload.shift_start && shiftRange.start) payload.shift_start = formatMilitaryTime(shiftRange.start);
   if (!payload.shift_end && shiftRange.end) payload.shift_end = formatMilitaryTime(shiftRange.end);
 
-  setNumber("pto_balance_days", ["Available days", "Available Days", "PTO_Balance_Days", "PTO Balance Days", "Vacation Balance", "Vacation_Balance"]);
+  setNumber("pto_balance_days", [
+  "Vacations",
+  "vacations",
+  "Available days",
+  "Available Days",
+  "PTO_Balance_Days",
+  "PTO Balance Days",
+  "PTO Days",
+  "Vacation Balance",
+  "Vacation_Balance"
+]);
   setNumber("pto_balance", ["PTO_Balance", "PTO Balance", "PTO Hours"]);
   if (payload.pto_balance_days !== undefined && payload.pto_balance === undefined) payload.pto_balance = payload.pto_balance_days * 8;
 
@@ -1029,7 +1039,17 @@ function mapBalanceSyncRow(row) {
     if (Number.isFinite(numericValue)) payload[field] = numericValue;
   };
 
-  setNumber("pto_balance_days", ["Available days", "Available Days", "PTO_Balance_Days", "PTO Balance Days", "PTO Days", "Vacation Balance", "Vacation_Balance"]);
+  setNumber("pto_balance_days", [
+  "Vacations",
+  "vacations",
+  "Available days",
+  "Available Days",
+  "PTO_Balance_Days",
+  "PTO Balance Days",
+  "PTO Days",
+  "Vacation Balance",
+  "Vacation_Balance"
+]);
   setNumber("sick_balance_days", ["Sick_Balance_Days", "Sick Balance Days", "Sick Days"]);
   setNumber("vto_balance_days", ["VTO_Balance_Days", "VTO Balance Days", "VTO Days"]);
   setNumber("pto_balance", ["PTO_Balance", "PTO Balance", "PTO Hours"]);
