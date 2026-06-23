@@ -1389,14 +1389,14 @@ function getStableSchedule(employee, schedules = [], dayName = todayDayName()) {
   shift_start: convertESTToEmployeeLocal(employee?.shift_start || "08:00", employee),
   shift_end: convertESTToEmployeeLocal(employee?.shift_end || "17:00", employee),
 
- break_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.first_break_start || employee?.break_start), employee),
-break_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.first_break_end || employee?.break_end), employee),
+ break_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.first_break_start), employee),
+break_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.first_break_end), employee),
 
-lunch_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.lunch_start || employee?.lunch_start), employee),
-lunch_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.lunch_end || employee?.lunch_end), employee),
+lunch_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.lunch_start), employee),
+lunch_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.lunch_end), employee),
 
-second_break_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.second_break_start || employee?.second_break_start), employee),
-second_break_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.second_break_end || employee?.second_break_end), employee),
+second_break_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.second_break_start), employee),
+second_break_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.second_break_end), employee),
 
   off_days: employee?.off_days || "",
   sub_department: employee?.sub_department || "",
