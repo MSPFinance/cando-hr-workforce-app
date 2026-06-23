@@ -1378,34 +1378,24 @@ if (!countriesOneHourBehindEST.includes(country)) {
 function getStableSchedule(employee, schedules = [], dayName = todayDayName()) {
   const normalizedDay = normalizeDayName(dayName);
   const breaksByDay = employee?.breaks_by_day || {};
-
-  const dayBreaks =
-    breaksByDay[normalizedDay] ||
-    breaksByDay[dayName] ||
-    breaksByDay[String(dayName || "").trim()] ||
-    {};
-
-  const valueOrDefault = (value, defaultValue = "Not Available") => {
-    if (value === null || value === undefined || value === "") return defaultValue;
-    return value;
-  };
+  const dayBreaks = breaksByDay[normalizedDay] || {};
 
   return {
-  shift_start: convertESTToEmployeeLocal(employee?.shift_start || "08:00", employee),
-  shift_end: convertESTToEmployeeLocal(employee?.shift_end || "17:00", employee),
+    shift_start: convertESTToEmployeeLocal(employee?.shift_start || "Not Available", employee),
+    shift_end: convertESTToEmployeeLocal(employee?.shift_end || "Not Available", employee),
 
- break_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.first_break_start), employee),
-break_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.first_break_end), employee),
+    break_start: convertESTToEmployeeLocal(dayBreaks.first_break_start || "Not Available", employee),
+    break_end: convertESTToEmployeeLocal(dayBreaks.first_break_end || "Not Available", employee),
 
-lunch_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.lunch_start), employee),
-lunch_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.lunch_end), employee),
+    lunch_start: convertESTToEmployeeLocal(dayBreaks.lunch_start || "Not Available", employee),
+    lunch_end: convertESTToEmployeeLocal(dayBreaks.lunch_end || "Not Available", employee),
 
-second_break_start: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.second_break_start), employee),
-second_break_end: convertESTToEmployeeLocal(valueOrDefault(dayBreaks.second_break_end), employee),
+    second_break_start: convertESTToEmployeeLocal(dayBreaks.second_break_start || "Not Available", employee),
+    second_break_end: convertESTToEmployeeLocal(dayBreaks.second_break_end || "Not Available", employee),
 
-  off_days: employee?.off_days || "",
-  sub_department: employee?.sub_department || "",
-};
+    off_days: employee?.off_days || "",
+    sub_department: employee?.sub_department || "",
+  };
 }
 
 function getScheduleChangePayload(request) {
@@ -1494,23 +1484,18 @@ function getTodayShiftSummary(employee) {
     };
   }
 
-  const schedule = getStableSchedule(employee, [], todayDayName());
-
-  if (isTodayOffDay(employee)) {
-    return {
-      isOff: true,
-      label: `OFF · ${todayDayName()}`,
-      detail: `Assigned off days: ${formatOffDays(schedule.off_days)}`
-    };
-  }
+  const schedule = getStableSchedule(employee);
 
   return {
     isOff: false,
-    label: formatTimeRange(schedule.shift_start, schedule.shift_end),
+    label: formatTimeRange(
+      schedule.shift_start,
+      schedule.shift_end
+    ),
     detail:
-  `Break 1: ${formatTimeRange(schedule.break_start, schedule.break_end)} · ` +
-  `Lunch: ${formatTimeRange(schedule.lunch_start, schedule.lunch_end)} · ` +
-  `Break 2: ${formatTimeRange(schedule.second_break_start, schedule.second_break_end)}`
+      `Break 1: ${formatTimeRange(schedule.break_start, schedule.break_end)} · ` +
+      `Lunch: ${formatTimeRange(schedule.lunch_start, schedule.lunch_end)} · ` +
+      `Break 2: ${formatTimeRange(schedule.second_break_start, schedule.second_break_end)}`
   };
 }
 
