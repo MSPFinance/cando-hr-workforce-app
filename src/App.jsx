@@ -1511,9 +1511,8 @@ function getTodayShiftSummary(employee) {
       schedule.shift_end
     ),
     detail:
-      `Break 1: ${formatTimeRange(schedule.break_start, schedule.break_end)} · ` +
-      `Lunch: ${formatTimeRange(schedule.lunch_start, schedule.lunch_end)} · ` +
-      `Break 2: ${formatTimeRange(schedule.second_break_start, schedule.second_break_end)}`
+      `First Break: ${formatTimeRange(schedule.break_start, schedule.break_end)} · ` +
+      `Second Break: ${formatTimeRange(schedule.second_break_start, schedule.second_break_end)}`
   };
 }
 
@@ -2199,7 +2198,7 @@ function mapTimeFromSheet(row) {
     scheduled_start: row.Scheduled_Start || row.Shift_Start || "08:00",
     scheduled_end: row.Scheduled_End || row.Shift_End || "17:00",
     schedule_break_1: row.Schedule_Break_1 || "",
-    schedule_lunch: row.Schedule_Lunch || "",
+    schedule_lunch: "",
     schedule_break_2: row.Schedule_Break_2 || "",
     schedule_off_days: row.Schedule_Off_Days || "",
     schedule_source: row.Schedule_Source || "Employee Master Schedule",
@@ -2220,7 +2219,7 @@ function mapTimeToSheet(item) {
     Scheduled_Start: item.scheduled_start || "",
     Scheduled_End: item.scheduled_end || "",
     Schedule_Break_1: item.schedule_break_1 || "",
-    Schedule_Lunch: item.schedule_lunch || "",
+    Schedule_Lunch: "",
     Schedule_Break_2: item.schedule_break_2 || "",
     Schedule_Off_Days: item.schedule_off_days || "",
     Schedule_Source: item.schedule_source || "Employee Master Schedule",
@@ -3675,7 +3674,7 @@ if (openLog) {
         scheduled_start: schedule.shift_start,
         scheduled_end: schedule.shift_end,
         schedule_break_1: formatTimeRange(schedule.break_start, schedule.break_end),
-        schedule_lunch: formatTimeRange(schedule.lunch_start, schedule.lunch_end),
+        schedule_lunch: "",
         schedule_break_2: formatTimeRange(schedule.second_break_start, schedule.second_break_end),
         schedule_off_days: schedule.off_days,
         schedule_source: "Employee Master Schedule",
@@ -3770,7 +3769,7 @@ if (openLog) {
         scheduled_start: schedule.shift_start,
         scheduled_end: schedule.shift_end,
         schedule_break_1: formatTimeRange(schedule.break_start, schedule.break_end),
-        schedule_lunch: formatTimeRange(schedule.lunch_start, schedule.lunch_end),
+        schedule_lunch: "",
         schedule_break_2: formatTimeRange(schedule.second_break_start, schedule.second_break_end),
         schedule_off_days: schedule.off_days,
         schedule_source: "System daily timer stop",
@@ -3860,7 +3859,7 @@ if (openLog) {
         scheduled_start: schedule.shift_start,
         scheduled_end: schedule.shift_end,
         schedule_break_1: formatTimeRange(schedule.break_start, schedule.break_end),
-        schedule_lunch: formatTimeRange(schedule.lunch_start, schedule.lunch_end),
+        schedule_lunch: "",
         schedule_break_2: formatTimeRange(schedule.second_break_start, schedule.second_break_end),
         schedule_off_days: schedule.off_days,
         schedule_source: "Employee Master Schedule",
