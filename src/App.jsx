@@ -947,56 +947,30 @@ async function fetchWorkforceSheetRows() {
   return [];
 }
 
+function parseTimeRange(value) {
+  if (!value) return { start: "", end: "" };
+
+  const parts = String(value).split("-");
+  return {
+    start: parts[0]?.trim() || "",
+    end: parts[1]?.trim() || ""
+  };
+}
+
 function mapBreaksSyncRow(row) {
-  const employeeId = String(
-  firstValue(row, ["ID", "Employee_ID", "Employee ID", "Employee Id", "employee_id", "F"])
-  || row.F
-  || row[5]
-  || ""
-).trim();
-
-const fullName = String(
-  firstValue(row, ["Name", "Employee", "Employee Name", "Full Name", "A"])
-  || row.A
-  || row[0]
-  || ""
-).trim();
-
-const day = normalizeDayName(
-  firstValue(row, ["Day", "B"]) || row.B || row[1]
-);
-
-const firstBreak = splitTimeRange(
-  firstValue(row, ["First Break", "Break 1", "C"]) || row.C || row[2]
-);
-
-const secondBreak = splitTimeRange(
-  firstValue(row, ["Second Break", "Lunch", "Lunch Break", "Break 2", "D"]) || row.D || row[3]
-);
-
-const thirdBreak = splitTimeRange(
-  firstValue(row, ["Third Break", "Break 3", "E"]) || row.E || row[4]
-);
-  const unavailable = "Not Available";
+  const first = parseTimeRange(row["First Break"]);
+  const second = parseTimeRange(row["Second Break"]);
 
   return {
-    employeeId,
-    fullName,
-    sourceEmail: "",
-    payload: {
-    breaks_by_day: {
-    [day]: {
-      first_break_start: firstBreak.start ? formatMilitaryTime(firstBreak.start) : unavailable,
-      first_break_end: firstBreak.end ? formatMilitaryTime(firstBreak.end) : unavailable,
-
-      lunch_start: secondBreak.start ? formatMilitaryTime(secondBreak.start) : unavailable,
-      lunch_end: secondBreak.end ? formatMilitaryTime(secondBreak.end) : unavailable,
-
-      second_break_start: thirdBreak.start ? formatMilitaryTime(thirdBreak.start) : unavailable,
-      second_break_end: thirdBreak.end ? formatMilitaryTime(thirdBreak.end) : unavailable,
-    },
-  },
-},
+    employee_id: cleanId(row.ID),
+    day_name: row.Day || "",
+    lunch_start: "",
+    lunch_end: "",
+    first_break_start: first.start,
+    first_break_end: first.end,
+    second_break_start: second.start,
+    second_break_end: second.end,
+    source: "Roster Breaks"
   };
 }
 
@@ -1091,11 +1065,11 @@ function buildEmployeeBreakRowsForSupabase(employeesList = []) {
   const rows = [];
 
   const cleanBreakTime = (value) => {
-  if (!value || value === "Not Available" || value === "00:00" || value === "00:00:00") {
-    return null;
-  }
-  return String(value).trim();
-};
+    if (!value || value === "Not Available" || value === "00:00" || value === "00:00:00") {
+      return null;
+    }
+    return String(value).trim();
+  };
 
   employeesList.forEach((employee) => {
     const breaksByDay = employee.breaks_by_day || {};
@@ -1108,22 +1082,22 @@ function buildEmployeeBreakRowsForSupabase(employeesList = []) {
         employee_name: employee.full_name || "",
         day_name: day,
 
+        lunch_start: null,
+        lunch_end: null,
+
         first_break_start: cleanBreakTime(dayBreaks.first_break_start),
-first_break_end: cleanBreakTime(dayBreaks.first_break_end),
+        first_break_end: cleanBreakTime(dayBreaks.first_break_end),
 
-lunch_start: cleanBreakTime(dayBreaks.second_break_start),
-lunch_end: cleanBreakTime(dayBreaks.second_break_end),
+        second_break_start: cleanBreakTime(dayBreaks.second_break_start),
+        second_break_end: cleanBreakTime(dayBreaks.second_break_end),
 
-second_break_start: cleanBreakTime(dayBreaks.third_break_start),
-second_break_end: cleanBreakTime(dayBreaks.third_break_end),
-
-        source: "Google Sheet bBreaks Tab",
-        updated_at: new Date().toISOString(),
+        source: "Magnemite Workforce Planning",
+        updated_at: new Date().toISOString()
       });
     });
   });
 
-  return rows.filter((row) => row.employee_id);
+  return rows.filter((item) => item.employee_id && item.day_name);
 }
 
 function mergeWorkforceRowsIntoEmployees(currentEmployees, workforceRows, options = {}) {
@@ -2791,10 +2765,10 @@ const scheduleRows =
       }));
   async function refreshLiveData() {
   const loadedSupabase = await loadSupabaseReferenceData(
-    employees,
-    setEmployees,
-    setDatabaseStatus
-  );
+  employees,
+  () => {},
+  setDatabaseStatus
+);
 
   if (supabase) {
   const { data: latestLogs, error: logsError } = await supabase
@@ -2954,7 +2928,7 @@ useEffect(() => {
 });
 
     localStorage.setItem("MAGNEMITE_INITIAL_ROSTER_SYNC", todayKey);
-    setEmployees((current) => [...current]);
+    // setEmployees((current) => [...current]);
   };
 
   initialRosterSync();
@@ -2971,10 +2945,10 @@ useEffect(() => {
       syncWorkforcePlanningSheet({ silent: true, automatic: true });
     };
 
-    checkWeeklySync();
-    const interval = window.setInterval(checkWeeklySync, 60000);
-    return () => window.clearInterval(interval);
-  }, [isAuthenticated, isAgentOnly, startupLoading, employees.length]);
+   // checkWeeklySync();
+// const interval = window.setInterval(checkWeeklySync, 60000);
+// return () => window.clearInterval(interval);
+  }, [isAuthenticated, isAgentOnly, startupLoading]);
 
   const lobOptions = ["All", ...new Set([...lobs, ...visibleEmployees.map((e) => e.lob).filter(Boolean)])];
   const departmentOptions = ["All", ...new Set([...departments, ...visibleEmployees.map((e) => e.department).filter(Boolean)])];
