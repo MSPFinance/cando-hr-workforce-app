@@ -181,7 +181,7 @@ const employeesSeed = [
     second_break_start: "15:00",
     second_break_end: "15:15",
     lunch_minutes: 60,
-    break_minutes: 30,
+    break_minutes: 60,
     pto_balance: 40,
     sick_balance: 16,
     vto_balance: 0,
@@ -917,8 +917,9 @@ function mapWorkforceSyncRow(row) {
   setNumber("sick_balance_days", ["Sick_Balance_Days", "Sick Balance Days", "Sick Days"]);
   setNumber("vto_balance_days", ["VTO_Balance_Days", "VTO Balance Days", "VTO Days"]);
 
-  setNumber("break_minutes", ["Break_Minutes", "Break Minutes", "Break Min"]);
-  setNumber("lunch_minutes", ["Lunch_Minutes", "Lunch Minutes", "Lunch Min"]);
+  setNumber("break_minutes", ["Break_Minutes", "Break Minutes", "Break Min", "Lunch_Minutes", "Lunch Minutes", "Lunch Min"]);
+// setNumber("lunch_minutes", ["Lunch_Minutes", "Lunch Minutes", "Lunch Min"]);
+
 
   return { employeeId, fullName, sourceEmail, payload };
 }
@@ -1378,10 +1379,7 @@ function getStableSchedule(employee, schedules = [], dayName = todayDayName()) {
     break_start: convertESTToEmployeeLocal(dayBreaks.first_break_start || "Not Available", employee),
     break_end: convertESTToEmployeeLocal(dayBreaks.first_break_end || "Not Available", employee),
 
-    lunch_start: convertESTToEmployeeLocal(dayBreaks.lunch_start || "Not Available", employee),
-    lunch_end: convertESTToEmployeeLocal(dayBreaks.lunch_end || "Not Available", employee),
-
-    second_break_start: convertESTToEmployeeLocal(dayBreaks.second_break_start || "Not Available", employee),
+       second_break_start: convertESTToEmployeeLocal(dayBreaks.second_break_start || "Not Available", employee),
     second_break_end: convertESTToEmployeeLocal(dayBreaks.second_break_end || "Not Available", employee),
 
     off_days: employee?.off_days || "",
@@ -1596,7 +1594,7 @@ function employeeLiveStatus(employee, timeEntries = [], activityLog = []) {
   const schedule = getStableSchedule(employee);
   if (isTodayOffDay(employee)) return { status: "Off Day", color: "gray", note: "Scheduled off" };
   if (status === "Working") return { status, color: "green", note: formatTimeRange(schedule.shift_start, schedule.shift_end) };
-  if (["Break", "Lunch"].includes(status)) return { status, color: "yellow", note: "Away from production" };
+  if (["Break", "Bathroom"].includes(status)) return { status, color: "yellow", note: "Away from production" };
   if (["Meeting", "Training", "Coaching"].includes(status)) return { status, color: "blue", note: "Scheduled task" };
   if (["Overtime", "Early Unscheduled", "Off-Day Unscheduled"].includes(status)) return { status, color: "red", note: "Requires review" };
   return { status, color: "gray", note: "No current status" };
@@ -1977,7 +1975,7 @@ function mapSupabaseEmployee(row = {}, balance = {}, schedule = {}, base = {}) {
     lunch_end: formatMilitaryTime(firstKnownValue(schedule, ["lunch_end"], firstKnownValue(row, ["lunch_end", "Lunch_End"], "13:00"))),
     second_break_start: formatMilitaryTime(firstKnownValue(schedule, ["second_break_start", "break_2_start"], firstKnownValue(row, ["second_break_start", "Break_2_Start"], "15:00"))),
     second_break_end: formatMilitaryTime(firstKnownValue(schedule, ["second_break_end", "break_2_end"], firstKnownValue(row, ["second_break_end", "Break_2_End"], "15:15"))),
-    break_minutes: safeNumber(firstKnownValue(schedule, ["break_minutes"], firstKnownValue(row, ["break_minutes"], 30)), 30),
+    break_minutes: safeNumber(firstKnownValue(schedule, ["break_minutes"], firstKnownValue(row, ["break_minutes"], 60)), 60),
     lunch_minutes: safeNumber(firstKnownValue(schedule, ["lunch_minutes"], firstKnownValue(row, ["lunch_minutes"], 60)), 60),
     pto_balance: safeNumber(firstKnownValue(balance, ["available_hours_reference", "available_hours", "pto_balance", "pto_hours", "vacation_hours"], firstKnownValue(row, ["pto_balance"], 0)), 0),
     sick_balance: safeNumber(firstKnownValue(balance, ["sick_balance", "sick_hours"], firstKnownValue(row, ["sick_balance"], 0)), 0),
@@ -2097,7 +2095,7 @@ function mapEmployeeFromSheet(row) {
     lunch_end: formatMilitaryTime(row.Lunch_End || "13:00"),
     second_break_start: formatMilitaryTime(row.Break_2_Start || "15:00"),
     second_break_end: formatMilitaryTime(row.Break_2_End || "15:15"),
-    break_minutes: safeNumber(row.Break_Minutes, 30),
+    break_minutes: safeNumber(row.Break_Minutes, 60),
     lunch_minutes: safeNumber(row.Lunch_Minutes, 60),
     pto_balance: safeNumber(row.PTO_Balance, 0),
     sick_balance: safeNumber(row.Sick_Balance, 0),
@@ -2418,7 +2416,7 @@ function HRWorkforceApp() {
     second_break_start: "15:00",
     second_break_end: "15:15",
     lunch_minutes: 60,
-    break_minutes: 30,
+    break_minutes: 60,
     pto_balance: 0,
     sick_balance: 0,
     vto_balance: 0,
@@ -2763,6 +2761,57 @@ const scheduleRows =
         day: todayDayName(),
         schedule: getStableSchedule(employee, [], todayDayName()),
       }));
+
+      async function saveScheduleChanges() {
+  try {
+    if (!supabase) {
+      showToast("Save failed", "Supabase is not connected.", "danger");
+      return;
+    }
+
+    const schedulePayload = scheduleRows.map(({ employee: e, day, schedule }) => ({
+      employee_id: String(e.id || e.employee_id || ""),
+      day_name: day,
+      start_time: schedule.shift_start || "",
+      end_time: schedule.shift_end || "",
+      monday: e.monday || "",
+      Tuesday: e.tuesday || "",
+      wednesday: e.wednesday || "",
+      thursday: e.thursday || "",
+      friday: e.friday || "",
+      saturday: e.saturday || "",
+      sunday: e.sunday || "",
+      lunch_break: "",
+      first_break: formatTimeRange(schedule.break_start, schedule.break_end),
+      second_break: formatTimeRange(schedule.second_break_start, schedule.second_break_end),
+      updated_at: new Date().toISOString()
+    }));
+
+    const breakPayload = scheduleRows.map(({ employee: e, day, schedule }) => ({
+      employee_id: String(e.id || e.employee_id || ""),
+      employee_name: e.full_name || "",
+      day_name: day,
+      lunch_start: null,
+      lunch_end: null,
+      first_break_start: schedule.break_start || null,
+      first_break_end: schedule.break_end || null,
+      second_break_start: schedule.second_break_start || null,
+      second_break_end: schedule.second_break_end || null,
+      source: "Schedule Tab Manual Save",
+      updated_at: new Date().toISOString()
+    }));
+
+    await postToSupabase("employee_schedules", schedulePayload, "employee_id,day_name");
+    await postToSupabase("employee_breaks", breakPayload, "employee_id,day_name");
+
+    showToast("Schedule saved", "Schedule changes were saved to Supabase.", "success");
+    await refreshLiveData();
+  } catch (error) {
+    console.error("Schedule save failed:", error);
+    showToast("Save failed", error?.message || "Schedule changes could not be saved.", "danger");
+  }
+}
+
   async function refreshLiveData() {
   const loadedSupabase = await loadSupabaseReferenceData(
   employees,
@@ -3026,7 +3075,7 @@ useEffect(() => {
   const teamStats = useMemo(() => {
     const result = new Map();
     filteredTime
-      .filter((t) => ["Break", "Lunch", "Bathroom"].includes(t.category))
+      .filter((t) => ["Break", "Bathroom"].includes(t.category))
       .forEach((t) => {
         const key = `${t.lob} / ${t.department}`;
         result.set(key, (result.get(key) || 0) + minutesBetween(t.category_start, t.category_end));
@@ -3049,7 +3098,7 @@ useEffect(() => {
       const otMinutes = groupTime.filter((t) => t.category === "Overtime").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
       const pendingRequests = groupRequests.filter((r) => r.status === "Pending").length;
       const approvedRequests = groupRequests.filter((r) => r.status === "Approved").length;
-      const scheduledBreakLunch = groupEmployees.reduce((sum, e) => sum + safeNumber(e.break_minutes, 0) + safeNumber(e.lunch_minutes, 0), 0);
+      const scheduledBreakLunch = groupEmployees.reduce((sum, e) => sum + safeNumber(e.break_minutes, 60) + safeNumber(e.lunch_minutes, 0), 0);
       const adherenceRisk = breakMinutes > scheduledBreakLunch || pendingRequests > 0;
 
       groups.push({
@@ -4258,7 +4307,7 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
           second_break_start: r.Second_Break_Start || "15:00",
           second_break_end: r.Second_Break_End || "15:15",
           lunch_minutes: safeNumber(r.Lunch_Minutes, 60),
-          break_minutes: safeNumber(r.Break_Minutes, 30),
+          break_minutes: safeNumber(r.Break_Minutes, 60),
           pto_balance: safeNumber(r.PTO_Balance, 0),
           sick_balance: safeNumber(r.Sick_Balance, 0),
           vto_balance: safeNumber(r.VTO_Balance, 0),
@@ -4925,7 +4974,7 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
 {[
   ["🚨 Alerts", alerts],
   ["🟢 Active", active],
-  ["🟡 Break / Lunch / Bathroom", away],
+  ["🟡 Break / Bathroom", away],
   ["⚪ No Activity", noActivity],
 ]
 .filter(([title, list]) => list.length > 0)
@@ -5015,9 +5064,15 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
         {!isAgentOnly && tab === "schedule" && (
           <section className="schedulePage">
             <Card title="Employee schedule management">
-              <p className="helperText">Edit each employee’s assigned shift, break, lunch, second break, off days, LOB, department, and sub-department. Updates are reflected in the Agent Portal, reporting, payroll review, staffing rules, and Google Sheets when live sync is connected.</p>
+              <p className="helperText">Edit each employee’s assigned shift, first break, second break, off days, LOB, department, and sub-department. Updates are reflected in the Agent Portal, reporting, payroll review, staffing rules, and Google Sheets when live sync is connected.</p>
+              <div className="filterActions">
+  <button type="button" className="primary" onClick={saveScheduleChanges}>
+    Save Schedule Changes
+  </button>
+</div>
+              
               <Table
-                headers={["Employee", "Day", "LOB", "Department", "Sub-Department", "Off Days", "Today", "Shift Start", "Shift End", "Break 1", "Lunch", "Break 2", "Break Min", "Lunch Min"]}
+                headers={["Employee", "Day", "LOB", "Department", "Sub-Department", "Off Days", "Today", "Shift Start", "Shift End", "First Break", "Second Break", "Total Break Min"]}
                 rows={scheduleRows.map(({ employee: e, day, schedule }) => [
                   <strong>{e.full_name}</strong>,
                   day,
@@ -5029,10 +5084,8 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
                   <input type="time" value={schedule.shift_start} disabled={!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")} onChange={(event) => updateEmployeeSchedule(e.id, "shift_start", event.target.value)} />,
                   <input type="time" value={schedule.shift_end} disabled={!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")} onChange={(event) => updateEmployeeSchedule(e.id, "shift_end", event.target.value)} />,
                   <div className="miniTimes"><input type="time" value={schedule.break_start === "Not Available" ? "" : schedule.break_start} onChange={(event) => updateEmployeeSchedule(e.id, "break_start", event.target.value)} /><input type="time" value={schedule.break_end === "Not Available" ? "" : schedule.break_end} onChange={(event) => updateEmployeeSchedule(e.id, "break_end", event.target.value)} /></div>,
-                  <div className="miniTimes"><input type="time" value={schedule.lunch_start === "Not Available" ? "" : schedule.lunch_start} onChange={(event) => updateEmployeeSchedule(e.id, "lunch_start", event.target.value)} /><input type="time" value={schedule.lunch_end === "Not Available" ? "" : schedule.lunch_end} onChange={(event) => updateEmployeeSchedule(e.id, "lunch_end", event.target.value)} /></div>,
                   <div className="miniTimes"><input type="time" value={schedule.second_break_start === "Not Available" ? "" : schedule.second_break_start} onChange={(event) => updateEmployeeSchedule(e.id, "second_break_start", event.target.value)} /><input type="time" value={schedule.second_break_end === "Not Available" ? "" : schedule.second_break_end} onChange={(event) => updateEmployeeSchedule(e.id, "second_break_end", event.target.value)} /></div>,
-                  `${e.break_minutes} min`,
-                  `${e.lunch_minutes} min`,
+                  `${Number(e.break_minutes || 60)} min`,
                 ])}
               />
             </Card>
@@ -5111,7 +5164,7 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
             <div className="reportHeader">
               <div>
                 <h2>Admin Reporting Center</h2>
-                <p>Review productivity, break/lunch adherence, overtime, requests, and schedule adherence by LOB, department, and agent.</p>
+                <p>Review productivity, break adherence, overtime, requests, and schedule adherence by LOB, department, and agent.</p>
               </div>
               <div className="reportControls">
                 <select value={reportView} onChange={(e) => setReportView(e.target.value)}>
@@ -5152,7 +5205,7 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
               <Card title="Overall time productivity">
                 <div className="productivityHelp">
                   <strong>How productivity is calculated</strong>
-                  <p>Productivity % = Working Time ÷ Total Tracked Time × 100. Break, lunch, bathroom, training, meetings, system issues, and other non-working dispositions reduce the percentage. Working time and approved overtime count as productive time.</p>
+                  <p>Productivity % = Working Time ÷ Total Tracked Time × 100. first break, second break, bathroom, training, meetings, system issues, and other non-working dispositions reduce the percentage. Working time and approved overtime count as productive time.</p>
                 </div>
                 {categoryStats.map((item) => <Progress key={item.label} label={item.label} value={formatHours(item.minutes)} percent={stats.total ? (item.minutes / stats.total) * 100 : 0} />)}
                 <div className="reportNote">Use this view to compare scheduled expectations against actual logged time by LOB, department, and agent. This helps review breaks, lunch, bathroom time, meetings, training, system issues, OT, and productivity.</div>
@@ -5557,7 +5610,7 @@ const secondBreakMinutes = minutesBetween(scheduleForToday.second_break_start, s
 
 const scheduledBreak =
   statusUpper === "BREAK"
-    ? Math.max(firstBreakMinutes, secondBreakMinutes, safeNumber(agent.break_minutes, 30))
+    ? Math.max(firstBreakMinutes, secondBreakMinutes, safeNumber(agent.break_minutes, 60))
     : firstBreakMinutes + secondBreakMinutes;
 
 const scheduledLunch =
@@ -5565,7 +5618,7 @@ const scheduledLunch =
 
 const breakLimit = scheduledBreak > 0
   ? scheduledBreak
-  : safeNumber(agent.break_minutes, 30);
+  : safeNumber(agent.break_minutes, 60);
 
 const lunchLimit = scheduledLunch > 0
   ? scheduledLunch
