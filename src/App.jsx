@@ -448,7 +448,6 @@ const rulesSeed = [
 const timeCategories = [
   "Working",
   "Break",
-  "Lunch",
   "Meeting",
   "Training",
   "Bathroom",
@@ -456,7 +455,6 @@ const timeCategories = [
   "System Issue",
   "PTO",
   "VTO",
-  "Other",
   // System-managed categories below are intentionally kept in code for reporting and automation,
   // but disabled from manual selection in the UI.
   "Overtime",
@@ -644,6 +642,20 @@ function formatHours(minutes) {
   const value = safeNumber(minutes, 0);
   const hours = value / 60;
   return `${hours.toFixed(hours % 1 === 0 ? 0 : 2)}h`;
+}
+
+function getTimeLogDuration(entry) {
+  const start = entry.category_start || entry.clock_in;
+  const end = entry.category_end || entry.clock_out;
+
+  if (end) return formatHours(minutesBetween(start, end));
+
+  const startMinutes = timeToMinutes(start);
+  const nowMinutes = timeToMinutes(new Date().toTimeString().slice(0, 5));
+
+  if (startMinutes === null || nowMinutes === null) return "Active";
+
+  return `${formatHours(Math.max(0, nowMinutes - startMinutes))} active`;
 }
 
 function csv(rows, headers) {
@@ -3094,7 +3106,7 @@ useEffect(() => {
       const groupRequests = requests.filter((r) => ids.has(r.employee_id));
       const totalMinutes = groupTime.reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
       const workingMinutes = groupTime.filter((t) => t.category === "Working").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
-      const breakMinutes = groupTime.filter((t) => ["Break", "Lunch", "Bathroom"].includes(t.category)).reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
+      const breakMinutes = groupTime.filter((t) => ["Break","Bathroom"].includes(t.category)).reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
       const otMinutes = groupTime.filter((t) => t.category === "Overtime").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
       const pendingRequests = groupRequests.filter((r) => r.status === "Pending").length;
       const approvedRequests = groupRequests.filter((r) => r.status === "Approved").length;
@@ -5012,7 +5024,7 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
               </div>
             </Card>
 
-            <Card title="Break / Lunch / Bathroom usage by team">
+            <Card title="Break / Bathroom usage by team">
               {teamStats.length ? (
                 teamStats.map((item) => (
                   <Progress
@@ -5116,7 +5128,7 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
                   <select value={t.category} onChange={(event) => editTimeEntryLocal(t.id, "category", event.target.value)}><TimeCategoryOptions /></select>,
                   <input type="time" value={formatMilitaryTime(t.category_start)} onChange={(event) => editTimeEntryLocal(t.id, "category_start", event.target.value)} />,
                   <input type="time" value={formatMilitaryTime(t.category_end)} onChange={(event) => editTimeEntryLocal(t.id, "category_end", event.target.value)} />,
-                  formatHours(minutesBetween(t.category_start, t.category_end)),
+                  getTimeLogDuration(t),
                   <select value={t.approved || "Pending"} onChange={(event) => editTimeEntryLocal(t.id, "approved", event.target.value)}>
                     {["Pending", "Pending Approval", "Approved", "Denied", "Auto Logged"].map((status) => <option key={status}>{status}</option>)}
                   </select>,
@@ -5613,23 +5625,13 @@ const scheduledBreak =
     ? Math.max(firstBreakMinutes, secondBreakMinutes, safeNumber(agent.break_minutes, 60))
     : firstBreakMinutes + secondBreakMinutes;
 
-const scheduledLunch =
-  minutesBetween(scheduleForToday.lunch_start, scheduleForToday.lunch_end);
-
 const breakLimit = scheduledBreak > 0
   ? scheduledBreak
   : safeNumber(agent.break_minutes, 60);
 
-const lunchLimit = scheduledLunch > 0
-  ? scheduledLunch
-  : safeNumber(agent.lunch_minutes, 60);
-
 const bathroomLimit = 10;
 
-  if (statusUpper === "LUNCH" && elapsed > lunchLimit) {
-    return { label: "LUNCH ALERT", type: "red", detail: `${elapsed} min on lunch · limit ${lunchLimit} min` };
-  }
-
+  
   if (statusUpper === "BREAK" && elapsed > breakLimit) {
     return { label: "BREAK ALERT", type: "red", detail: `${elapsed} min on break · limit ${breakLimit} min` };
   }
