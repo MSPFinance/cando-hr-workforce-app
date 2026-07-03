@@ -2455,6 +2455,7 @@ function HRWorkforceApp() {
   const liveAutoSyncRef = useRef(false);
   const attendanceEmailQueueRef = useRef(new Set());
   const [startupLoading, setStartupLoading] = useState(true);
+  const [selectedTimeLogIds, setSelectedTimeLogIds] = useState([]);
 
 
   async function syncWorkforcePlanningSheet(options = {}) {
@@ -2835,15 +2836,30 @@ const scheduleRows =
   const { data: latestLogs, error: logsError } = await supabase
     .from("time_logs")
     .select("*");
+console.log("FIRST LOG", latestLogs?.[0]);
+console.log("FIRST DATE", latestLogs?.[0]?.date);
+
 
   if (!logsError) {
     setTimeEntries(
-      (latestLogs || []).sort((a, b) => {
-        const aStamp = `${a.date || ""} ${a.time || ""} ${a.created_at || ""}`;
-        const bStamp = `${b.date || ""} ${b.time || ""} ${b.created_at || ""}`;
-        return bStamp.localeCompare(aStamp);
-      })
-    );
+  (latestLogs || [])
+    .map((log) => ({
+      ...log,
+      date:
+        log.date ||
+        String(
+          log.clock_in ||
+          log.category_start ||
+          log.created_at ||
+          ""
+        ).slice(0, 10),
+    }))
+    .sort((a, b) => {
+      const aStamp = `${a.date || ""} ${a.time || ""} ${a.created_at || ""}`;
+      const bStamp = `${b.date || ""} ${b.time || ""} ${b.created_at || ""}`;
+      return bStamp.localeCompare(aStamp);
+    })
+);
   } else {
     console.warn("Time logs refresh failed:", logsError);
   }
@@ -3018,8 +3034,20 @@ useEffect(() => {
   const countryOptions = ["All", ...new Set(visibleEmployees.map((e) => e.country).filter(Boolean))];
   const categoryOptions = ["All", ...timeCategories, "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change"];
 
+  const normalizeDateForFilter = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+
+  if (raw.includes("/")) {
+    const [month, day, year] = raw.split("/");
+    return `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  }
+
+  return raw.slice(0, 10);
+};
   const filteredTime = visibleTime.filter((t) => {
-    const dateOk = (!filters.startDate || t.date >= filters.startDate) && (!filters.endDate || t.date <= filters.endDate);
+    const entryDate = normalizeDateForFilter(t.date);
+const dateOk = (!filters.startDate || entryDate >= filters.startDate) && (!filters.endDate || entryDate <= filters.endDate);
     return (
       dateOk &&
       (filters.lob === "All" || t.lob === filters.lob) &&
@@ -4206,26 +4234,79 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
     });
   }
 
+  function toggleTimeLogSelection(id) {
+  setSelectedTimeLogIds((current) =>
+    current.includes(id)
+      ? current.filter((item) => item !== id)
+      : [...current, id]
+  );
+}
 
-  function editTimeEntryLocal(id, field, value) {
-    if (!canEditTimeLogs(currentUser?.access_level || currentUser?.role || "Employee")) {
-      showToast("Access denied", "Only TLs, Managers, Reporting, HR, Payroll, and Admin users can edit previous time logs.", "danger");
-      return;
-    }
+function selectAllFilteredTimeLogs() {
+  const ids = filteredTime.map((entry) => entry.id).filter(Boolean);
+  setSelectedTimeLogIds(ids);
+}
+
+function clearSelectedTimeLogs() {
+  setSelectedTimeLogIds([]);
+}
+
+async function bulkApproveSelectedTimeLogs() {
+  if (!selectedTimeLogIds.length) {
+    showToast("No rows selected", "Please select at least one time log.", "warning");
+    return;
+  }
+
+  return runProtectedAction("bulk-approve-time-logs", "Bulk time log approval", async () => {
+    const updates = {
+      approved: "Approved",
+      approval_status: "Approved",
+      payable_status: "Approved Payable",
+      approved_by: currentUser.email,
+      edited_by: currentUser.email,
+      edited_at: new Date().toISOString(),
+      notes: "Bulk approved by manager",
+    };
 
     setTimeEntries((current) =>
-      current.map((entry) => {
-        if (entry.id !== id) return entry;
-        const next = { ...entry, [field]: value };
-        if (field === "category" && value === "Overtime") {
-          next.approved = "Pending";
-          next.payable_status = "Pending Manager Approval";
-          next.auto_rule = next.auto_rule || "Manual correction changed to overtime for payroll review";
-        }
-        return next;
-      })
+      current.map((entry) =>
+        selectedTimeLogIds.includes(entry.id)
+          ? { ...entry, ...updates }
+          : entry
+      )
     );
-  }
+
+    if (supabase) {
+      const { error } = await supabase
+        .from("time_logs")
+        .update({
+          approval_status: "Approved",
+          payable_status: "Approved Payable",
+          approved_by: currentUser.email,
+          edited_by: currentUser.email,
+          edited_at: new Date().toISOString(),
+        })
+        .in("app_log_id", selectedTimeLogIds);
+
+      if (error) {
+        throw new Error(error.message);
+      }
+    }
+
+    setSelectedTimeLogIds([]);
+    showToast("Bulk approval completed", "Selected time logs were approved.", "success");
+  });
+}
+
+  function editTimeEntryLocal(id, field, value) {
+  setTimeEntries((current) =>
+    current.map((entry) =>
+      entry.id === id || entry.app_log_id === id
+        ? { ...entry, [field]: value }
+        : entry
+    )
+  );
+}
 
   async function saveEditedTimeEntry(id) {
     if (!canEditTimeLogs(currentUser?.access_level || currentUser?.role || "Employee")) {
@@ -4253,30 +4334,65 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
         approved_by: currentUser.email,
       };
 
+console.log("Saving corrected entry:", correctedEntry);
+
       if (supabase) {
-        await supabase.from("time_logs").update(mapTimeEntryToSupabaseLog(correctedEntry, employees.find((e) => e.id === correctedEntry.employee_id) || {})).eq("app_log_id", id);
-      }
+  const payload = mapTimeEntryToSupabaseLog(
+    correctedEntry,
+    employees.find((e) => e.id === correctedEntry.employee_id) || {}
+  );
 
-      await googleUpdateRow("timeLogs", "Log_ID", id, mapTimeToSheet(correctedEntry));
+console.log("correctedEntry.id =", correctedEntry.id);
+console.log("correctedEntry.app_log_id =", correctedEntry.app_log_id);
+console.log("id parameter =", id);
+console.log("payload.app_log_id =", payload.app_log_id);
 
-      await googleAddRow(
-        "approvals",
-        mapApprovalToSheet({
-          id: cleanId("TIMEEDIT"),
-          employee_id: correctedEntry.employee_id,
-          employee_name: correctedEntry.employee_name,
-          approval_type: "Time Log Manual Correction",
-          related_record_id: correctedEntry.id,
-          request_type: correctedEntry.category,
-          decision: "Corrected",
-          previous_status: timeEntry.approved || "Pending Review",
-          new_status: correctedEntry.approved || "Pending Review",
-          approved_by: currentUser.email,
-          approved_date: new Date(),
-          hours: (minutesBetween(correctedEntry.category_start, correctedEntry.category_end) / 60).toFixed(2),
-          notes: correctedEntry.notes || "Manager/TL time log correction saved from Time tab.",
-        })
-      );
+  const matchId = String(
+    correctedEntry.app_log_id ||
+    correctedEntry.id ||
+    id
+  );
+
+  const { data, error } = await supabase
+    .from("time_logs")
+    .update(payload)
+    .eq("app_log_id", matchId)
+    .select();
+
+  console.log("Supabase update result:", data);
+
+  if (error) {
+    console.error("Supabase update error:", error);
+    throw error;
+  }
+}
+
+// Historical time log edits are saved in Supabase.
+// Google Sheets remains source for schedules/breaks only.
+console.log("Skipping Google Sheets timeLogs update for historical edit.");
+
+      try {
+  await googleAddRow(
+    "approvals",
+    mapApprovalToSheet({
+      id: cleanId("TIMEEDIT"),
+      employee_id: correctedEntry.employee_id,
+      employee_name: correctedEntry.employee_name,
+      approval_type: "Time Log Manual Correction",
+      related_record_id: correctedEntry.id,
+      request_type: correctedEntry.category,
+      decision: "Corrected",
+      previous_status: timeEntry.approved || "Pending Review",
+      new_status: correctedEntry.approved || "Pending Review",
+      approved_by: currentUser.email,
+      approved_date: new Date(),
+      hours: (minutesBetween(correctedEntry.category_start, correctedEntry.category_end) / 60).toFixed(2),
+      notes: correctedEntry.notes || "Manager/TL time log correction saved from Time tab.",
+    })
+  );
+} catch (error) {
+  console.warn("Google approval log skipped for historical time edit:", error);
+}
 
       setTimeEntries((current) => current.map((entry) => (entry.id === id ? correctedEntry : entry)));
       showToast("Time log saved", "The previous time log was corrected and retained for audit review.", "success");
@@ -5119,9 +5235,29 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
             </Card>
             <Card title="Editable previous time logs">
               <p className="helperText">Use this table to correct historical clock-in/out, category, approval, payable status, or notes. Select Save on the corrected row to persist the update.</p>
+              
+<div className="filterActions">
+  <button type="button" className="primary" onClick={bulkApproveSelectedTimeLogs}>
+    Approve Selected
+  </button>
+
+  <button type="button" onClick={selectAllFilteredTimeLogs}>
+    Select All Filtered
+  </button>
+
+  <button type="button" onClick={clearSelectedTimeLogs}>
+    Clear Selection
+  </button>
+</div>
+
               <Table
-                headers={["Employee", "Date", "LOB", "Category", "Start", "End", "Duration", "Approval", "Payable", "Notes", "Save"]}
+                headers={["Select", "Employee", "Date", "LOB", "Category", "Start", "End", "Duration", "Approval", "Payable", "Notes", "Save"]}
                 rows={filteredTime.map((t) => [
+                  <input
+  type="checkbox"
+  checked={selectedTimeLogIds.includes(t.id)}
+  onChange={() => toggleTimeLogSelection(t.id)}
+/>,
                   <strong>{t.employee_name}</strong>,
                   <input type="date" value={t.date || today} onChange={(event) => editTimeEntryLocal(t.id, "date", event.target.value)} />,
                   t.lob,
