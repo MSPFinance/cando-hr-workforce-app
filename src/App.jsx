@@ -2457,6 +2457,12 @@ function HRWorkforceApp() {
   const [startupLoading, setStartupLoading] = useState(true);
   const [selectedTimeLogIds, setSelectedTimeLogIds] = useState([]);
 
+  const [timeLogTableFilters, setTimeLogTableFilters] = useState({
+  category: "All",
+  approval: "All",
+  payable: "All",
+});
+
 
   async function syncWorkforcePlanningSheet(options = {}) {
     const { silent = false, automatic = false } = options;
@@ -3060,6 +3066,21 @@ const dateOk = (!filters.startDate || entryDate >= filters.startDate) && (!filte
       (filters.category === "All" || t.category === filters.category)
     );
   });
+  const editableTimeLogs = filteredTime.filter((t) => {
+  const categoryOk =
+    timeLogTableFilters.category === "All" ||
+    t.category === timeLogTableFilters.category;
+
+  const approvalOk =
+    timeLogTableFilters.approval === "All" ||
+    (t.approved || "Pending") === timeLogTableFilters.approval;
+
+  const payableOk =
+    timeLogTableFilters.payable === "All" ||
+    (t.payable_status || "Regular") === timeLogTableFilters.payable;
+
+  return categoryOk && approvalOk && payableOk;
+});
 
   const filteredRequests = visibleRequests.filter((r) => {
     const employee = employees.find((e) => e.id === r.employee_id);
@@ -4245,7 +4266,7 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
 }
 
 function selectAllFilteredTimeLogs() {
-  const ids = filteredTime.map((entry) => entry.id).filter(Boolean);
+  const ids = editableTimeLogs.map((entry) => entry.id).filter(Boolean);
   setSelectedTimeLogIds(ids);
 }
 
@@ -5250,11 +5271,39 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
   <button type="button" onClick={clearSelectedTimeLogs}>
     Clear Selection
   </button>
+  <select
+  value={timeLogTableFilters.category}
+  onChange={(e) => setTimeLogTableFilters({ ...timeLogTableFilters, category: e.target.value })}
+>
+  {["All", ...timeCategories.filter((category) => !isSystemManagedTimeCategory(category))].map((category) => (
+  <option key={category} value={category}>
+    {category}
+  </option>
+))}
+</select>
+
+<select
+  value={timeLogTableFilters.approval}
+  onChange={(e) => setTimeLogTableFilters({ ...timeLogTableFilters, approval: e.target.value })}
+>
+  {["All", "Pending", "Pending Approval", "Approved", "Denied", "Auto Logged"].map((status) => (
+    <option key={status}>{status}</option>
+  ))}
+</select>
+
+<select
+  value={timeLogTableFilters.payable}
+  onChange={(e) => setTimeLogTableFilters({ ...timeLogTableFilters, payable: e.target.value })}
+>
+  {["All", "Regular", "Pending Manager Approval", "Approved Payable", "Not Payable"].map((status) => (
+    <option key={status}>{status}</option>
+  ))}
+</select>
 </div>
 
               <Table
                 headers={["Select", "Employee", "Date", "LOB", "Category", "Start", "End", "Duration", "Approval", "Payable", "Notes", "Save"]}
-                rows={filteredTime.map((t) => [
+                rows={editableTimeLogs.map((t) => [
                   <input
   type="checkbox"
   checked={selectedTimeLogIds.includes(t.id)}
@@ -5925,7 +5974,26 @@ button:hover, .btn:hover { transform: translateY(-1px); box-shadow: 0 10px 22px 
 .btn input { display: none; }
 .syncNotice { margin-top: 18px; background: #ecfdf5; border: 1px solid #bbf7d0; color: #065f46; border-radius: 16px; padding: 12px 14px; font-size: 13px; line-height: 1.45; font-weight: 700; }
 
-.filterActions { display: flex; gap: 8px; align-items: end; grid-column: span 2; }
+.filterActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 10px 0 14px;
+  grid-column: span 2;
+}
+
+.filterActions button {
+  height: 40px;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.filterActions select {
+  height: 40px;
+  width: 150px;
+  min-width: 150px;
+}
 .requestsPage { margin-top: 18px; display: grid; gap: 18px; }
 .requestCalendar { display: grid; gap: 12px; }
 .calendarHeader { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
