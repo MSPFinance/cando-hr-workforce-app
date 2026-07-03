@@ -2727,7 +2727,9 @@ if (finalSyncedEmployees?.length) {
   const currentUser = employees.find((e) => normalizeEmail(e.email) === normalizeEmail(sessionUserEmail)) || employees.find((e) => normalizeEmail(e.email) === normalizeEmail(DEFAULT_LOGIN_EMAIL)) || employees[0];
   const canAccessAdmin = hasAdminAccess(currentUser);
   const isAuthenticated = Boolean(sessionUserEmail && currentUser);
-  const isAgentOnly = !canAccessAdmin;
+  const managerRoles = ["Admin", "Manager", "TL", "Supervisor", "Q&T Manager", "Payroll", "Reporting", "HR"];
+const userRole = currentUser?.role || currentUser?.access_level || "";
+const isAgentOnly = !managerRoles.includes(userRole);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState(currentUser?.id || "");
 const selectedEmployee = isAgentOnly
   ? currentUser
