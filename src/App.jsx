@@ -4671,7 +4671,7 @@ console.log("Skipping Google Sheets timeLogs update for historical edit.");
         Subject: "Temporary password for Magnemite.app",
         Status: "Pending Send",
         Created_At: new Date(),
-        Notes: `Temporary Password: ${temporaryPassword} | User must create a personalized password after login.`,
+        Body: `Hello ${employee.full_name || "Employee"}, your temporary password is: ${temporaryPassword}. After logging in, you will be asked to create your own personal password.`,
       });
 
       await googleAddRow("emailQueue", {
