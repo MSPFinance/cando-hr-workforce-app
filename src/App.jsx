@@ -3709,21 +3709,25 @@ if (openLog) {
     current.map((entry) => (entry.id === openLog.id ? closedLog : entry))
   );
 
-  if (supabase) {
-    await supabase
-      .from("time_logs")
-      .update({
-        clock_out: clockOut,
-        duration_minutes: durationMinutes,
-      })
-      .eq("id", openLog.id);
-  }
+ if (supabase) {
+  const closePayload = {
+    clock_out: clockOut,
+    category_end: clockOut,
+    duration_minutes: Number(durationMinutes) || 0,
+  };
 
-  try {
-    await googleAddRow("Time_Logs", mapTimeLogToSheet(closedLog));
-  } catch (error) {
-    console.warn("Google Sheet close log update skipped:", error);
-  }
+  const { data, error } = await supabase
+    .from("time_logs")
+    .update(closePayload)
+    .eq("app_log_id", openLog.app_log_id || openLog.id)
+    .select();
+
+  console.log("Supabase close log update:", data, error);
+
+  if (error) throw error;
+}
+
+  console.log("Skipping Google Sheets Time_Logs close update; Supabase is source of truth for time logs.");
 }
       const duplicate = timeEntries.some(
         (entry) =>
@@ -4471,10 +4475,23 @@ console.log("Skipping Google Sheets timeLogs update for historical edit.");
   }
 
   function exportTimeCsv() {
-    const headers = ["employee_name", "date", "lob", "department", "category", "category_start", "category_end", "duration_minutes", "approved", "notes"];
-    const rows = filteredTime.map((t) => ({ ...t, duration_minutes: minutesBetween(t.category_start, t.category_end) }));
-    downloadFile("cando-hr-time-report.csv", csv(rows, headers), "text/csv");
-  }
+  const headers = ["employee_name", "date", "lob", "department", "log_status", "category_start", "category_end", "duration_minutes", "approved", "notes"];
+
+  const rows = filteredTime.map((t) => ({
+    employee_name: t.employee_name || "",
+    date: t.date || "",
+    lob: t.lob || "",
+    department: t.department || "",
+    log_status: t.category || t.status || t.disposition || "",
+    category_start: t.category_start || t.clock_in || "",
+    category_end: t.category_end || t.clock_out || "",
+    duration_minutes: Number(t.duration_minutes || minutesBetween(t.category_start || t.clock_in, t.category_end || t.clock_out)) || 0,
+    approved: t.approved || t.approval_status || "",
+    notes: t.notes || "",
+  }));
+
+  downloadFile("cando-hr-time-report.csv", csv(rows, headers), "text/csv");
+}
 
   function exportRequestsCsv() {
     const headers = ["employee_name", "type", "start_date", "end_date", "hours", "requested_days", "current_balance", "projected_balance", "status", "manager", "reason"];
