@@ -1737,9 +1737,8 @@ async function googleAddRow(tab, data) {
     }
 
     return result;
-  } catch (error) {
-    console.error("Google Sheets addRow error:", error);
-    alert(`Google Sheets connection error: ${error.message}`);
+    } catch (error) {
+    console.warn("Google Sheets addRow skipped; Supabase is source of truth for time logs.", error);
     return null;
   }
 }
@@ -2752,9 +2751,21 @@ const visibleRequests = isAgentOnly && currentUser?.id
   ? requests.filter((r) => r.employee_id === currentUser.id)
   : requests;
 
-const visibleActivity = isAgentOnly && currentUser?.id
-  ? activityLog.filter((a) => a.employee_id === currentUser.id)
-  : activityLog;
+const visibleActivity = (isAgentOnly && currentUser?.id
+  ? timeEntries.filter((t) => String(t.employee_id) === String(currentUser.id))
+  : timeEntries.filter((t) => String(t.employee_id) === String(selectedEmployee?.id))
+)
+  .filter((t) => normalizeDateForFilter(t.date || t.clock_in || t.created_at) === today)
+  .map((t) => ({
+    id: t.id || t.app_log_id,
+    employee_id: t.employee_id,
+    employee_name: t.employee_name,
+    date: t.date || String(t.clock_in || t.created_at || "").slice(0, 10),
+    action: t.notes || "Status Logged",
+    time: t.category_start || t.clock_in || t.created_at,
+    status: t.category || t.status || "Working",
+  }))
+  .sort((a, b) => String(b.time || "").localeCompare(String(a.time || "")));
 
   const filteredVisibleEmployees = visibleEmployees.filter((employee) => {
   if (!employee) return false;
@@ -3910,6 +3921,68 @@ if (openLog) {
     showToast("Daily timer stop completed", `${autoEntries.length} open shift timer(s) were closed automatically at ${stopTime}.`, "info");
   }
 
+  async function managerEndSelectedEmployeeShift() {
+  if (!canEditTimeLogs(currentUser?.access_level || currentUser?.role || "Employee")) {
+    showToast("Access denied", "Only TLs, Managers, Reporting, HR, Payroll, and Admin users can end an agent shift.", "danger");
+    return null;
+  }
+
+  const openLog = timeEntries.find(
+    (entry) =>
+      String(entry.employee_id) === String(selectedEmployee.id) &&
+      !entry.clock_out
+  );
+
+  if (!openLog) {
+    showToast("No open shift found", "This agent does not have an open active log to close.", "warning");
+    return null;
+  }
+
+  const now = new Date();
+  const time = now.toTimeString().slice(0, 5);
+  const clockOut = now.toISOString();
+  const durationMinutes = Math.max(
+    0,
+    Math.round((new Date(clockOut) - new Date(openLog.clock_in || openLog.category_start)) / 60000)
+  );
+
+  const closedLog = {
+    ...openLog,
+    clock_out: clockOut,
+    category_end: time,
+    duration_minutes: durationMinutes,
+    notes: "Shift Ended by Manager",
+    approved: openLog.approved || "Pending",
+    edited_by: currentUser.email,
+    edited_at: now.toISOString(),
+  };
+
+  if (supabase) {
+    const { error } = await supabase
+      .from("time_logs")
+      .update({
+        clock_out: clockOut,
+        category_end: clockOut,
+        duration_minutes: durationMinutes,
+        notes: "Shift Ended by Manager",
+        edited_by: currentUser.email,
+        edited_at: now.toISOString(),
+      })
+      .eq("app_log_id", openLog.app_log_id || openLog.id);
+
+    if (error) throw error;
+  }
+
+  setTimeEntries((current) =>
+    current.map((entry) =>
+      (entry.id === openLog.id || entry.app_log_id === openLog.app_log_id)
+        ? closedLog
+        : entry
+    )
+  );
+
+  showToast("Shift ended", `${selectedEmployee.full_name}'s open shift was closed by manager.`, "success");
+}
   async function saveTime() {
     if (!canEditTimeLogs(currentUser?.access_level || currentUser?.role || "Employee")) {
       showToast("Access denied", "Only TLs, Managers, Reporting, HR, Payroll, and Admin users can edit time logs.", "danger");
@@ -5271,6 +5344,9 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
                 <input type="time" value={newTime.category_end} onChange={(e) => setNewTime({ ...newTime, category_end: e.target.value })} />
                 <input placeholder="Notes" value={newTime.notes} onChange={(e) => setNewTime({ ...newTime, notes: e.target.value })} />
                 <button className="primary wide" onClick={saveTime}>Add time entry</button>
+                <button type="button" onClick={managerEndSelectedEmployeeShift}>
+  End selected agent shift
+</button>
               </FormGrid>
             </Card>
             <Card title="Editable previous time logs">
