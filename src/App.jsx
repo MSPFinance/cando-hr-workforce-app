@@ -2751,22 +2751,11 @@ const visibleRequests = isAgentOnly && currentUser?.id
   ? requests.filter((r) => r.employee_id === currentUser.id)
   : requests;
 
-const visibleActivity = (isAgentOnly && currentUser?.id
-  ? timeEntries.filter((t) => String(t.employee_id) === String(currentUser.id))
-  : timeEntries.filter((t) => String(t.employee_id) === String(selectedEmployee?.id))
-)
-  .filter((t) => normalizeDateForFilter(t.date || t.clock_in || t.created_at) === today)
-  .map((t) => ({
-    id: t.id || t.app_log_id,
-    employee_id: t.employee_id,
-    employee_name: t.employee_name,
-    date: t.date || String(t.clock_in || t.created_at || "").slice(0, 10),
-    action: t.notes || "Status Logged",
-    time: t.category_start || t.clock_in || t.created_at,
-    status: t.category || t.status || "Working",
-  }))
-  .sort((a, b) => String(b.time || "").localeCompare(String(a.time || "")));
+const visibleActivity = isAgentOnly && currentUser?.id
+  ? activityLog.filter((a) => a.employee_id === currentUser.id)
+  : activityLog;
 
+  
   const filteredVisibleEmployees = visibleEmployees.filter((employee) => {
   if (!employee) return false;
     return (
