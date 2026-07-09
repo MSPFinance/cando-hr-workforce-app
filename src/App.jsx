@@ -2098,11 +2098,12 @@ function mergeSupabaseEmployeeData(baseEmployees = [], supabaseEmployees = [], b
 async function loadSupabaseReferenceData(baseEmployees = [], applyEmployees, applyDatabaseStatus) {
   if (!supabase) return false;
   try {
-    const [employeesResult, balancesResult, schedulesResult] = await Promise.all([
-      supabase.from("employees").select("*"),
-      supabase.from("employee_balances").select("*"),
-      supabase.from("employee_schedules").select("*"),
-    ]);
+    const [employeesResult, balancesResult] = await Promise.all([
+  supabase.from("employees").select("*"),
+  supabase.from("employee_balances").select("*"),
+]);
+
+const schedulesResult = { data: [], error: null };
 
     if (employeesResult.error) {
       console.warn("Supabase employees load skipped:", employeesResult.error.message);
