@@ -57,7 +57,7 @@ const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
 const WORKFORCE_SYNC_SHEET_ID = "1cmYlztzC9oc8z6LSD6ER_UqU2F17Lq7fiMAAWLnMy5s";
 const WORKFORCE_SYNC_SHEET_NAMES = ["Roster"];
 const WORKFORCE_BREAKS_SHEET_NAMES = ["Breaks"];
-const WORKFORCE_BALANCES_SHEET_NAMES = ["employee_balances"];
+const WORKFORCE_BALANCES_SHEET_NAMES = ["App_Balances", "employee_balances"];
 const WORKFORCE_SYNC_AUTOMATIC_ENABLED = true;
 const WORKFORCE_SYNC_SCHEDULE_DAY = 6; // Saturday, based on local browser time.
 const WORKFORCE_SYNC_SCHEDULE_TIME = "05:00"; // Saturday morning sync window.
@@ -1540,8 +1540,8 @@ function getTodayShiftSummary(employee) {
   return {
     isOff: false,
     label: formatTimeRange(
-  addVisualDST(schedule.shift_start),
-  addVisualDST(schedule.shift_end)
+  schedule.shift_start,
+  schedule.shift_end
 ),
     detail:
       `First Break: ${formatTimeRange(schedule.break_start, schedule.break_end)} · ` +
