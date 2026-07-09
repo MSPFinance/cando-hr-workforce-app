@@ -21,7 +21,27 @@ const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
-const today = new Date().toISOString().slice(0, 10);
+const APP_TIME_ZONE = "America/Costa_Rica";
+
+function getAppDateKey(date = new Date()) {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function getAppTimeKey(date = new Date()) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIME_ZONE,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
+const today = getAppDateKey();
 const DAILY_TIMER_STOP_TIME = "23:59";
 const LOGO = "/cando-logo.png";
 
@@ -92,7 +112,7 @@ function getLocalDateKey(date = new Date()) {
 
 function isWeeklyWorkforceSyncWindow(date = new Date()) {
   if (!WORKFORCE_SYNC_AUTOMATIC_ENABLED) return false;
-  const currentTime = date.toTimeString().slice(0, 5);
+  const currentTime = getAppTimeKey(date);
   return date.getDay() === WORKFORCE_SYNC_SCHEDULE_DAY && currentTime >= WORKFORCE_SYNC_SCHEDULE_TIME;
 }
 
@@ -651,7 +671,7 @@ function getTimeLogDuration(entry) {
   if (end) return formatHours(minutesBetween(start, end));
 
   const startMinutes = timeToMinutes(start);
-  const nowMinutes = timeToMinutes(new Date().toTimeString().slice(0, 5));
+  const nowMinutes = timeToMinutes(getAppTimeKey(new Date()));
 
   if (startMinutes === null || nowMinutes === null) return "Active";
 
@@ -2645,8 +2665,8 @@ if (finalSyncedEmployees?.length) {
   useEffect(() => {
     const interval = window.setInterval(() => {
       const now = new Date();
-      const currentDate = now.toISOString().slice(0, 10);
-      const currentTime = now.toTimeString().slice(0, 5);
+      const currentDate = getAppDateKey(now);
+      const currentTime = getAppTimeKey(now);
       if (currentTime === DAILY_TIMER_STOP_TIME && dailyTimerStopRef.current !== currentDate) {
         dailyTimerStopRef.current = currentDate;
         autoStopDailyTimers(currentDate, DAILY_TIMER_STOP_TIME);
@@ -3604,7 +3624,7 @@ User can now log into the Agent Portal.`
   }
 
     const now = new Date();
-    const time = now.toTimeString().slice(0, 5);
+    const time = getAppTimeKey(now);
     const schedule = getStableSchedule(selectedEmployee);
 
     const autoClass = getAutoWorkClassification(selectedEmployee, time);
@@ -3928,7 +3948,7 @@ if (openLog) {
   }
 
   const now = new Date();
-  const time = now.toTimeString().slice(0, 5);
+  const time = getAppTimeKey(now);
   const clockOut = now.toISOString();
   const durationMinutes = Math.max(
     0,
@@ -5779,7 +5799,7 @@ function Progress({ label, value, percent }) { return <div className="progress">
 function Approval({ title, detail, approve, deny }) { return <div className="approval"><section><strong>{title}</strong><span>{detail}</span></section><div><button className="approve" onClick={approve}><CheckCircle size={18} /></button><button className="deny" onClick={deny}><XCircle size={18} /></button></div></div>; }
 function getAgentLiveStatus(agent, statusLogs = [], approvals = []) {
   const dateKey = getLocalDateKey(new Date());
-  const nowMinutes = timeToMinutes(new Date().toTimeString().slice(0, 5));
+  const nowMinutes = timeToMinutes(getAppTimeKey(new Date()));
 
   const cleanKey = (value) =>
   String(value || "").trim().toLowerCase();
