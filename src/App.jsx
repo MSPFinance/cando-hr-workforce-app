@@ -1399,6 +1399,23 @@ if (!countriesOneHourBehindEST.includes(country)) {
   return `${hh}:${mm}`;
 }
 
+function addDstVisualHour(timeValue) {
+  if (!timeValue) return "";
+  const text = String(timeValue).trim();
+  if (!text || text === "EMPTY") return "";
+
+  const parts = text.split(":");
+  if (parts.length < 2) return text;
+
+  let hour = Number(parts[0]);
+  const minute = parts[1].slice(0, 2);
+
+  // Visual DST correction only
+  hour = (hour + 23) % 24;
+
+  return `${String(hour).padStart(2, "0")}:${minute}`;
+}
+
 function getStableSchedule(employee, schedules = [], dayName = todayDayName()) {
   const normalizedDay = normalizeDayName(dayName);
   const breaksByDay = employee?.breaks_by_day || {};
@@ -1489,6 +1506,18 @@ function shouldSplitAutoOvertime(employee, endTime) {
   return endMinutes !== null && shiftEnd !== null && endMinutes > shiftEnd;
 }
 
+function addVisualDST(time) {
+  if (!time) return "";
+
+  const parts = String(time).split(":");
+  if (parts.length < 2) return time;
+
+  let hour = Number(parts[0]);
+  hour = (hour + 23) % 24;
+
+  return `${String(hour).padStart(2, "0")}:${parts[1]}`;
+}
+
 function getShiftStartOrNow(employee, time) {
   if (!employee) return time;
   const nowMinutes = timeToMinutes(time);
@@ -1511,9 +1540,9 @@ function getTodayShiftSummary(employee) {
   return {
     isOff: false,
     label: formatTimeRange(
-      schedule.shift_start,
-      schedule.shift_end
-    ),
+  addVisualDST(schedule.shift_start),
+  addVisualDST(schedule.shift_end)
+),
     detail:
       `First Break: ${formatTimeRange(schedule.break_start, schedule.break_end)} · ` +
       `Second Break: ${formatTimeRange(schedule.second_break_start, schedule.second_break_end)}`
