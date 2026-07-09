@@ -1416,20 +1416,43 @@ function addDstVisualHour(timeValue) {
   return `${String(hour).padStart(2, "0")}:${minute}`;
 }
 
+function shiftTimeByHours(time, hoursOffset) {
+  if (!time || time === "Not Available") return "Not Available";
+
+  const [h, m = "00"] = String(time).split(":");
+  let hour = Number(h);
+
+  if (Number.isNaN(hour)) return time;
+
+  hour = (hour + hoursOffset + 24) % 24;
+
+  return `${String(hour).padStart(2, "0")}:${String(m).padStart(2, "0").slice(0, 2)}`;
+}
+
+function scheduleTimeForEmployee(time, employee) {
+  const country = String(employee?.country || employee?.team || "").toLowerCase();
+
+  if (country.includes("costa rica") || country === "cr") {
+    return shiftTimeByHours(time, -2); // EST to Costa Rica during DST
+  }
+
+  return convertESTToEmployeeLocal(time, employee);
+}
+
 function getStableSchedule(employee, schedules = [], dayName = todayDayName()) {
   const normalizedDay = normalizeDayName(dayName);
   const breaksByDay = employee?.breaks_by_day || {};
   const dayBreaks = breaksByDay[normalizedDay] || {};
 
   return {
-    shift_start: convertESTToEmployeeLocal(employee?.shift_start || "Not Available", employee),
-    shift_end: convertESTToEmployeeLocal(employee?.shift_end || "Not Available", employee),
+    shift_start: scheduleTimeForEmployee(employee?.shift_start || "Not Available", employee),
+shift_end: scheduleTimeForEmployee(employee?.shift_end || "Not Available", employee),
 
-    break_start: convertESTToEmployeeLocal(dayBreaks.first_break_start || "Not Available", employee),
-    break_end: convertESTToEmployeeLocal(dayBreaks.first_break_end || "Not Available", employee),
+break_start: applyDSTOffset(convertESTToEmployeeLocal(dayBreaks.first_break_start || "Not Available", employee)),
+break_end: applyDSTOffset(convertESTToEmployeeLocal(dayBreaks.first_break_end || "Not Available", employee)),
 
-       second_break_start: convertESTToEmployeeLocal(dayBreaks.second_break_start || "Not Available", employee),
-    second_break_end: convertESTToEmployeeLocal(dayBreaks.second_break_end || "Not Available", employee),
+second_break_start: applyDSTOffset(convertESTToEmployeeLocal(dayBreaks.second_break_start || "Not Available", employee)),
+second_break_end: applyDSTOffset(convertESTToEmployeeLocal(dayBreaks.second_break_end || "Not Available", employee)),
 
     off_days: employee?.off_days || "",
     sub_department: employee?.sub_department || "",
@@ -1501,13 +1524,32 @@ const shiftEnd = timeToMinutes(schedule.shift_end);
 
 function shouldSplitAutoOvertime(employee, endTime) {
   if (!employee || isTodayOffDay(employee)) return false;
+
+  const schedule = getStableSchedule(employee);
   const endMinutes = timeToMinutes(endTime);
-  const shiftEnd = timeToMinutes(employee.shift_end);
+  const shiftEnd = timeToMinutes(schedule.shift_end);
+
   return endMinutes !== null && shiftEnd !== null && endMinutes > shiftEnd;
 }
 
-function addVisualDST(time) {
+function isDSTActive(date = new Date()) {
+  const year = date.getFullYear();
+
+  const march = new Date(year, 2, 1);
+  const secondSundayMarch = 14 - march.getDay();
+
+  const november = new Date(year, 10, 1);
+  const firstSundayNovember = 7 - november.getDay();
+
+  const dstStart = new Date(year, 2, secondSundayMarch);
+  const dstEnd = new Date(year, 10, firstSundayNovember);
+
+  return date >= dstStart && date < dstEnd;
+}
+
+function applyDSTOffset(time) {
   if (!time) return "";
+  if (!isDSTActive()) return time;
 
   const parts = String(time).split(":");
   if (parts.length < 2) return time;
