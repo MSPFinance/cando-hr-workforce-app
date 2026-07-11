@@ -41,6 +41,28 @@ function getAppTimeKey(date = new Date()) {
   }).format(date);
 }
 
+function getEmployeeDateKey(employee, date = new Date()) {
+  const employeeTimeZone = getEmployeeTimeZone(employee);
+
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: employeeTimeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function getEmployeeTimeKey(employee, date = new Date()) {
+  const employeeTimeZone = getEmployeeTimeZone(employee);
+
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: employeeTimeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+}
+
 const today = getAppDateKey();
 const DAILY_TIMER_STOP_TIME = "23:59";
 const LOGO = "/cando-logo.png";
@@ -55,11 +77,11 @@ const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
 // This reads approved operational fields from the shared workforce sheet while protecting identity/auth fields.
 // Protected fields that are NEVER overwritten by this sync: email, password/temp_password, role, access_level, hire_date, birthday, and employee id.
 const WORKFORCE_SYNC_SHEET_ID = "1cmYlztzC9oc8z6LSD6ER_UqU2F17Lq7fiMAAWLnMy5s";
-const WORKFORCE_SYNC_SHEET_NAMES = ["Roster"];
+const WORKFORCE_SYNC_SHEET_NAMES = ["App_Schedules"];
 const WORKFORCE_BREAKS_SHEET_NAMES = ["Breaks"];
 const WORKFORCE_BALANCES_SHEET_NAMES = ["App_Balances", "employee_balances"];
 const WORKFORCE_SYNC_AUTOMATIC_ENABLED = true;
-const WORKFORCE_SYNC_SCHEDULE_DAY = 6; // Saturday, based on local browser time.
+const WORKFORCE_SYNC_SCHEDULE_DAY = 6; // Saturday in the Magnemite app timezone.
 const WORKFORCE_SYNC_SCHEDULE_TIME = "05:00"; // Saturday morning sync window.
 const WORKFORCE_SYNC_LAST_RUN_KEY = "candoHrLastSaturdayWorkforceSync";
 const ATTENDANCE_DAILY_EMAILS_ENABLED = true;
@@ -112,8 +134,18 @@ function getLocalDateKey(date = new Date()) {
 
 function isWeeklyWorkforceSyncWindow(date = new Date()) {
   if (!WORKFORCE_SYNC_AUTOMATIC_ENABLED) return false;
+
   const currentTime = getAppTimeKey(date);
-  return date.getDay() === WORKFORCE_SYNC_SCHEDULE_DAY && currentTime >= WORKFORCE_SYNC_SCHEDULE_TIME;
+
+  const currentDay = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIME_ZONE,
+    weekday: "short",
+  }).format(date);
+
+  return (
+    currentDay === "Sat" &&
+    currentTime >= WORKFORCE_SYNC_SCHEDULE_TIME
+  );
 }
 
 // LOGIN + ROLE ACCESS
@@ -925,8 +957,45 @@ function mapWorkforceSyncRow(row) {
   setText("employment_type", ["Employment_Type", "Employment Type"]);
   setText("off_days", ["Off_Days", "Off Days", "Rest Days", "Days Off"]);
 
-  setTime("shift_start", ["Start Time (EST)", "Shift_Start", "Shift Start", "Scheduled_Shift_Start", "Scheduled Shift Start", "Start Time"]);
-  setTime("shift_end", ["End Time (EST)", "Shift_End", "Shift End", "Scheduled_Shift_End", "Scheduled Shift End", "End Time"]);
+  setTime("shift_start", [
+  "start_time_est",
+  "Start Time EST",
+  "Start Time (EST)",
+  "Shift_Start",
+  "Shift Start",
+  "Scheduled_Shift_Start",
+  "Scheduled Shift Start",
+  "Start Time"
+]);
+
+setTime("shift_end", [
+  "end_time_est",
+  "End Time EST",
+  "End Time (EST)",
+  "Shift_End",
+  "Shift End",
+  "Scheduled_Shift_End",
+  "Scheduled Shift End",
+  "End Time"
+]);
+const dayValues = {
+  Sunday: firstValue(row, ["sunday", "Sunday"]),
+  Monday: firstValue(row, ["monday", "Monday"]),
+  Tuesday: firstValue(row, ["tuesday", "Tuesday"]),
+  Wednesday: firstValue(row, ["wednesday", "Wednesday"]),
+  Thursday: firstValue(row, ["thursday", "Thursday"]),
+  Friday: firstValue(row, ["friday", "Friday"]),
+  Saturday: firstValue(row, ["saturday", "Saturday"]),
+};
+
+payload.off_days = Object.entries(dayValues)
+  .filter(([, value]) =>
+    String(value || "").trim().toUpperCase() === "OFF"
+  )
+  .map(([day]) => day)
+  .join(", ");
+
+payload.schedule_days = dayValues;
 
   const shiftRange = splitTimeRange(firstValue(row, ["Shift", "Schedule", "Scheduled Shift"]));
   if (!payload.shift_start && shiftRange.start) payload.shift_start = formatMilitaryTime(shiftRange.start);
@@ -980,30 +1049,75 @@ async function fetchWorkforceSheetRows() {
   return [];
 }
 
-function parseTimeRange(value) {
-  if (!value) return { start: "", end: "" };
-
-  const parts = String(value).split("-");
-  return {
-    start: parts[0]?.trim() || "",
-    end: parts[1]?.trim() || ""
-  };
-}
 
 function mapBreaksSyncRow(row) {
-  const first = parseTimeRange(row["First Break"]);
-  const second = parseTimeRange(row["Second Break"]);
+  const employeeId = String(
+    firstValue(row, [
+      "Employee_ID",
+      "Employee ID",
+      "ID",
+      "employee_id",
+    ]) || ""
+  ).trim();
+
+  const fullName = String(
+    firstValue(row, [
+      "Full_Name",
+      "Full Name",
+      "Employee",
+      "Employee Name",
+      "Name",
+      "Agent",
+    ]) || ""
+  ).trim();
+
+  const day = normalizeDayName(
+    firstValue(row, ["Day", "Day_Name", "Day Name"])
+  );
+
+  if ((!employeeId && !fullName) || !day) {
+    return null;
+  }
+
+  const firstBreak = splitTimeRange(
+    firstValue(row, [
+      "First Break",
+      "First_Break",
+      "Break 1",
+      "Break_1",
+    ])
+  );
+
+  const secondBreak = splitTimeRange(
+    firstValue(row, [
+      "Second Break",
+      "Second_Break",
+      "Break 2",
+      "Break_2",
+    ])
+  );
 
   return {
-    employee_id: cleanId(row.ID),
-    day_name: row.Day || "",
-    lunch_start: "",
-    lunch_end: "",
-    first_break_start: first.start,
-    first_break_end: first.end,
-    second_break_start: second.start,
-    second_break_end: second.end,
-    source: "Roster Breaks"
+    employeeId,
+    fullName,
+    payload: {
+      breaks_by_day: {
+        [day]: {
+          first_break_start: firstBreak.start
+            ? formatMilitaryTime(firstBreak.start)
+            : "",
+          first_break_end: firstBreak.end
+            ? formatMilitaryTime(firstBreak.end)
+            : "",
+          second_break_start: secondBreak.start
+            ? formatMilitaryTime(secondBreak.start)
+            : "",
+          second_break_end: secondBreak.end
+            ? formatMilitaryTime(secondBreak.end)
+            : "",
+        },
+      },
+    },
   };
 }
 
@@ -1047,15 +1161,23 @@ function mapBalanceSyncRow(row) {
   };
 
   setNumber("pto_balance_days", [
+  "Current_Available_Days",
+  "Current Available Days",
+  "current_available_days",
+
   "Vacations",
   "vacations",
-  "Available days",
+
+  "Available_Days",
   "Available Days",
+  "available_days",
+
   "PTO_Balance_Days",
   "PTO Balance Days",
   "PTO Days",
+
   "Vacation Balance",
-  "Vacation_Balance"
+  "Vacation_Balance",
 ]);
   setNumber("sick_balance_days", ["Sick_Balance_Days", "Sick Balance Days", "Sick Days"]);
   setNumber("vto_balance_days", ["VTO_Balance_Days", "VTO Balance Days", "VTO Days"]);
@@ -1362,100 +1484,222 @@ function formatOffDays(value) {
   return days.length ? days.join(", ") : "None assigned";
 }
 
-function convertESTToEmployeeLocal(timeValue, employee) {
-  const formatted = formatMilitaryTime(timeValue);
+const SCHEDULE_SOURCE_TIME_ZONE = "America/New_York";
 
-  if (!formatted || formatted === "Not Available") {
-    return formatted;
+function getEmployeeTimeZone(employee) {
+  const explicitZone =
+    employee?.time_zone ||
+    employee?.timezone ||
+    employee?.Time_Zone;
+
+  if (explicitZone) {
+    return String(explicitZone).trim();
   }
 
-  const country = String(employee?.country || "")
+  const country = String(
+    employee?.country ||
+    employee?.team ||
+    ""
+  )
     .trim()
     .toUpperCase();
 
-// CR and MX operate one hour behind EST.
-// Accept both country codes and full country names from Google Sheets/Supabase.
-const countriesOneHourBehindEST = [
-  "CR",
-  "COSTA RICA",
-  "MX",
-  "MEXICO",
-];
+  const countryTimeZones = {
+    CR: "America/Costa_Rica",
+    "COSTA RICA": "America/Costa_Rica",
 
-if (!countriesOneHourBehindEST.includes(country)) {
-  return formatted;
+    MX: "America/Mexico_City",
+    MEXICO: "America/Mexico_City",
+    MÉXICO: "America/Mexico_City",
+
+    CAN: "America/Toronto",
+    CA: "America/Toronto",
+    CANADA: "America/Toronto",
+
+    US: "America/New_York",
+    USA: "America/New_York",
+    "UNITED STATES": "America/New_York",
+
+    PH: "Asia/Manila",
+    PHILIPPINES: "Asia/Manila",
+  };
+
+  return countryTimeZones[country] || SCHEDULE_SOURCE_TIME_ZONE;
 }
 
-  const [h, m] = formatted.split(":").map(Number);
+function getTimeZoneOffsetMinutes(timeZone, date) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
 
-  let total = h * 60 + m - 60;
+  const parts = formatter.formatToParts(date);
+  const values = {};
 
-  while (total < 0) total += 1440;
-  total %= 1440;
+  parts.forEach(({ type, value }) => {
+    if (type !== "literal") {
+      values[type] = value;
+    }
+  });
 
-  const hh = String(Math.floor(total / 60)).padStart(2, "0");
-  const mm = String(total % 60).padStart(2, "0");
+  let hour = Number(values.hour);
 
-  return `${hh}:${mm}`;
-}
-
-function addDstVisualHour(timeValue) {
-  if (!timeValue) return "";
-  const text = String(timeValue).trim();
-  if (!text || text === "EMPTY") return "";
-
-  const parts = text.split(":");
-  if (parts.length < 2) return text;
-
-  let hour = Number(parts[0]);
-  const minute = parts[1].slice(0, 2);
-
-  // Visual DST correction only
-  hour = (hour + 23) % 24;
-
-  return `${String(hour).padStart(2, "0")}:${minute}`;
-}
-
-function shiftTimeByHours(time, hoursOffset) {
-  if (!time || time === "Not Available") return "Not Available";
-
-  const [h, m = "00"] = String(time).split(":");
-  let hour = Number(h);
-
-  if (Number.isNaN(hour)) return time;
-
-  hour = (hour + hoursOffset + 24) % 24;
-
-  return `${String(hour).padStart(2, "0")}:${String(m).padStart(2, "0").slice(0, 2)}`;
-}
-
-function scheduleTimeForEmployee(time, employee) {
-  const country = String(employee?.country || employee?.team || "").toLowerCase();
-
-  if (country.includes("costa rica") || country === "cr") {
-    return shiftTimeByHours(time, -2); // EST to Costa Rica during DST
+  if (hour === 24) {
+    hour = 0;
   }
 
-  return convertESTToEmployeeLocal(time, employee);
+  const representedUtc = Date.UTC(
+    Number(values.year),
+    Number(values.month) - 1,
+    Number(values.day),
+    hour,
+    Number(values.minute),
+    Number(values.second)
+  );
+
+  return Math.round(
+    (representedUtc - date.getTime()) / 60000
+  );
 }
 
-function getStableSchedule(employee, schedules = [], dayName = todayDayName()) {
-  const normalizedDay = normalizeDayName(dayName);
-  const breaksByDay = employee?.breaks_by_day || {};
+function convertEasternScheduleToEmployeeLocal(
+  timeValue,
+  employee,
+  dateValue = new Date()
+) {
+  const formatted = formatMilitaryTime(timeValue);
+
+  if (
+    !formatted ||
+    formatted === "Not Available" ||
+    formatted === "EMPTY"
+  ) {
+    return formatted || "Not Available";
+  }
+
+  const match = formatted.match(/^(\d{1,2}):(\d{2})$/);
+
+  if (!match) {
+    return formatted;
+  }
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+
+  const year = dateValue.getFullYear();
+  const month = dateValue.getMonth();
+  const day = dateValue.getDate();
+
+  const initialUtcGuess = new Date(
+    Date.UTC(year, month, day, hour, minute, 0)
+  );
+
+  const sourceOffset = getTimeZoneOffsetMinutes(
+    SCHEDULE_SOURCE_TIME_ZONE,
+    initialUtcGuess
+  );
+
+  const realInstant = new Date(
+    initialUtcGuess.getTime() - sourceOffset * 60000
+  );
+
+  const destinationZone = getEmployeeTimeZone(employee);
+
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: destinationZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(realInstant);
+}
+
+function getStableSchedule(
+  employee,
+  schedules = [],
+  dayName = ""
+) {
+  if (!employee) {
+    return {
+      shift_start: "Not Available",
+      shift_end: "Not Available",
+      break_start: "Not Available",
+      break_end: "Not Available",
+      second_break_start: "Not Available",
+      second_break_end: "Not Available",
+      off_days: "",
+      sub_department: "",
+    };
+  }
+
+  const employeeTimeZone = getEmployeeTimeZone(employee);
+
+const normalizedDay = normalizeDayName(
+  dayName || todayDayName(employeeTimeZone)
+);
+  const breaksByDay = employee.breaks_by_day || {};
   const dayBreaks = breaksByDay[normalizedDay] || {};
 
+  const rawShiftStart =
+    employee.start_time_est ??
+    employee.Start_Time_EST ??
+    employee.shift_start ??
+    employee.Shift_Start ??
+    "";
+
+  const rawShiftEnd =
+    employee.end_time_est ??
+    employee.End_Time_EST ??
+    employee.shift_end ??
+    employee.Shift_End ??
+    "";
+
   return {
-    shift_start: scheduleTimeForEmployee(employee?.shift_start || "Not Available", employee),
-shift_end: scheduleTimeForEmployee(employee?.shift_end || "Not Available", employee),
+    shift_start: convertEasternScheduleToEmployeeLocal(
+      rawShiftStart,
+      employee
+    ),
 
-break_start: applyDSTOffset(convertESTToEmployeeLocal(dayBreaks.first_break_start || "Not Available", employee)),
-break_end: applyDSTOffset(convertESTToEmployeeLocal(dayBreaks.first_break_end || "Not Available", employee)),
+    shift_end: convertEasternScheduleToEmployeeLocal(
+      rawShiftEnd,
+      employee
+    ),
 
-second_break_start: applyDSTOffset(convertESTToEmployeeLocal(dayBreaks.second_break_start || "Not Available", employee)),
-second_break_end: applyDSTOffset(convertESTToEmployeeLocal(dayBreaks.second_break_end || "Not Available", employee)),
+    break_start: convertEasternScheduleToEmployeeLocal(
+      dayBreaks.first_break_start ||
+        employee.break_start ||
+        "Not Available",
+      employee
+    ),
 
-    off_days: employee?.off_days || "",
-    sub_department: employee?.sub_department || "",
+    break_end: convertEasternScheduleToEmployeeLocal(
+      dayBreaks.first_break_end ||
+        employee.break_end ||
+        "Not Available",
+      employee
+    ),
+
+    second_break_start: convertEasternScheduleToEmployeeLocal(
+      dayBreaks.second_break_start ||
+        employee.second_break_start ||
+        "Not Available",
+      employee
+    ),
+
+    second_break_end: convertEasternScheduleToEmployeeLocal(
+      dayBreaks.second_break_end ||
+        employee.second_break_end ||
+        "Not Available",
+      employee
+    ),
+
+    off_days: employee.off_days || "",
+    sub_department: employee.sub_department || "",
   };
 }
 
@@ -1470,13 +1714,22 @@ function getScheduleChangePayload(request) {
   }, {});
 }
 
-function todayDayName() {
-  return WEEK_DAYS[new Date().getDay()];
+function todayDayName(timeZone = APP_TIME_ZONE, date = new Date()) {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    weekday: "long",
+  }).format(date);
 }
 
 function isTodayOffDay(employee) {
-  const todayName = todayDayName().toLowerCase();
-  return normalizeOffDays(employee?.off_days).some((day) => day.toLowerCase() === todayName);
+  if (!employee) return false;
+
+  const employeeTimeZone = getEmployeeTimeZone(employee);
+  const todayName = todayDayName(employeeTimeZone).toLowerCase();
+
+  return normalizeOffDays(employee.off_days).some(
+    (day) => day.toLowerCase() === todayName
+  );
 }
 
 function getAutoWorkClassification(employee, currentTime) {
@@ -1532,62 +1785,50 @@ function shouldSplitAutoOvertime(employee, endTime) {
   return endMinutes !== null && shiftEnd !== null && endMinutes > shiftEnd;
 }
 
-function isDSTActive(date = new Date()) {
-  const year = date.getFullYear();
 
-  const march = new Date(year, 2, 1);
-  const secondSundayMarch = 14 - march.getDay();
-
-  const november = new Date(year, 10, 1);
-  const firstSundayNovember = 7 - november.getDay();
-
-  const dstStart = new Date(year, 2, secondSundayMarch);
-  const dstEnd = new Date(year, 10, firstSundayNovember);
-
-  return date >= dstStart && date < dstEnd;
-}
-
-function applyDSTOffset(time) {
-  if (!time) return "";
-  if (!isDSTActive()) return time;
-
-  const parts = String(time).split(":");
-  if (parts.length < 2) return time;
-
-  let hour = Number(parts[0]);
-  hour = (hour + 23) % 24;
-
-  return `${String(hour).padStart(2, "0")}:${parts[1]}`;
-}
 
 function getShiftStartOrNow(employee, time) {
   if (!employee) return time;
+
+  const schedule = getStableSchedule(employee);
   const nowMinutes = timeToMinutes(time);
-  const shiftStart = timeToMinutes(employee.shift_start);
-  if (nowMinutes !== null && shiftStart !== null && nowMinutes < shiftStart) return time;
-  return employee.shift_start || time;
+  const shiftStart = timeToMinutes(schedule.shift_start);
+
+  if (
+    nowMinutes !== null &&
+    shiftStart !== null &&
+    nowMinutes < shiftStart
+  ) {
+    return time;
+  }
+
+  return schedule.shift_start || time;
 }
 
-function getTodayShiftSummary(employee) {
-  if (!employee) {
+function buildShiftSummaryFromSchedule(schedule) {
+  if (!schedule) {
     return {
       isOff: false,
       label: "No schedule",
-      detail: "No employee selected."
+      detail: "Schedule not available.",
     };
   }
 
-  const schedule = getStableSchedule(employee);
-
   return {
     isOff: false,
-    label: formatTimeRange(
-  schedule.shift_start,
-  schedule.shift_end
-),
+    label: `${schedule.shift_start || "Not Available"} - ${
+      schedule.shift_end || "Not Available"
+    }`,
     detail:
-      `First Break: ${formatTimeRange(schedule.break_start, schedule.break_end)} · ` +
-      `Second Break: ${formatTimeRange(schedule.second_break_start, schedule.second_break_end)}`
+      `First Break: ${
+        schedule.break_start || "Not Available"
+      } - ${
+        schedule.break_end || "Not Available"
+      } · Second Break: ${
+        schedule.second_break_start || "Not Available"
+      } - ${
+        schedule.second_break_end || "Not Available"
+      }`,
   };
 }
 
@@ -1646,7 +1887,7 @@ function requestDaysValue(request) {
 }
 
 function employeeMonthlyAttendance(employee, timeEntries = [], requests = []) {
-  const monthKey = today.slice(0, 7);
+  const monthKey = getEmployeeDateKey(employee).slice(0, 7);
   const entries = timeEntries.filter((entry) => entry.employee_id === employee?.id && String(entry.date || "").startsWith(monthKey));
   const approvedRequests = requests.filter((request) => request.employee_id === employee?.id && request.status === "Approved" && String(request.start_date || "").startsWith(monthKey));
   const sickApproved = approvedRequests.filter((request) => request.type === "Sick Leave");
@@ -2137,36 +2378,112 @@ function mergeSupabaseEmployeeData(baseEmployees = [], supabaseEmployees = [], b
   return merged;
 }
 
-async function loadSupabaseReferenceData(baseEmployees = [], applyEmployees, applyDatabaseStatus) {
+async function loadSupabaseReferenceData(
+  baseEmployees = [],
+  applyEmployees,
+  applyDatabaseStatus
+) {
   if (!supabase) return false;
+
   try {
-    const [employeesResult, balancesResult] = await Promise.all([
-  supabase.from("employees").select("*"),
-  supabase.from("employee_balances").select("*"),
-]);
+    const { data: supabaseEmployees, error } = await supabase
+      .from("employees")
+      .select("*");
 
-const schedulesResult = { data: [], error: null };
-
-    if (employeesResult.error) {
-      console.warn("Supabase employees load skipped:", employeesResult.error.message);
+    if (error) {
+      console.warn(
+        "Supabase employee profile load skipped:",
+        error.message
+      );
       return false;
     }
 
-    const supabaseEmployees = employeesResult.data || [];
-    if (!supabaseEmployees.length) return false;
+    if (
+      !Array.isArray(supabaseEmployees) ||
+      !supabaseEmployees.length
+    ) {
+      return false;
+    }
 
-    const mergedEmployees = mergeSupabaseEmployeeData(
-      baseEmployees.length ? baseEmployees : employeesSeed,
-      supabaseEmployees,
-      balancesResult.data || [],
-      schedulesResult.data || []
-    );
+    const profileIndex = buildIndex(supabaseEmployees);
 
-    if (typeof applyEmployees === "function") applyEmployees(mergedEmployees);
-    if (typeof applyDatabaseStatus === "function") applyDatabaseStatus("Supabase database connected live. Employee balances, tenure, schedule fields, requests, approvals, and time logs are loading from production tables.");
+    const mergedEmployees = baseEmployees.map((base) => {
+      const keys = [
+        normalizeEmail(base.email),
+        String(base.id || base.employee_id || "")
+          .trim()
+          .toLowerCase(),
+        normalizeNameKey(base.full_name),
+      ].filter(Boolean);
+
+      let supabaseProfile = null;
+
+      for (const key of keys) {
+        const match = profileIndex.get(key);
+
+        if (match) {
+          supabaseProfile = match;
+          break;
+        }
+      }
+
+      if (!supabaseProfile) return base;
+
+      return {
+        ...base,
+
+        email:
+          supabaseProfile.email ||
+          supabaseProfile.employee_email ||
+          base.email,
+
+        role:
+          supabaseProfile.role ||
+          base.role,
+
+        access_level:
+          supabaseProfile.access_level ||
+          base.access_level,
+
+        temp_password:
+          supabaseProfile.temp_password ||
+          supabaseProfile.temporary_password ||
+          base.temp_password,
+
+        temporary_password:
+          supabaseProfile.temporary_password ||
+          supabaseProfile.temp_password ||
+          base.temporary_password,
+
+        must_change_password:
+          normalizeBoolean(
+            supabaseProfile.must_change_password
+          ) || Boolean(base.must_change_password),
+
+        force_password_change:
+          normalizeBoolean(
+            supabaseProfile.force_password_change
+          ) || Boolean(base.force_password_change),
+      };
+    });
+
+    if (typeof applyEmployees === "function") {
+      applyEmployees(mergedEmployees);
+    }
+
+    if (typeof applyDatabaseStatus === "function") {
+      applyDatabaseStatus(
+        "Google Sheets connected for schedules and balances. Supabase connected for authentication, requests, approvals, and time logs."
+      );
+    }
+
     return true;
   } catch (error) {
-    console.warn("Supabase reference data load failed:", error?.message || error);
+    console.warn(
+      "Supabase profile load failed:",
+      error?.message || error
+    );
+
     return false;
   }
 }
@@ -2588,7 +2905,7 @@ balanceResult = mergeBalanceRowsIntoEmployees(breakResult.employees, balanceRows
 
 finalSyncedEmployees = balanceResult.employees;
 setEmployees(finalSyncedEmployees);
-if (supabase && finalSyncedEmployees.length) {
+if (false && supabase && finalSyncedEmployees.length) {
   const employeesForBreakSync =
   finalSyncedEmployees.length ? finalSyncedEmployees : breakResult.employees;
 
@@ -2843,9 +3160,30 @@ const visibleRequests = isAgentOnly && currentUser?.id
   ? requests.filter((r) => r.employee_id === currentUser.id)
   : requests;
 
+const selectedEmployeeDate = selectedEmployee
+  ? getEmployeeDateKey(selectedEmployee)
+  : getAppDateKey();
+
 const visibleActivity = isAgentOnly && currentUser?.id
-  ? activityLog.filter((a) => a.employee_id === currentUser.id)
-  : activityLog;
+  ? activityLog.filter(
+      (activity) =>
+        String(activity.employee_id) === String(currentUser.id) &&
+        String(activity.date || "").slice(0, 10) === selectedEmployeeDate
+    )
+  : activityLog.filter((activity) => {
+      const activityEmployee = employees.find(
+        (employee) =>
+          String(employee.id) === String(activity.employee_id)
+      );
+
+      const activityDate = activityEmployee
+        ? getEmployeeDateKey(activityEmployee)
+        : getAppDateKey();
+
+      return (
+        String(activity.date || "").slice(0, 10) === activityDate
+      );
+    });
 
   
   const filteredVisibleEmployees = visibleEmployees.filter((employee) => {
@@ -2869,60 +3207,63 @@ const scheduleRows =
           schedule: getStableSchedule(employee, [], day),
         };
       })
-    : filteredVisibleEmployees.map((employee) => ({
+    : filteredVisibleEmployees.map((employee) => {
+    const employeeDay = todayDayName(
+      getEmployeeTimeZone(employee)
+    );
+
+    return {
+      employee,
+      day: employeeDay,
+      schedule: getStableSchedule(
         employee,
-        day: todayDayName(),
-        schedule: getStableSchedule(employee, [], todayDayName()),
-      }));
+        [],
+        employeeDay
+      ),
+    };
+  });
+
+  const agentScheduleRow = useMemo(() => {
+  if (!selectedEmployee) return null;
+
+  const employeeTimeZone = getEmployeeTimeZone(selectedEmployee);
+  const employeeDay = todayDayName(employeeTimeZone);
+
+  // Find the same employee record used throughout the Schedule tab.
+  const scheduleEmployee =
+    employees.find(
+      (employee) =>
+        String(employee.id || employee.employee_id || "") ===
+        String(selectedEmployee.id || selectedEmployee.employee_id || "")
+    ) ||
+    employees.find(
+      (employee) =>
+        normalizeEmail(employee.email) ===
+        normalizeEmail(selectedEmployee.email)
+    ) ||
+    selectedEmployee;
+
+  return {
+    employee: scheduleEmployee,
+    day: employeeDay,
+    schedule: getStableSchedule(
+      scheduleEmployee,
+      [],
+      employeeDay
+    ),
+  };
+}, [employees, selectedEmployee]);
+
+const agentShiftSummary = buildShiftSummaryFromSchedule(
+  agentScheduleRow?.schedule
+);
 
       async function saveScheduleChanges() {
-  try {
-    if (!supabase) {
-      showToast("Save failed", "Supabase is not connected.", "danger");
-      return;
-    }
-
-    const schedulePayload = scheduleRows.map(({ employee: e, day, schedule }) => ({
-      employee_id: String(e.id || e.employee_id || ""),
-      day_name: day,
-      start_time: schedule.shift_start || "",
-      end_time: schedule.shift_end || "",
-      monday: e.monday || "",
-      Tuesday: e.tuesday || "",
-      wednesday: e.wednesday || "",
-      thursday: e.thursday || "",
-      friday: e.friday || "",
-      saturday: e.saturday || "",
-      sunday: e.sunday || "",
-      lunch_break: "",
-      first_break: formatTimeRange(schedule.break_start, schedule.break_end),
-      second_break: formatTimeRange(schedule.second_break_start, schedule.second_break_end),
-      updated_at: new Date().toISOString()
-    }));
-
-    const breakPayload = scheduleRows.map(({ employee: e, day, schedule }) => ({
-      employee_id: String(e.id || e.employee_id || ""),
-      employee_name: e.full_name || "",
-      day_name: day,
-      lunch_start: null,
-      lunch_end: null,
-      first_break_start: schedule.break_start || null,
-      first_break_end: schedule.break_end || null,
-      second_break_start: schedule.second_break_start || null,
-      second_break_end: schedule.second_break_end || null,
-      source: "Schedule Tab Manual Save",
-      updated_at: new Date().toISOString()
-    }));
-
-    await postToSupabase("employee_schedules", schedulePayload, "employee_id,day_name");
-    await postToSupabase("employee_breaks", breakPayload, "employee_id,day_name");
-
-    showToast("Schedule saved", "Schedule changes were saved to Supabase.", "success");
-    await refreshLiveData();
-  } catch (error) {
-    console.error("Schedule save failed:", error);
-    showToast("Save failed", error?.message || "Schedule changes could not be saved.", "danger");
-  }
+  showToast(
+    "Schedule managed in Google Sheets",
+    "App_Schedules is currently the schedule source of truth. Update schedules in Google Sheets and then select Sync Roster.",
+    "info"
+  );
 }
 
   async function refreshLiveData() {
@@ -2977,10 +3318,10 @@ console.log("FIRST DATE", latestLogs?.[0]?.date);
 
   if (loadedSupabase) {
     showToast(
-      "Live data refreshed",
-      "Latest Supabase employee, balance, schedule, request, and time log data loaded.",
-      "success"
-    );
+  "Live data refreshed",
+  "Latest Supabase authentication, request, approval, and time log data loaded. Schedules and balances remain sourced from Google Sheets.",
+  "success"
+);
     return;
   }
 
@@ -3696,7 +4037,8 @@ User can now log into the Agent Portal.`
   }
 
     const now = new Date();
-    const time = getAppTimeKey(now);
+    const time = getEmployeeTimeKey(selectedEmployee, now);
+    const employeeDate = getEmployeeDateKey(selectedEmployee, now);
     const schedule = getStableSchedule(selectedEmployee);
 
     const autoClass = getAutoWorkClassification(selectedEmployee, time);
@@ -3708,7 +4050,7 @@ User can now log into the Agent Portal.`
   String(request.employee_id) === String(selectedEmployee?.id) &&
   request.type === "Schedule Override" &&
   request.status === "Approved" &&
-  String(request.requested_at || request.date || request.created_at || "").slice(0, 10) === today
+  String(request.requested_at || request.date || request.created_at || "").slice(0, 10) === employeeDate
 )
     ) {
       const reason =
@@ -3751,7 +4093,7 @@ User can now log into the Agent Portal.`
   String(request.employee_id) === String(selectedEmployee?.id) &&
   request.type === "Schedule Override" &&
   request.status === "Approved" &&
-  String(request.requested_at || request.date || "").slice(0, 10) === today
+  String(request.requested_at || request.date || "").slice(0, 10) === employeeDate
 );
 
 const resolvedStatus =
@@ -3824,7 +4166,7 @@ if (openLog) {
       const duplicate = timeEntries.some(
         (entry) =>
           entry.employee_id === selectedEmployee.id &&
-          entry.date === today &&
+          entry.date === employeeDate &&
           entry.category === resolvedStatus &&
           entry.category_start === time &&
           entry.notes === action
@@ -3839,7 +4181,7 @@ if (openLog) {
         id: `ACT-${Date.now().toString().slice(-6)}`,
         employee_id: selectedEmployee.id,
         employee_name: selectedEmployee.full_name,
-        date: today,
+        date: employeeDate,
         action,
         time,
         status: resolvedStatus,
@@ -3852,7 +4194,7 @@ if (openLog) {
         id: `TIME-${Date.now().toString().slice(-6)}`,
         employee_id: selectedEmployee.id,
         employee_name: selectedEmployee.full_name,
-        date: today,
+        date: employeeDate,
         scheduled_start: schedule.shift_start,
         scheduled_end: schedule.shift_end,
         schedule_break_1: formatTimeRange(schedule.break_start, schedule.break_end),
@@ -4020,7 +4362,7 @@ if (openLog) {
   }
 
   const now = new Date();
-  const time = getAppTimeKey(now);
+  const time = getEmployeeTimeKey(selectedEmployee, now);
   const clockOut = now.toISOString();
   const durationMinutes = Math.max(
     0,
@@ -4074,12 +4416,13 @@ if (openLog) {
       return null;
     }
     const schedule = getStableSchedule(selectedEmployee);
+    const employeeDate = getEmployeeDateKey(selectedEmployee);
     const key = `manual-time-${selectedEmployee.id}-${newTime.category}-${newTime.category_start}-${newTime.category_end}`;
     return runProtectedAction(key, "Manual time entry", async () => {
       const duplicate = timeEntries.some(
         (entry) =>
           entry.employee_id === selectedEmployee.id &&
-          entry.date === today &&
+          entry.date === employeeDate &&
           entry.category === newTime.category &&
           entry.category_start === newTime.category_start &&
           entry.category_end === newTime.category_end &&
@@ -4099,7 +4442,7 @@ if (openLog) {
         id: `TIME-${Date.now().toString().slice(-6)}`,
         employee_id: selectedEmployee.id,
         employee_name: selectedEmployee.full_name,
-        date: today,
+        date: employeeDate,
         scheduled_start: schedule.shift_start,
         scheduled_end: schedule.shift_end,
         schedule_break_1: formatTimeRange(schedule.break_start, schedule.break_end),
@@ -5131,7 +5474,7 @@ if (startupLoading) {
               </div>
               <div className={`agentShiftCard ${isTodayOffDay(selectedEmployee) ? "offDay" : ""}`}>
                 <span>{isTodayOffDay(selectedEmployee) ? "Today’s Status" : "Today’s Shift"}</span>
-                <strong>{getTodayShiftSummary(selectedEmployee).label}</strong>
+                <strong>{agentShiftSummary.label}</strong>
                 {isTodayOffDay(selectedEmployee) ? (
                   <small className="shiftDetails offDetails">
                     <b>Scheduled off today</b>
@@ -5139,7 +5482,11 @@ if (startupLoading) {
                   </small>
                 ) : (
                   <small className="shiftDetails">
-                    {getTodayShiftSummary(selectedEmployee).detail.split(" · ").map((line) => <b key={line}>{line}</b>)}
+                    {agentShiftSummary.detail
+  .split(" · ")
+  .map((line) => (
+    <b key={line}>{line}</b>
+  ))}
                   </small>
                 )}
               </div>
