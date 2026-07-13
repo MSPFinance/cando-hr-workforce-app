@@ -2430,41 +2430,56 @@ async function loadSupabaseReferenceData(
       if (!supabaseProfile) return base;
 
       return {
-        ...base,
+  ...base,
 
-        email:
-          supabaseProfile.email ||
-          supabaseProfile.employee_email ||
-          base.email,
+  email:
+    supabaseProfile.email ||
+    supabaseProfile.employee_email ||
+    base.email,
 
-        role:
-          supabaseProfile.role ||
-          base.role,
+  role:
+    supabaseProfile.role ||
+    base.role,
 
-        access_level:
-          supabaseProfile.access_level ||
-          base.access_level,
+  access_level:
+    supabaseProfile.access_level ||
+    base.access_level,
 
-        temp_password:
-          supabaseProfile.temp_password ||
-          supabaseProfile.temporary_password ||
-          base.temp_password,
+  /*
+    Supabase is the authentication source of truth.
 
-        temporary_password:
-          supabaseProfile.temporary_password ||
-          supabaseProfile.temp_password ||
-          base.temporary_password,
+    Do not use || for password fields or boolean reset flags.
+    A valid false or null value must not fall back to an older
+    Google Sheets/base value.
+  */
+  temp_password:
+    supabaseProfile.temp_password ??
+    base.temp_password ??
+    "",
 
-        must_change_password:
-          normalizeBoolean(
-            supabaseProfile.must_change_password
-          ) || Boolean(base.must_change_password),
+  temporary_password:
+    supabaseProfile.temporary_password ??
+    "",
 
-        force_password_change:
-          normalizeBoolean(
-            supabaseProfile.force_password_change
-          ) || Boolean(base.force_password_change),
-      };
+  must_change_password:
+    normalizeBoolean(
+      supabaseProfile.must_change_password
+    ),
+
+  force_password_change:
+    normalizeBoolean(
+      supabaseProfile.force_password_change
+    ),
+
+  requires_password_reset:
+    normalizeBoolean(
+      supabaseProfile.requires_password_reset
+    ),
+
+  password_last_updated:
+    supabaseProfile.password_last_updated ??
+    "",
+};
     });
 
     if (typeof applyEmployees === "function") {
@@ -5062,13 +5077,25 @@ console.log("Skipping Google Sheets timeLogs update for historical edit.");
       return;
     }
 
-    const acceptedPasswords = [
-      employee.temp_password,
-      employee.temporary_password,
-      DEFAULT_LOGIN_PASSWORD,
-    ]
-      .filter((value) => value !== undefined && value !== null && String(value) !== "")
-      .map((value) => String(value));
+    const storedPasswords = [
+  employee.temp_password,
+  employee.temporary_password,
+]
+  .filter(
+    (value) =>
+      value !== undefined &&
+      value !== null &&
+      String(value).trim() !== ""
+  )
+  .map((value) => String(value));
+
+/*
+  The default password is allowed only for legacy profiles that
+  do not yet have any password stored in Supabase.
+*/
+const acceptedPasswords = storedPasswords.length
+  ? storedPasswords
+  : [DEFAULT_LOGIN_PASSWORD];
 
     if (!acceptedPasswords.includes(String(loginPassword || ""))) {
       setAuthError("Invalid password. Please try again or request a reset from HR/Admin.");
@@ -5076,20 +5103,29 @@ console.log("Skipping Google Sheets timeLogs update for historical edit.");
     }
 
     const loginPasswordValue = String(loginPassword || "");
-    const passwordMatchesTemporary = [
-      employee.temporary_password,
-      DEFAULT_LOGIN_PASSWORD,
-      "Welcome2026!",
-    ]
-      .filter((value) => value !== undefined && value !== null && String(value) !== "")
-      .some((value) => loginPasswordValue === String(value));
 
-    const mustCreatePersonalPassword = Boolean(
-      normalizeBoolean(employee.requires_password_reset) ||
-      normalizeBoolean(employee.force_password_change) ||
-      normalizeBoolean(employee.must_change_password) ||
-      (passwordMatchesTemporary && !employee.password_last_updated)
-    );
+const savedTemporaryPassword =
+  employee.temporary_password !== undefined &&
+  employee.temporary_password !== null
+    ? String(employee.temporary_password)
+    : "";
+
+const passwordMatchesTemporary =
+  Boolean(savedTemporaryPassword) &&
+  loginPasswordValue === savedTemporaryPassword;
+
+const isLegacyFirstLogin =
+  storedPasswords.length === 0 &&
+  loginPasswordValue === DEFAULT_LOGIN_PASSWORD &&
+  !employee.password_last_updated;
+
+const mustCreatePersonalPassword = Boolean(
+  normalizeBoolean(employee.requires_password_reset) ||
+  normalizeBoolean(employee.force_password_change) ||
+  normalizeBoolean(employee.must_change_password) ||
+  passwordMatchesTemporary ||
+  isLegacyFirstLogin
+);
 
     if (mustCreatePersonalPassword) {
       setPasswordResetUser(employee);
@@ -5230,51 +5266,106 @@ console.log("Skipping Google Sheets timeLogs update for historical edit.");
   }
 
   async function completePasswordReset() {
-    if (!passwordResetUser) return;
+  if (!passwordResetUser) return;
 
-    if (!newPersonalPassword || newPersonalPassword.length < 8) {
-      setAuthError("Please create a password with at least 8 characters.");
-      return;
+  const cleanPassword = String(newPersonalPassword || "");
+  const cleanConfirmPassword = String(confirmPersonalPassword || "");
+
+  setAuthError("");
+
+  if (cleanPassword.length < 8) {
+    setAuthError("Please create a password with at least 8 characters.");
+    return;
+  }
+
+  if (cleanPassword !== cleanConfirmPassword) {
+    setAuthError("The new passwords do not match.");
+    return;
+  }
+
+  const updatedAt = new Date().toISOString();
+
+  try {
+    /*
+      Supabase is the authentication source of truth.
+      The user must not be logged in until this update succeeds.
+    */
+    if (!supabase) {
+      throw new Error(
+        "The authentication database is not connected. The password was not changed."
+      );
     }
 
-    if (newPersonalPassword !== confirmPersonalPassword) {
-      setAuthError("The new passwords do not match.");
-      return;
+    const { data: updatedRows, error: updateError } = await supabase
+      .from("employees")
+      .update({
+        temp_password: cleanPassword,
+        temporary_password: null,
+        must_change_password: false,
+        force_password_change: false,
+        password_last_updated: updatedAt,
+      })
+      .ilike("email", String(passwordResetUser.email || "").trim())
+      .select();
+
+    if (updateError) {
+      console.error("Supabase password update failed:", updateError);
+      throw new Error(
+        `The personalized password could not be saved: ${updateError.message}`
+      );
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      throw new Error(
+        "No employee authentication record was updated. Please verify the employee email in Supabase."
+      );
     }
 
     const updatedEmployee = {
       ...passwordResetUser,
-      temp_password: newPersonalPassword,
+      temp_password: cleanPassword,
       temporary_password: "",
       must_change_password: false,
       force_password_change: false,
       requires_password_reset: false,
-      password_last_updated: new Date().toISOString(),
+      password_last_updated: updatedAt,
       password_reset_status: "Completed",
-      password_reset_completed_at: new Date().toISOString(),
+      password_reset_completed_at: updatedAt,
     };
 
+    /*
+      Update the current React employee data only after Supabase confirms
+      that the personalized password was saved.
+    */
     setEmployees((current) =>
-      current.map((item) => (item.id === passwordResetUser.id ? updatedEmployee : item))
+      current.map((item) =>
+        normalizeEmail(item.email) ===
+        normalizeEmail(passwordResetUser.email)
+          ? updatedEmployee
+          : item
+      )
     );
 
+    /*
+      Google Sheets remains a secondary operational copy.
+      A Google Sheets issue must not reverse a successful Supabase update.
+    */
     try {
-      if (supabase) {
-        await supabase.from("employees").update({
-          temp_password: newPersonalPassword,
-          temporary_password: null,
-          must_change_password: false,
-          force_password_change: false,
-          password_last_updated: new Date().toISOString(),
-        }).eq("email", passwordResetUser.email);
-      }
-
-      await googleUpdateRow("employees", "Employee_ID", passwordResetUser.id, mapEmployeeToSheet(updatedEmployee));
-    } catch (error) {
-      console.error("Password reset completion sync failed:", error);
+      await googleUpdateRow(
+        "employees",
+        "Employee_ID",
+        passwordResetUser.id,
+        mapEmployeeToSheet(updatedEmployee)
+      );
+    } catch (googleError) {
+      console.warn(
+        "Personalized password was saved in Supabase, but the Google Sheets copy was not updated:",
+        googleError
+      );
     }
 
     localStorage.setItem("candoHrUserEmail", updatedEmployee.email);
+
     setSessionUserEmail(updatedEmployee.email);
     setSelectedEmployeeId(updatedEmployee.id);
     setPasswordResetUser(null);
@@ -5283,8 +5374,28 @@ console.log("Skipping Google Sheets timeLogs update for historical edit.");
     setLoginPassword("");
     setAuthError("");
     setResetNotice("");
-    showToast("Password updated", "Your personalized password was saved successfully.", "success");
+
+    showToast(
+      "Password updated",
+      "Your personalized password was saved successfully and will be used for future logins.",
+      "success"
+    );
+  } catch (error) {
+    console.error("Password reset completion failed:", error);
+
+    setAuthError(
+      error?.message ||
+        "The personalized password could not be saved. Please try again."
+    );
+
+    showToast(
+      "Password not changed",
+      error?.message ||
+        "The personalized password could not be saved.",
+      "danger"
+    );
   }
+}
 
   const requestCalendar = useMemo(() => getRequestCalendarDays(), [newRequest.start_date, newRequest.type, filters, filteredVisibleEmployees, requests, rules]);
 
