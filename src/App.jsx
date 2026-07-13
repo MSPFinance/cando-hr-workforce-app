@@ -1586,6 +1586,32 @@ function getTimeZoneOffsetMinutes(timeZone, date) {
   );
 }
 
+function getDatePartsInTimeZone(
+  dateValue = new Date(),
+  timeZone = SCHEDULE_SOURCE_TIME_ZONE
+) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(dateValue);
+
+  const values = {};
+
+  parts.forEach(({ type, value }) => {
+    if (type !== "literal") {
+      values[type] = value;
+    }
+  });
+
+  return {
+    year: Number(values.year),
+    month: Number(values.month),
+    day: Number(values.day),
+  };
+}
+
 function convertEasternScheduleToEmployeeLocal(
   timeValue,
   employee,
@@ -1610,12 +1636,24 @@ function convertEasternScheduleToEmployeeLocal(
   const hour = Number(match[1]);
   const minute = Number(match[2]);
 
-  const year = dateValue.getFullYear();
-  const month = dateValue.getMonth();
-  const day = dateValue.getDate();
+  /*
+    Obtain the calendar date directly in the schedule source timezone.
+    Do not use the employee computer's local date components.
+  */
+  const sourceDate = getDatePartsInTimeZone(
+    dateValue,
+    SCHEDULE_SOURCE_TIME_ZONE
+  );
 
   const initialUtcGuess = new Date(
-    Date.UTC(year, month, day, hour, minute, 0)
+    Date.UTC(
+      sourceDate.year,
+      sourceDate.month - 1,
+      sourceDate.day,
+      hour,
+      minute,
+      0
+    )
   );
 
   const sourceOffset = getTimeZoneOffsetMinutes(
