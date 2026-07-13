@@ -155,7 +155,7 @@ const DEFAULT_LOGIN_EMAIL = "agent1@goday.ca";
 const DEFAULT_LOGIN_PASSWORD = "Welcome2026!";
 const ADMIN_ACCESS_LEVELS = ["TL", "Team Lead", "Supervisor", "Manager", "Approvals", "Reporting", "HR", "Payroll", "Admin", "Executive"];
 const OT_REQUESTS_ENABLED = false;
-const EARLY_SHIFT_START_GRACE_MINUTES = 10;
+const EARLY_SHIFT_START_GRACE_MINUTES = 15;
 const REQUEST_TYPE_OPTIONS = ["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave"];
 
 const ROLE_PROFILE_OPTIONS = ["Employee", "TL", "Manager", "Approvals", "Reporting", "HR", "Payroll", "Admin", "Executive"];
@@ -536,8 +536,26 @@ function canEditSchedules(role) {
   return ["TL", "Team Lead", "Supervisor", "Manager", "Reporting", "HR", "Admin"].includes(role);
 }
 
-function canEditTimeLogs(role) {
-  return ["TL", "Team Lead", "Supervisor", "Manager", "Reporting", "HR", "Payroll", "Admin"].includes(role);
+function canEditTimeLogs(roleOrAccessLevel) {
+  const value = String(roleOrAccessLevel || "")
+    .trim()
+    .toLowerCase();
+
+  if (!value) return false;
+
+  return (
+    value === "tl" ||
+    value === "team lead" ||
+    value === "supervisor" ||
+    value === "manager" ||
+    value === "reporting" ||
+    value === "hr" ||
+    value === "payroll" ||
+    value === "admin" ||
+    value.includes("manager") ||
+    value.includes("team lead") ||
+    value.includes("supervisor")
+  );
 }
 
 function isSystemManagedTimeCategory(category) {
@@ -1833,49 +1851,160 @@ function buildShiftSummaryFromSchedule(schedule) {
 }
 
 
-function hasPendingScheduleOverride(requestsList, employeeId) {
-  return requestsList.some(
-    (request) =>
-      request.employee_id === employeeId &&
-      request.type === "Schedule Override" &&
-      ["Pending", "Pending Manager Approval"].includes(request.status)
-  );
+function hasPendingScheduleOverride(
+  requestsList = [],
+  employeeId,
+  dateValue
+) {
+  const normalizedEmployeeId = String(employeeId || "")
+    .trim()
+    .toLowerCase();
+
+  const normalizedDate = formatDateOnly(dateValue);
+
+  return requestsList.some((request) => {
+    const requestEmployeeId = String(
+      request.employee_id ||
+      request.Employee_ID ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+    const requestType = String(
+      request.type ||
+      request.request_type ||
+      request.Request_Type ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+    const requestStatus = String(
+      request.status ||
+      request.approval_status ||
+      request.Status ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+    return (
+      requestEmployeeId === normalizedEmployeeId &&
+      requestType === "schedule override" &&
+      ["pending", "pending manager approval"].includes(
+        requestStatus
+      ) &&
+      (!normalizedDate ||
+        requestCoversDate(request, normalizedDate))
+    );
+  });
 }
 
-function buildScheduleOverrideRequest(employee, reason) {
+function buildScheduleOverrideRequest(
+  employee,
+  reason,
+  dateValue = getEmployeeDateKey(employee)
+) {
+  const overrideDate =
+    formatDateOnly(dateValue) ||
+    getEmployeeDateKey(employee);
+
   return {
     id: cleanId("REQ"),
     employee_id: employee.id,
     employee_name: employee.full_name,
     type: "Schedule Override",
-    start_date: today,
-    end_date: today,
+    start_date: overrideDate,
+    end_date: overrideDate,
     hours: 0,
     requested_days: 0,
     reason,
     status: "Pending Manager Approval",
-    manager: employee.supervisor || employee.manager || "",
+    manager:
+      employee.supervisor ||
+      employee.manager ||
+      "",
     current_balance: "N/A",
     projected_balance: "N/A",
     requested_at: new Date().toISOString(),
   };
 }
-
 function requestCoversDate(request, dateValue) {
-  const startDate = String(request.start_date || request.requested_at || "").slice(0, 10);
-  const endDate = String(request.end_date || request.start_date || request.requested_at || "").slice(0, 10);
+  if (!request || !dateValue) return false;
+
+  const requestedDate = String(dateValue).slice(0, 10);
+
+  const startDate = String(
+    request.start_date ||
+    request.Start_Date ||
+    request.date ||
+    request.requested_at ||
+    request.created_at ||
+    ""
+  ).slice(0, 10);
+
+  const endDate = String(
+    request.end_date ||
+    request.End_Date ||
+    request.start_date ||
+    request.Start_Date ||
+    request.date ||
+    request.requested_at ||
+    request.created_at ||
+    ""
+  ).slice(0, 10);
+
   if (!startDate) return false;
-  return dateValue >= startDate && dateValue <= (endDate || startDate);
+
+  return requestedDate >= startDate && requestedDate <= (endDate || startDate);
 }
 
-function hasApprovedScheduleOverride(requestsList, employeeId, dateValue = today) {
-  return requestsList.some(
-    (request) =>
-      request.employee_id === employeeId &&
-      request.type === "Schedule Override" &&
-      request.status === "Approved" &&
-      requestCoversDate(request, dateValue)
-  );
+function hasApprovedScheduleOverride(
+  requestsList = [],
+  employeeId,
+  dateValue = today
+) {
+  const normalizedEmployeeId = String(employeeId || "")
+    .trim()
+    .toLowerCase();
+
+  const normalizedDate = formatDateOnly(dateValue);
+
+  return requestsList.some((request) => {
+    const requestEmployeeId = String(
+      request.employee_id ||
+      request.Employee_ID ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+    const requestType = String(
+      request.type ||
+      request.request_type ||
+      request.Request_Type ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+    const requestStatus = String(
+      request.status ||
+      request.approval_status ||
+      request.Status ||
+      ""
+    )
+      .trim()
+      .toLowerCase();
+
+    return (
+      requestEmployeeId === normalizedEmployeeId &&
+      requestType === "schedule override" &&
+      requestStatus === "approved" &&
+      requestCoversDate(request, normalizedDate)
+    );
+  });
 }
 
 function showSickBalanceForCountry(country) {
@@ -3325,10 +3454,54 @@ console.log("FIRST DATE", latestLogs?.[0]?.date);
     .select("*");
 
   if (!requestsError) {
-    setRequests(latestRequests || []);
-  } else {
-    console.warn("Requests refresh failed:", requestsError);
-  }
+  setRequests(
+    (latestRequests || []).map((request) => ({
+      ...request,
+
+      id:
+        request.app_request_id ||
+        request.id,
+
+      type:
+        request.type ||
+        request.request_type ||
+        request.Request_Type ||
+        "",
+
+      status:
+        request.status ||
+        request.approval_status ||
+        request.Status ||
+        "Pending",
+
+      employee_id:
+        request.employee_id ||
+        request.Employee_ID ||
+        "",
+
+      start_date: formatDateOnly(
+        request.start_date ||
+        request.Start_Date ||
+        request.created_at
+      ),
+
+      end_date: formatDateOnly(
+        request.end_date ||
+        request.End_Date ||
+        request.start_date ||
+        request.Start_Date ||
+        request.created_at
+      ),
+
+      requested_at:
+        request.requested_at ||
+        request.created_at ||
+        "",
+    }))
+  );
+} else {
+  console.warn("Requests refresh failed:", requestsError);
+}
 }
 
   if (loadedSupabase) {
@@ -4058,28 +4231,125 @@ User can now log into the Agent Portal.`
 
     const autoClass = getAutoWorkClassification(selectedEmployee, time);
 
-    if (
-      ["Shift Started", "Status Changed"].includes(action) &&
-      ["Off-Day Unscheduled", "Early Unscheduled"].includes(autoClass.category) &&
-      !requests.some((request) =>
-  String(request.employee_id) === String(selectedEmployee?.id) &&
-  request.type === "Schedule Override" &&
-  request.status === "Approved" &&
-  String(request.requested_at || request.date || request.created_at || "").slice(0, 10) === employeeDate
-)
-    ) {
+    let latestRequestsForEmployee = requests;
+
+if (supabase) {
+  const { data: liveOverrideRequests, error: overrideLookupError } =
+    await supabase
+      .from("requests")
+      .select("*")
+      .eq("employee_id", String(selectedEmployee.id))
+      .eq("request_type", "Schedule Override");
+
+  if (overrideLookupError) {
+    console.warn(
+      "Schedule override live check failed:",
+      overrideLookupError.message
+    );
+  } else if (Array.isArray(liveOverrideRequests)) {
+    const normalizedLiveRequests = liveOverrideRequests.map(
+      (request) => ({
+        ...request,
+
+        id:
+          request.app_request_id ||
+          request.id,
+
+        employee_id:
+          request.employee_id ||
+          request.Employee_ID ||
+          "",
+
+        type:
+          request.type ||
+          request.request_type ||
+          request.Request_Type ||
+          "",
+
+        status:
+          request.status ||
+          request.approval_status ||
+          request.Status ||
+          "Pending",
+
+        start_date: formatDateOnly(
+          request.start_date ||
+          request.Start_Date ||
+          request.created_at
+        ),
+
+        end_date: formatDateOnly(
+          request.end_date ||
+          request.End_Date ||
+          request.start_date ||
+          request.Start_Date ||
+          request.created_at
+        ),
+      })
+    );
+
+    latestRequestsForEmployee = [
+      ...normalizedLiveRequests,
+      ...requests.filter(
+        (request) =>
+          !normalizedLiveRequests.some(
+            (liveRequest) =>
+              String(liveRequest.id) === String(request.id)
+          )
+      ),
+    ];
+
+    setRequests(latestRequestsForEmployee);
+  }
+}
+
+const approvedScheduleOverride =
+  hasApprovedScheduleOverride(
+    latestRequestsForEmployee,
+    selectedEmployee.id,
+    employeeDate
+  );
+
+if (
+  ["Shift Started", "Status Changed"].includes(action) &&
+  ["Off-Day Unscheduled", "Early Unscheduled"].includes(autoClass.category) &&
+  !approvedScheduleOverride
+) {
       const reason =
         autoClass.category === "Off-Day Unscheduled"
           ? "Attempted login on scheduled off day"
           : "Attempted login before scheduled shift start";
 
-      if (!hasPendingScheduleOverride(requests, selectedEmployee?.id)) {
-        const overrideRequest = buildScheduleOverrideRequest(selectedEmployee, reason);
+      if (
+ !hasPendingScheduleOverride(
+  latestRequestsForEmployee,
+  selectedEmployee?.id,
+  employeeDate
+)
+) {
+        const overrideRequest = buildScheduleOverrideRequest(
+  selectedEmployee,
+  reason,
+  employeeDate
+);
         setRequests((current) => [overrideRequest, ...current]);
 
         try {
-          await googleAddRow("requests", mapRequestToSheet(overrideRequest));
-          await googleAddRow("emailQueue", {
+  await supabaseInsert(
+    "requests",
+    mapRequestToSupabaseRequest(
+      overrideRequest,
+      selectedEmployee
+    ),
+    "Schedule override request"
+  );
+
+  await googleAddRow(
+    "requests",
+    mapRequestToSheet(overrideRequest)
+  );
+
+  await googleAddRow("emailQueue", {
             Email_ID: cleanId("EMAIL"),
             Event_Type: "Schedule Override Pending Approval",
             To_Email: selectedEmployee.manager || selectedEmployee.supervisor || "",
@@ -4104,17 +4374,10 @@ User can now log into the Agent Portal.`
       return null;
     }
 
-    const hasApprovedScheduleOverride = requests.some((request) =>
-  String(request.employee_id) === String(selectedEmployee?.id) &&
-  request.type === "Schedule Override" &&
-  request.status === "Approved" &&
-  String(request.requested_at || request.date || "").slice(0, 10) === employeeDate
-);
-
-const resolvedStatus =
+    const resolvedStatus =
   action === "Shift Ended" && shouldSplitAutoOvertime(selectedEmployee, time)
     ? "Overtime"
-    : hasApprovedScheduleOverride
+    : approvedScheduleOverride
     ? status
     : action === "Shift Started" || action === "Status Changed"
     ? autoClass.category === "Working"
