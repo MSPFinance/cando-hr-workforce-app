@@ -1545,6 +1545,55 @@ function getEmployeeTimeZone(employee) {
   return countryTimeZones[country] || SCHEDULE_SOURCE_TIME_ZONE;
 }
 
+function formatLogTimeForEmployee(value, employee) {
+  if (!value) return "";
+
+  const date = new Date(value);
+
+  if (isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: getEmployeeTimeZone(employee),
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  }).format(date);
+}
+function formatLogTimeForInput(value, timeEntry, employeesList = []) {
+  if (!value) return "";
+
+  // Values already stored as HH:mm should not be converted again.
+  const simpleTime = String(value).match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+
+  if (simpleTime) {
+    return `${String(Number(simpleTime[1])).padStart(2, "0")}:${simpleTime[2]}`;
+  }
+
+  // Locate the employee connected to this time log.
+  const employee =
+    employeesList.find(
+      (item) =>
+        String(item.id || item.employee_id || "") ===
+        String(timeEntry?.employee_id || "")
+    ) || {};
+
+  const parsedDate = new Date(value);
+
+  if (Number.isNaN(parsedDate.getTime())) {
+    return "";
+  }
+
+  // Convert the stored Supabase timestamp into the employee's local timezone.
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: getEmployeeTimeZone(employee),
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(parsedDate);
+}
+
 function getTimeZoneOffsetMinutes(timeZone, date) {
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone,
@@ -1666,13 +1715,30 @@ function convertEasternScheduleToEmployeeLocal(
   );
 
   const destinationZone = getEmployeeTimeZone(employee);
+const convertedTime = new Intl.DateTimeFormat("en-GB", {
+  timeZone: destinationZone,
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+}).format(realInstant);
 
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: destinationZone,
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(realInstant);
+console.log("SCHEDULE TIMEZONE DEBUG", {
+  employeeId: employee?.id || employee?.employee_id,
+  employeeName: employee?.full_name,
+  employeeCountry: employee?.country,
+  employeeTimeZoneField: employee?.timezone || employee?.time_zone,
+  rawTimeValue: timeValue,
+  formattedSourceTime: formatted,
+  sourceTimeZone: SCHEDULE_SOURCE_TIME_ZONE,
+  sourceDate,
+  sourceOffset,
+  realInstant: realInstant.toISOString(),
+  destinationZone,
+  convertedTime,
+});
+
+return convertedTime;
+  
 }
 
 function getStableSchedule(
@@ -1700,6 +1766,50 @@ const normalizedDay = normalizeDayName(
 );
   const breaksByDay = employee.breaks_by_day || {};
   const dayBreaks = breaksByDay[normalizedDay] || {};
+console.log("===== EMPLOYEE SCHEDULE DEBUG =====");
+console.log({
+  employeeName: employee.employee_name || employee.name,
+  start_time_est: employee.start_time_est,
+  Start_Time_EST: employee.Start_Time_EST,
+  shift_start: employee.shift_start,
+  Shift_Start: employee.Shift_Start,
+  end_time_est: employee.end_time_est,
+  End_Time_EST: employee.End_Time_EST,
+  shift_end: employee.shift_end,
+  Shift_End: employee.Shift_End,
+  employee
+});
+
+const normalizedEmployeeId = String(
+  employee?.employee_id || employee?.Employee_ID || employee?.id || ""
+).trim();
+
+const matchingDailySchedule = Array.isArray(schedules)
+  ? schedules.find((scheduleRow) => {
+      const scheduleEmployeeId = String(
+        scheduleRow?.employee_id ||
+        scheduleRow?.Employee_ID ||
+        scheduleRow?.employeeId ||
+        ""
+      ).trim();
+
+      const scheduleDay = normalizeDayName(
+        scheduleRow?.day || scheduleRow?.Day || ""
+      );
+
+      return (
+        scheduleEmployeeId === normalizedEmployeeId &&
+        scheduleDay === normalizedDay
+      );
+    })
+  : null;
+
+console.log("DAILY SCHEDULE MATCH DEBUG", {
+  normalizedEmployeeId,
+  normalizedDay,
+  scheduleRowsReceived: Array.isArray(schedules) ? schedules.length : 0,
+  matchingDailySchedule,
+});
 
   const rawShiftStart =
     employee.start_time_est ??
@@ -2209,6 +2319,11 @@ async function googleGetDatabase() {
   try {
     const responseData = await googleJsonpWithRetry({ action: "getAll" }, 2);
     console.log("Google Sheets GET result:", responseData);
+    console.log("SCHEDULE DATA SOURCE DEBUG", {
+  schedules: responseData?.data?.schedules,
+  employeeSchedules: responseData?.data?.employee_schedules,
+  topLevelEmployeeSchedules: responseData?.employee_schedules,
+});
     return responseData?.success ? responseData.data : null;
   } catch (error) {
     console.error("Google Sheets GET error:", error);
@@ -2326,13 +2441,26 @@ function toSupabaseTimestamp(dateValue, timeValue) {
 
 function mapTimeEntryToSupabaseLog(entry, employee = {}) {
   return {
-    app_log_id: String(entry.id || ""),
+    app_log_id: String(
+  entry.app_log_id ||
+  entry.id ||
+  ""
+),
     employee_id: String(entry.employee_id || employee.id || ""),
     employee_email: employee.email || entry.employee_email || "",
     employee_name: entry.employee_name || employee.full_name || "",
     status: entry.category || entry.status || "Working",
-    clock_in: toSupabaseTimestamp(entry.date, entry.clock_in || entry.category_start),
-    clock_out: entry.clock_out || entry.category_end ? toSupabaseTimestamp(entry.date, entry.clock_out || entry.category_end) : null,
+    clock_in: toSupabaseTimestamp(
+  entry.date,
+  entry.category_start || entry.clock_in
+),
+
+clock_out: entry.category_end || entry.clock_out
+  ? toSupabaseTimestamp(
+      entry.date,
+      entry.category_end || entry.clock_out
+    )
+  : null,
     break_start: entry.category === "Break" ? toSupabaseTimestamp(entry.date, entry.category_start) : null,
     break_end: entry.category === "Break" ? toSupabaseTimestamp(entry.date, entry.category_end) : null,
     category_start: entry.category_start ? toSupabaseTimestamp(entry.date, entry.category_start) : null,
@@ -3217,16 +3345,83 @@ if (finalSyncedEmployees?.length) {
       const sheetDepartments = (database.departments || []).map((row) => row.Department_Name).filter(Boolean);
       const sheetSubDepartments = (database.subDepartments || database.sub_departments || []).map((row) => row.Sub_Department_Name || row.Sub_Department || row.Name).filter(Boolean);
 
-      const baseEmployees = sheetEmployees.length ? sheetEmployees : employeesSeed;
-      if (sheetEmployees.length) setEmployees(sheetEmployees);
-      if (sheetTime.length) setTimeEntries(sheetTime);
-      if (sheetRequests.length) setRequests(sheetRequests.map((request) => ({ ...request, requested_days: requestDaysValue(request), hours: requestDaysValue(request) })));
-      if (sheetRules.length) setRules(sheetRules);
-      if (sheetLobs.length) setLobs([...new Set(sheetLobs)]);
-      if (sheetDepartments.length) setDepartments([...new Set(sheetDepartments)]);
-      if (sheetSubDepartments.length) setSubDepartments([...new Set(sheetSubDepartments)]);
+     const baseEmployees =
+  sheetEmployees.length ? sheetEmployees : employeesSeed;
 
-      const loadedSupabase = await loadSupabaseReferenceData(baseEmployees, setEmployees, setDatabaseStatus);
+/*
+  Google Sheets is the operational source of truth for:
+  - schedules
+  - days off
+  - breaks
+  - PTO balances
+
+  Load these rows before applying the Supabase authentication overlay.
+*/
+const [workforceRows, breakRows, balanceRows] = await Promise.all([
+  fetchWorkforceSheetRows(),
+  fetchBreaksSheetRows(),
+  fetchBalanceSheetRows(),
+]);
+
+const rosterResult = mergeWorkforceRowsIntoEmployees(
+  baseEmployees,
+  workforceRows,
+  { importMissing: true }
+);
+
+const breakResult = mergeBreakRowsIntoEmployees(
+  rosterResult.employees,
+  breakRows
+);
+
+const balanceResult = mergeBalanceRowsIntoEmployees(
+  breakResult.employees,
+  balanceRows
+);
+
+const googleSourceEmployees = balanceResult.employees;
+
+setEmployees(googleSourceEmployees);
+
+if (sheetTime.length) {
+  setTimeEntries(sheetTime);
+}
+
+if (sheetRequests.length) {
+  setRequests(
+    sheetRequests.map((request) => ({
+      ...request,
+      requested_days: requestDaysValue(request),
+      hours: requestDaysValue(request),
+    }))
+  );
+}
+
+if (sheetRules.length) {
+  setRules(sheetRules);
+}
+
+if (sheetLobs.length) {
+  setLobs([...new Set(sheetLobs)]);
+}
+
+if (sheetDepartments.length) {
+  setDepartments([...new Set(sheetDepartments)]);
+}
+
+if (sheetSubDepartments.length) {
+  setSubDepartments([...new Set(sheetSubDepartments)]);
+}
+
+/*
+  Supabase is applied afterward only for authentication and access fields.
+  It does not replace the Google Sheets schedule.
+*/
+const loadedSupabase = await loadSupabaseReferenceData(
+  googleSourceEmployees,
+  setEmployees,
+  setDatabaseStatus
+);
       if (!loadedSupabase) setDatabaseStatus("Google Sheets database connected live. Workforce roster sync is scheduled for Saturday 5:00 AM or can be run manually by an admin.");
     }
 
@@ -5154,7 +5349,11 @@ async function bulkApproveSelectedTimeLogs() {
       return null;
     }
 
-    const timeEntry = timeEntries.find((entry) => entry.id === id);
+    const timeEntry = timeEntries.find(
+  (entry) =>
+    String(entry.id || "") === String(id) ||
+    String(entry.app_log_id || "") === String(id)
+);
     if (!timeEntry) {
       showToast("Time entry not found", "The selected time log could not be found.", "danger");
       return null;
@@ -5163,16 +5362,33 @@ async function bulkApproveSelectedTimeLogs() {
     const key = `time-log-edit-${id}-${timeEntry.date}-${timeEntry.category}-${timeEntry.category_start}-${timeEntry.category_end}`;
 
     return runProtectedAction(key, "Time log correction", async () => {
-      const correctedEntry = {
-        ...timeEntry,
-        category_start: formatMilitaryTime(timeEntry.category_start),
-        category_end: formatMilitaryTime(timeEntry.category_end),
-        clock_in: formatMilitaryTime(timeEntry.clock_in || timeEntry.category_start),
-        clock_out: formatMilitaryTime(timeEntry.clock_out || timeEntry.category_end),
-        edited_by: currentUser.email,
-        edited_at: new Date().toISOString(),
-        approved_by: currentUser.email,
-      };
+      const correctedStart = formatMilitaryTime(
+  timeEntry.category_start
+);
+
+const correctedEnd = timeEntry.category_end
+  ? formatMilitaryTime(timeEntry.category_end)
+  : null;
+
+const correctedEntry = {
+  ...timeEntry,
+
+  // The editable Start and End fields are the values being saved.
+  category_start: correctedStart,
+  category_end: correctedEnd,
+
+  // Keep clock fields synchronized with the manager correction.
+  clock_in: correctedStart,
+  clock_out: correctedEnd,
+
+  duration_minutes: correctedEnd
+    ? minutesBetween(correctedStart, correctedEnd)
+    : 0,
+
+  edited_by: currentUser.email,
+  edited_at: new Date().toISOString(),
+  approved_by: currentUser.email,
+};
 
 console.log("Saving corrected entry:", correctedEntry);
 
@@ -5234,7 +5450,14 @@ console.log("Skipping Google Sheets timeLogs update for historical edit.");
   console.warn("Google approval log skipped for historical time edit:", error);
 }
 
-      setTimeEntries((current) => current.map((entry) => (entry.id === id ? correctedEntry : entry)));
+      setTimeEntries((current) =>
+  current.map((entry) =>
+    String(entry.id || "") === String(id) ||
+    String(entry.app_log_id || "") === String(id)
+      ? correctedEntry
+      : entry
+  )
+);
       showToast("Time log saved", "The previous time log was corrected and retained for audit review.", "success");
     });
   }
@@ -6246,8 +6469,36 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
                   <input type="date" value={t.date || today} onChange={(event) => editTimeEntryLocal(t.id, "date", event.target.value)} />,
                   t.lob,
                   <select value={t.category} onChange={(event) => editTimeEntryLocal(t.id, "category", event.target.value)}><TimeCategoryOptions /></select>,
-                  <input type="time" value={formatMilitaryTime(t.category_start)} onChange={(event) => editTimeEntryLocal(t.id, "category_start", event.target.value)} />,
-                  <input type="time" value={formatMilitaryTime(t.category_end)} onChange={(event) => editTimeEntryLocal(t.id, "category_end", event.target.value)} />,
+                  <input
+  type="time"
+  value={formatLogTimeForInput(
+    t.category_start || t.clock_in,
+    t,
+    employees
+  )}
+  onChange={(event) =>
+    editTimeEntryLocal(
+      t.id || t.app_log_id,
+      "category_start",
+      event.target.value
+    )
+  }
+/>,
+<input
+  type="time"
+  value={formatLogTimeForInput(
+    t.category_end || t.clock_out,
+    t,
+    employees
+  )}
+  onChange={(event) =>
+    editTimeEntryLocal(
+      t.id || t.app_log_id,
+      "category_end",
+      event.target.value
+    )
+  }
+/>,
                   getTimeLogDuration(t),
                   <select value={t.approved || "Pending"} onChange={(event) => editTimeEntryLocal(t.id, "approved", event.target.value)}>
                     {["Pending", "Pending Approval", "Approved", "Denied", "Auto Logged"].map((status) => <option key={status}>{status}</option>)}
@@ -6727,8 +6978,8 @@ if (statusSource.includes("LUNCH")) {
   const statusUpper = status.toUpperCase();
   const latestStatusTime =
   latestStatus?.time ||
-  String(latestStatus?.clock_in || "").slice(11, 16) ||
-  String(latestStatus?.created_at || "").slice(11, 16);
+  formatLogTimeForEmployee(latestStatus?.clock_in, agent) ||
+  formatLogTimeForEmployee(latestStatus?.created_at, agent);
 
 const statusStart = timeToMinutes(latestStatusTime);
 const elapsed = nowMinutes !== null && statusStart !== null
