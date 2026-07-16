@@ -3940,17 +3940,57 @@ useEffect(() => {
       .select("*");
 
     if (!error) {
-      setTimeEntries(
-        (latestLogs || []).sort((a, b) => {
-          const aStamp = `${a.date || ""} ${a.time || ""} ${a.created_at || ""}`;
-          const bStamp = `${b.date || ""} ${b.time || ""} ${b.created_at || ""}`;
-          return bStamp.localeCompare(aStamp);
-        })
-      );
-    } else {
+  setTimeEntries(
+    (latestLogs || [])
+      .map((log) => ({
+        ...log,
+
+        id:
+          log.app_log_id ||
+          log.id,
+
+        date:
+          log.date ||
+          String(
+            log.clock_in ||
+            log.category_start ||
+            log.created_at ||
+            ""
+          ).slice(0, 10),
+
+        category:
+          log.category ||
+          log.status ||
+          "Working",
+
+        approved:
+          log.approval_status ||
+          "Pending",
+      }))
+      .sort((a, b) => {
+        const aDate = new Date(
+          a.category_start ||
+          a.clock_in ||
+          a.created_at ||
+          0
+        ).getTime();
+
+        const bDate = new Date(
+          b.category_start ||
+          b.clock_in ||
+          b.created_at ||
+          0
+        ).getTime();
+
+        return bDate - aDate;
+      })
+  );
+} else {
       console.warn("Realtime time_logs reload failed:", error);
     }
   };
+
+  reloadLiveLogsOnly();
 
   const channel = supabase
     .channel("magnemite-live-dashboard")
@@ -3959,7 +3999,12 @@ useEffect(() => {
       { event: "*", schema: "public", table: "time_logs" },
       reloadLiveLogsOnly
     )
-    .subscribe();
+    .subscribe((status) => {
+  console.log(
+    "Live dashboard subscription:",
+    status
+  );
+});
 
   return () => {
     supabase.removeChannel(channel);
@@ -7096,155 +7141,312 @@ function FormGrid({ children }) { return <div className="formGrid">{children}</d
 function Badge({ children, muted, danger }) { return <span className={`badge ${muted ? "muted" : ""} ${danger ? "danger" : ""}`}>{children}</span>; }
 function Progress({ label, value, percent }) { return <div className="progress"><div><span>{label}</span><strong>{value}</strong></div><i><b style={{ width: `${Math.max(4, percent)}%` }} /></i></div>; }
 function Approval({ title, detail, approve, deny }) { return <div className="approval"><section><strong>{title}</strong><span>{detail}</span></section><div><button className="approve" onClick={approve}><CheckCircle size={18} /></button><button className="deny" onClick={deny}><XCircle size={18} /></button></div></div>; }
-function getAgentLiveStatus(agent, statusLogs = [], approvals = []) {
-  const dateKey = getLocalDateKey(new Date());
-  const nowMinutes = timeToMinutes(getAppTimeKey(new Date()));
+function getAgentLiveStatus(
+  agent,
+  statusLogs = [],
+  approvals = []
+) {
+  if (!agent) {
+    return {
+      label: "OFFLINE",
+      type: "gray",
+      detail: "Employee not found",
+    };
+  }
 
   const cleanKey = (value) =>
-  String(value || "").trim().toLowerCase();
+    String(value || "")
+      .trim()
+      .toLowerCase();
 
-const agentIds = [
-  agent.id,
-  agent.employee_id,
-  agent.employeeId,
-  agent.employeeID
-].map(cleanKey).filter(Boolean);
+  const agentIds = [
+    agent.id,
+    agent.employee_id,
+    agent.employeeId,
+    agent.employeeID,
+  ]
+    .map(cleanKey)
+    .filter(Boolean);
 
-const agentName = cleanKey(agent.full_name || agent.name);
-const agentEmail = cleanKey(agent.email);
-
-const agentLogs = (statusLogs || [])
-  .filter((log) => {
-    const logDate = String(log.date || log.log_date || log.created_at || "").slice(0, 10);
-
-    const logIds = [
-      log.employee_id,
-      log.employeeId,
-      log.employeeID,
-      log.id
-    ].map(cleanKey).filter(Boolean);
-
-    const idMatch = logIds.some((id) => agentIds.includes(id));
-    const nameMatch = cleanKey(log.employee_name || log.full_name || log.name) === agentName;
-    const emailMatch = cleanKey(log.employee_email || log.email) === agentEmail;
-
-    return logDate === dateKey && (idMatch || nameMatch || emailMatch);
-  })
-  .sort((a, b) => {
-    const aStamp = `${a.date || ""} ${a.time || ""} ${a.created_at || ""}`;
-    const bStamp = `${b.date || ""} ${b.time || ""} ${b.created_at || ""}`;
-    return bStamp.localeCompare(aStamp);
-  });
-
-  const approvedOverride = approvals.some((approval) =>
-    String(approval.employee_id || approval.employeeId) === String(agent.employee_id || agent.id) &&
-    approval.status === "Approved" &&
-    approval.type === "Schedule Override" &&
-    requestCoversDate(approval, dateKey)
+  const agentName = cleanKey(
+    agent.full_name ||
+    agent.name
   );
 
-  const latestStatus = agentLogs
-  .filter((log) => log.status || log.category || log.notes)
-  .sort((a, b) => {
-    const aStamp = `${a.date || ""} ${a.time || ""} ${a.created_at || ""}`;
-    const bStamp = `${b.date || ""} ${b.time || ""} ${b.created_at || ""}`;
-    return bStamp.localeCompare(aStamp);
-  })[0];
+  const agentEmail = cleanKey(
+    agent.email
+  );
 
+  const employeeDate =
+    getEmployeeDateKey(agent);
 
+  const agentLogsToday = (
+    statusLogs || []
+  )
+    .filter((log) => {
+      const logIds = [
+        log.employee_id,
+        log.employeeId,
+        log.employeeID,
+      ]
+        .map(cleanKey)
+        .filter(Boolean);
 
-  if (!latestStatus && !approvedOverride) {
-    return { label: "OFFLINE", type: "gray", detail: "No live activity logged today" };
+      const idMatch = logIds.some(
+        (id) => agentIds.includes(id)
+      );
+
+      const nameMatch =
+        cleanKey(
+          log.employee_name ||
+          log.full_name ||
+          log.name
+        ) === agentName;
+
+      const emailMatch =
+        cleanKey(
+          log.employee_email ||
+          log.email
+        ) === agentEmail;
+
+      const logDate = String(
+        log.date ||
+        log.clock_in ||
+        log.category_start ||
+        log.created_at ||
+        ""
+      ).slice(0, 10);
+
+      return (
+        (idMatch ||
+          nameMatch ||
+          emailMatch) &&
+        logDate === employeeDate
+      );
+    })
+    .sort((a, b) => {
+      const aDate = new Date(
+        a.category_start ||
+        a.clock_in ||
+        a.created_at ||
+        0
+      ).getTime();
+
+      const bDate = new Date(
+        b.category_start ||
+        b.clock_in ||
+        b.created_at ||
+        0
+      ).getTime();
+
+      if (
+        Number.isNaN(aDate) ||
+        Number.isNaN(bDate)
+      ) {
+        return 0;
+      }
+
+      return bDate - aDate;
+    });
+
+  /*
+    The dashboard must display only an open record.
+    Historical closed records must not control live status.
+  */
+  const openLog = agentLogsToday.find(
+    (log) =>
+      !log.clock_out &&
+      !log.category_end
+  );
+
+  const approvedOverride = approvals.some(
+    (approval) =>
+      String(
+        approval.employee_id ||
+        approval.employeeId ||
+        ""
+      ) ===
+        String(
+          agent.employee_id ||
+          agent.id ||
+          ""
+        ) &&
+      String(
+        approval.status || ""
+      ).toLowerCase() === "approved" &&
+      String(
+        approval.type ||
+        approval.request_type ||
+        ""
+      ).toLowerCase() ===
+        "schedule override" &&
+      requestCoversDate(
+        approval,
+        employeeDate
+      )
+  );
+
+  if (!openLog) {
+    if (isTodayOffDay(agent)) {
+      return {
+        label: "OFF DAY",
+        type: "gray",
+        detail: "Scheduled off",
+      };
+    }
+
+    return {
+      label: "OFFLINE",
+      type: "gray",
+      detail: "No active status",
+    };
   }
 
-const rawStatusText = [
-  latestStatus?.status,
-  latestStatus?.category,
-  latestStatus?.notes,
-  latestStatus?.disposition,
-  latestStatus?.description
-]
-  .filter(Boolean)
-  .join(" ")
-  .toUpperCase();
+  const status = String(
+    openLog.category ||
+    openLog.status ||
+    "Working"
+  ).trim();
 
-let status = "Working";
+  const statusUpper =
+    status.toUpperCase();
 
-const statusOnly = String(latestStatus?.status || "").toUpperCase();
-const notesOnly = String(latestStatus?.notes || latestStatus?.disposition || latestStatus?.description || "").toUpperCase();
+  const startValue =
+    openLog.category_start ||
+    openLog.clock_in ||
+    openLog.created_at;
 
-const statusSource = `${statusOnly} ${notesOnly}`;
+  const startDate = startValue
+    ? new Date(startValue)
+    : null;
 
-if (statusSource.includes("LUNCH")) {
-  status = "Lunch";
-} else if (statusSource.includes("BREAK")) {
-  status = "Break";
-} else if (statusSource.includes("BATHROOM")) {
-  status = "Bathroom";
-} else if (statusSource.includes("MEETING")) {
-  status = "Meeting";
-} else if (statusSource.includes("TRAINING")) {
-  status = "Training";
-} else if (statusSource.includes("COACHING")) {
-  status = "Coaching";
-} else if (statusSource.includes("WORKING") || statusSource.includes("SHIFT STARTED")) {
-  status = "Working";
-} else if (statusOnly === "OVERTIME") {
-  status = "Working";
-}
-  const statusUpper = status.toUpperCase();
-  const latestStatusTime =
-  latestStatus?.time ||
-  formatLogTimeForEmployee(latestStatus?.clock_in, agent) ||
-  formatLogTimeForEmployee(latestStatus?.created_at, agent);
+  const elapsed =
+    startDate &&
+    !Number.isNaN(startDate.getTime())
+      ? Math.max(
+          0,
+          Math.floor(
+            (Date.now() -
+              startDate.getTime()) /
+              60000
+          )
+        )
+      : 0;
 
-const statusStart = timeToMinutes(latestStatusTime);
-const elapsed = nowMinutes !== null && statusStart !== null
-  ? Math.max(0, nowMinutes - statusStart)
-  : 0;
+  const scheduleForToday =
+    getStableSchedule(
+      agent,
+      [],
+      todayDayName(
+        getEmployeeTimeZone(agent)
+      )
+    );
 
-const scheduleForToday = getStableSchedule(agent, [], todayDayName());
+  const firstBreakMinutes =
+    minutesBetween(
+      scheduleForToday.break_start,
+      scheduleForToday.break_end
+    );
 
-const firstBreakMinutes = minutesBetween(scheduleForToday.break_start, scheduleForToday.break_end);
-const secondBreakMinutes = minutesBetween(scheduleForToday.second_break_start, scheduleForToday.second_break_end);
+  const secondBreakMinutes =
+    minutesBetween(
+      scheduleForToday.second_break_start,
+      scheduleForToday.second_break_end
+    );
 
-const scheduledBreak =
-  statusUpper === "BREAK"
-    ? Math.max(firstBreakMinutes, secondBreakMinutes, safeNumber(agent.break_minutes, 60))
-    : firstBreakMinutes + secondBreakMinutes;
+  const scheduledBreakLimit =
+    Math.max(
+      firstBreakMinutes,
+      secondBreakMinutes,
+      safeNumber(
+        agent.break_minutes,
+        15
+      )
+    );
 
-const breakLimit = scheduledBreak > 0
-  ? scheduledBreak
-  : safeNumber(agent.break_minutes, 60);
-
-const bathroomLimit = 10;
-
-  
-  if (statusUpper === "BREAK" && elapsed > breakLimit) {
-    return { label: "BREAK ALERT", type: "red", detail: `${elapsed} min on break · limit ${breakLimit} min` };
+  if (
+    statusUpper === "BREAK" &&
+    elapsed > scheduledBreakLimit
+  ) {
+    return {
+      label: "BREAK ALERT",
+      type: "red",
+      detail:
+        `${elapsed} min on break · ` +
+        `limit ${scheduledBreakLimit} min`,
+    };
   }
 
-  if (statusUpper === "BATHROOM" && elapsed > bathroomLimit) {
-    return { label: "BATHROOM ALERT", type: "red", detail: `${elapsed} min in bathroom · limit ${bathroomLimit} min` };
+  if (
+    statusUpper === "BATHROOM" &&
+    elapsed > 10
+  ) {
+    return {
+      label: "BATHROOM ALERT",
+      type: "red",
+      detail:
+        `${elapsed} min in bathroom · ` +
+        "limit 10 min",
+    };
   }
 
-  if (["OFF-DAY UNSCHEDULED", "UNSCHEDULED", "EARLY UNSCHEDULED"].includes(statusUpper) && !approvedOverride) {
-    return { label: statusUpper, type: "red", detail: "Requires manager review" };
+  if (
+    [
+      "OFF-DAY UNSCHEDULED",
+      "EARLY UNSCHEDULED",
+      "OVERTIME",
+    ].includes(statusUpper) &&
+    !approvedOverride
+  ) {
+    return {
+      label: statusUpper,
+      type: "red",
+      detail: "Requires manager review",
+    };
   }
 
-  if (["BREAK", "LUNCH", "BATHROOM"].includes(statusUpper)) {
-    return { label: status, type: "yellow", detail: `${elapsed} min in current status` };
+  if (
+    [
+      "BREAK",
+      "LUNCH",
+      "BATHROOM",
+    ].includes(statusUpper)
+  ) {
+    return {
+      label: statusUpper,
+      type: "yellow",
+      detail:
+        `${elapsed} min in current status`,
+    };
   }
 
-  if (["MEETING", "TRAINING", "COACHING"].includes(statusUpper)) {
-    return { label: status, type: "blue", detail: `${elapsed} min in scheduled task` };
+  if (
+    [
+      "MEETING",
+      "TRAINING",
+      "COACHING",
+      "SYSTEM ISSUE",
+    ].includes(statusUpper)
+  ) {
+    return {
+      label: statusUpper,
+      type: "blue",
+      detail:
+        `${elapsed} min in current status`,
+    };
   }
 
-  if (["WORKING", "AVAILABLE", "CALL", "PRODUCTION"].includes(statusUpper) || approvedOverride) {
-    return { label: status || "WORKING", type: "green", detail: approvedOverride ? "Approved schedule override" : "In production" };
-  }
+  return {
+    label:
+      statusUpper ||
+      "WORKING",
 
-  return { label: status || "OFFLINE", type: "gray", detail: latestStatus?.action || "No current status" };
+    type: "green",
+
+    detail: approvedOverride
+      ? "Approved schedule override"
+      : `${elapsed} min in current status`,
+  };
 }
 
 
