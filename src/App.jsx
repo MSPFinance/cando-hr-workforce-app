@@ -3741,6 +3741,174 @@ const scheduleRows =
     };
   });
 
+  const attendanceHeadcount = useMemo(() => {
+  /*
+    The Start Date filter controls the attendance date.
+
+    When no date is selected, the report defaults to today
+    in the Magnemite application timezone.
+  */
+  const reportDate =
+    filters.startDate ||
+    getAppDateKey();
+
+  const reportDateObject =
+    new Date(`${reportDate}T12:00:00`);
+
+  const loggedEmployeeIds = new Set(
+    timeEntries
+      .filter((entry) => {
+        const entryDate = String(
+          entry.date ||
+          entry.clock_in ||
+          entry.category_start ||
+          entry.created_at ||
+          ""
+        ).slice(0, 10);
+
+        return entryDate === reportDate;
+      })
+      .map((entry) =>
+        String(entry.employee_id || "").trim()
+      )
+      .filter(Boolean)
+  );
+
+  const activeEmployees =
+    filteredVisibleEmployees.filter((employee) => {
+      const status = String(
+        employee.employment_status ||
+        employee.status ||
+        ""
+      )
+        .trim()
+        .toLowerCase();
+
+      return status === "active";
+    });
+
+  const scheduledEmployees =
+    activeEmployees.filter((employee) => {
+      const employeeTimeZone =
+        getEmployeeTimeZone(employee);
+
+      const weekday = todayDayName(
+        employeeTimeZone,
+        reportDateObject
+      );
+
+      const offDays = normalizeOffDays(
+        employee.off_days
+      ).map((day) =>
+        String(day).toLowerCase()
+      );
+
+      return !offDays.includes(
+        weekday.toLowerCase()
+      );
+    });
+
+  const departmentMap = new Map();
+
+  scheduledEmployees.forEach((employee) => {
+    const department =
+      employee.department ||
+      "Unassigned";
+
+    if (!departmentMap.has(department)) {
+      departmentMap.set(department, {
+        department,
+        scheduled: 0,
+        loggedIn: 0,
+        noLogin: 0,
+        attendancePercent: 0,
+      });
+    }
+
+    const row =
+      departmentMap.get(department);
+
+    row.scheduled += 1;
+
+    const employeeId = String(
+      employee.id ||
+      employee.employee_id ||
+      ""
+    ).trim();
+
+    if (loggedEmployeeIds.has(employeeId)) {
+      row.loggedIn += 1;
+    }
+  });
+
+  const departments =
+    Array.from(departmentMap.values())
+      .map((row) => {
+        const noLogin =
+          Math.max(
+            0,
+            row.scheduled -
+            row.loggedIn
+          );
+
+        const attendancePercent =
+          row.scheduled > 0
+            ? Math.round(
+                (row.loggedIn /
+                  row.scheduled) *
+                  100
+              )
+            : 0;
+
+        return {
+          ...row,
+          noLogin,
+          attendancePercent,
+        };
+      })
+      .sort((a, b) =>
+        a.department.localeCompare(
+          b.department
+        )
+      );
+
+  const scheduled =
+    departments.reduce(
+      (total, row) =>
+        total + row.scheduled,
+      0
+    );
+
+  const loggedIn =
+    departments.reduce(
+      (total, row) =>
+        total + row.loggedIn,
+      0
+    );
+
+  return {
+    reportDate,
+    scheduled,
+    loggedIn,
+    noLogin: Math.max(
+      0,
+      scheduled - loggedIn
+    ),
+    attendancePercent:
+      scheduled > 0
+        ? Math.round(
+            (loggedIn / scheduled) *
+              100
+          )
+        : 0,
+    departments,
+  };
+}, [
+  filters.startDate,
+  filteredVisibleEmployees,
+  timeEntries,
+]);
+
   const agentScheduleRow = useMemo(() => {
   if (!selectedEmployee) return null;
 
@@ -6832,6 +7000,58 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
                 <button onClick={exportReportingCsv}><Download size={16} /> Export Summary CSV</button>
               </div>
             </div>
+            <Card title="Daily Attendance Headcount">
+  <p className="helperText">
+    Scheduled headcount compared with employees who created
+    at least one time log on the selected date.
+  </p>
+
+  <div className="reportMiniGrid">
+    <Info
+      label="Report Date"
+      value={attendanceHeadcount.reportDate}
+    />
+
+    <Info
+      label="Scheduled"
+      value={attendanceHeadcount.scheduled}
+    />
+
+    <Info
+      label="Logged In"
+      value={attendanceHeadcount.loggedIn}
+    />
+
+    <Info
+      label="No Login"
+      value={attendanceHeadcount.noLogin}
+    />
+
+    <Info
+      label="Attendance"
+      value={`${attendanceHeadcount.attendancePercent}%`}
+    />
+  </div>
+
+  <Table
+    headers={[
+      "Department",
+      "Scheduled",
+      "Logged In",
+      "No Login",
+      "Attendance",
+    ]}
+    rows={attendanceHeadcount.departments.map(
+      (row) => [
+        row.department,
+        row.scheduled,
+        row.loggedIn,
+        row.noLogin,
+        `${row.attendancePercent}%`,
+      ]
+    )}
+  />
+</Card>
             <section className="reportGrid">
               {reportingSummary.map((group) => (
                 <div className="reportCard" key={group.groupName}>
