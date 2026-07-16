@@ -187,7 +187,6 @@ const SCHEDULE_FIELDS = [
 ];
 
 const DEMO_ACCOUNTS = [
-  { label: "Agent", email: "agent1@goday.ca", password: "Cando123!", access: "Employee portal only" },
   { label: "Team Lead", email: "tl@goday.ca", password: "Cando123!", access: "Team lead / admin access" },
   { label: "Approvals", email: "manager@goday.ca", password: "Cando123!", access: "Approvals, reporting, rules" },
   { label: "HR", email: "hr@goday.ca", password: "Cando123!", access: "Employee records and HR review" },
@@ -210,7 +209,7 @@ const employeesSeed = [
   {
     id: "EMP-001",
     full_name: "Sample Agent One",
-    email: "agent1@goday.ca",
+    email: "",
     country: "Costa Rica",
     department: "Operations",
     sub_department: "Customer Service",
@@ -221,7 +220,7 @@ const employeesSeed = [
     manager: "Operations Manager",
     hire_date: "2024-03-15",
     birthday: "1995-06-12",
-    employment_status: "Active",
+    employment_status: "Inactive",
     employment_type: "Full-Time",
     off_days: defaultOffDays,
     shift_start: "08:00",
@@ -237,7 +236,7 @@ const employeesSeed = [
     pto_balance: 40,
     sick_balance: 16,
     vto_balance: 0,
-    temp_password: "Cando123!",
+    temp_password: "",
   },
   {
     id: "EMP-002",
@@ -3948,7 +3947,7 @@ useEffect(() => {
   .limit(1000);
 
     if (!error) {
-      
+
       console.log(
   "Newest time logs loaded:",
   latestLogs?.length || 0,
