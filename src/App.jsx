@@ -2208,17 +2208,153 @@ function isHolidayForCountry(country, date, holidays = countryHolidaySeed) {
   return holidays.find((holiday) => holiday.country === country && formatDateOnly(holiday.holiday_date) === formatDateOnly(date));
 }
 
-function employeeLiveStatus(employee, timeEntries = [], activityLog = []) {
-  const latestActivity = activityLog.find((a) => a.employee_id === employee.id);
-  const latestTime = timeEntries.find((t) => t.employee_id === employee.id);
-  const status = latestActivity?.status || latestTime?.category || "Offline";
-  const schedule = getStableSchedule(employee);
-  if (isTodayOffDay(employee)) return { status: "Off Day", color: "gray", note: "Scheduled off" };
-  if (status === "Working") return { status, color: "green", note: formatTimeRange(schedule.shift_start, schedule.shift_end) };
-  if (["Break", "Bathroom"].includes(status)) return { status, color: "yellow", note: "Away from production" };
-  if (["Meeting", "Training", "Coaching"].includes(status)) return { status, color: "blue", note: "Scheduled task" };
-  if (["Overtime", "Early Unscheduled", "Off-Day Unscheduled"].includes(status)) return { status, color: "red", note: "Requires review" };
-  return { status, color: "gray", note: "No current status" };
+function employeeLiveStatus(
+  employee,
+  timeEntries = []
+) {
+  if (!employee) {
+    return {
+      status: "Offline",
+      color: "gray",
+      note: "Employee not found",
+    };
+  }
+
+  const employeeDate =
+    getEmployeeDateKey(employee);
+
+  const employeeLogsToday = timeEntries
+    .filter((entry) => {
+      const sameEmployee =
+        String(entry.employee_id || "") ===
+        String(employee.id || employee.employee_id || "");
+
+      const entryDate = String(
+        entry.date ||
+        entry.clock_in ||
+        entry.category_start ||
+        entry.created_at ||
+        ""
+      ).slice(0, 10);
+
+      return (
+        sameEmployee &&
+        entryDate === employeeDate
+      );
+    })
+    .sort((a, b) => {
+      const aValue =
+        a.category_start ||
+        a.clock_in ||
+        a.created_at ||
+        "";
+
+      const bValue =
+        b.category_start ||
+        b.clock_in ||
+        b.created_at ||
+        "";
+
+      const aTime = new Date(aValue).getTime();
+      const bTime = new Date(bValue).getTime();
+
+      /*
+        If timestamps cannot be parsed, retain the original
+        array order rather than causing an invalid comparison.
+      */
+      if (
+        Number.isNaN(aTime) ||
+        Number.isNaN(bTime)
+      ) {
+        return 0;
+      }
+
+      return bTime - aTime;
+    });
+
+  /*
+    A live status must be an open time log.
+    Closed historical rows must never control the dashboard.
+  */
+  const openLog = employeeLogsToday.find(
+    (entry) =>
+      !entry.clock_out &&
+      !entry.category_end
+  );
+
+  if (!openLog) {
+    if (isTodayOffDay(employee)) {
+      return {
+        status: "Off Day",
+        color: "gray",
+        note: "Scheduled off",
+      };
+    }
+
+    return {
+      status: "Offline",
+      color: "gray",
+      note: "No active status",
+    };
+  }
+
+  const status =
+    openLog.category ||
+    openLog.status ||
+    "Working";
+
+  if (status === "Working") {
+    return {
+      status: "Working",
+      color: "green",
+      note: "Currently working",
+    };
+  }
+
+  if (
+    ["Break", "Bathroom"].includes(status)
+  ) {
+    return {
+      status,
+      color: "yellow",
+      note: "Away from production",
+    };
+  }
+
+  if (
+    [
+      "Meeting",
+      "Training",
+      "Coaching",
+      "System Issue",
+    ].includes(status)
+  ) {
+    return {
+      status,
+      color: "blue",
+      note: "Currently in assigned status",
+    };
+  }
+
+  if (
+    [
+      "Overtime",
+      "Early Unscheduled",
+      "Off-Day Unscheduled",
+    ].includes(status)
+  ) {
+    return {
+      status,
+      color: "red",
+      note: "Requires review",
+    };
+  }
+
+  return {
+    status,
+    color: "gray",
+    note: "Active status",
+  };
 }
 
 function requestStatusSummary(requestsList = []) {
