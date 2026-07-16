@@ -4635,51 +4635,126 @@ if (
 
     const key = `agent-action-${selectedEmployee.id}-${action}-${resolvedStatus}-${time}`;
     return runProtectedAction(key, action, async () => {
-      const openLog = timeEntries.find(
-  (entry) =>
-    String(entry.employee_id) === String(selectedEmployee.id) &&
-    !entry.clock_out
-);
+      let closedPreviousLogs = [];
 
-if (openLog) {
-  const clockOut = now.toISOString();
-  const clockIn = new Date(openLog.clock_in || openLog.category_start);
-  const durationMinutes = Math.max(
-    0,
-    Math.round((new Date(clockOut) - clockIn) / 60000)
-  );
+if (supabase) {
+  /*
+    Supabase is the source of truth for time logs.
 
-  const closedLog = {
-    ...openLog,
-    clock_out: clockOut,
-    category_end: time,
-    duration_minutes: durationMinutes,
-  };
-
-  setTimeEntries((current) =>
-    current.map((entry) => (entry.id === openLog.id ? closedLog : entry))
-  );
-
- if (supabase) {
-  const closePayload = {
-    clock_out: clockOut,
-    category_end: clockOut,
-    duration_minutes: Number(durationMinutes) || 0,
-  };
-
-  const { data, error } = await supabase
+    Before creating a new status, locate every open status for this
+    employee and close it using the exact start time of the new status.
+  */
+  const { data: openLogs, error: openLogsError } = await supabase
     .from("time_logs")
-    .update(closePayload)
-    .eq("app_log_id", openLog.app_log_id || openLog.id)
-    .select();
+    .select("*")
+    .eq("employee_id", String(selectedEmployee.id))
+    .is("clock_out", null);
 
-  console.log("Supabase close log update:", data, error);
+  if (openLogsError) {
+    throw new Error(
+      `Unable to check the employee's current status: ${openLogsError.message}`
+    );
+  }
 
-  if (error) throw error;
+  for (const openLog of openLogs || []) {
+    const clockOutTimestamp = now.toISOString();
+
+    const startValue =
+      openLog.category_start ||
+      openLog.clock_in ||
+      openLog.created_at;
+
+    const startDate = startValue
+      ? new Date(startValue)
+      : null;
+
+    const durationMinutes =
+      startDate &&
+      !Number.isNaN(startDate.getTime())
+        ? Math.max(
+            0,
+            Math.round(
+              (now.getTime() -
+                startDate.getTime()) /
+                60000
+            )
+          )
+        : 0;
+
+    const closePayload = {
+      clock_out: clockOutTimestamp,
+      category_end: clockOutTimestamp,
+      duration_minutes:
+        Number(durationMinutes) || 0,
+    };
+
+    const { data: closedRows, error: closeError } =
+      await supabase
+        .from("time_logs")
+        .update(closePayload)
+        .eq("id", openLog.id)
+        .is("clock_out", null)
+        .select();
+
+    if (closeError) {
+      throw new Error(
+        `Unable to close the previous status: ${closeError.message}`
+      );
+    }
+
+    closedPreviousLogs.push(
+      ...(closedRows || [])
+    );
+  }
 }
 
-  console.log("Skipping Google Sheets Time_Logs close update; Supabase is source of truth for time logs.");
+/*
+  Update the browser state after Supabase successfully closes
+  the previous status.
+*/
+if (closedPreviousLogs.length) {
+  setTimeEntries((current) =>
+    current.map((entry) => {
+      const savedClosedLog =
+        closedPreviousLogs.find(
+          (closedLog) =>
+            String(closedLog.id) ===
+              String(entry.id) ||
+            String(
+              closedLog.app_log_id || ""
+            ) ===
+              String(
+                entry.app_log_id ||
+                entry.id ||
+                ""
+              )
+        );
+
+      if (!savedClosedLog) {
+        return entry;
+      }
+
+      return {
+        ...entry,
+        ...savedClosedLog,
+
+        category:
+          savedClosedLog.category ||
+          savedClosedLog.status ||
+          entry.category,
+
+        approved:
+          savedClosedLog.approval_status ||
+          entry.approved,
+      };
+    })
+  );
 }
+
+console.log(
+  "Previous open time logs closed:",
+  closedPreviousLogs.length
+);
       const duplicate = timeEntries.some(
         (entry) =>
           entry.employee_id === selectedEmployee.id &&
