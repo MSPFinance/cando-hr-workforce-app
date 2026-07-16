@@ -3794,8 +3794,12 @@ const agentShiftSummary = buildShiftSummaryFromSchedule(
 
   if (supabase) {
   const { data: latestLogs, error: logsError } = await supabase
-    .from("time_logs")
-    .select("*");
+  .from("time_logs")
+  .select("*")
+  .order("created_at", {
+    ascending: false,
+  })
+  .limit(1000);
 console.log("FIRST LOG", latestLogs?.[0]);
 console.log("FIRST DATE", latestLogs?.[0]?.date);
 
@@ -3936,10 +3940,20 @@ useEffect(() => {
 
   const reloadLiveLogsOnly = async () => {
     const { data: latestLogs, error } = await supabase
-      .from("time_logs")
-      .select("*");
+  .from("time_logs")
+  .select("*")
+  .order("created_at", {
+    ascending: false,
+  })
+  .limit(1000);
 
     if (!error) {
+      
+      console.log(
+  "Newest time logs loaded:",
+  latestLogs?.length || 0,
+  latestLogs?.slice(0, 3)
+);
   setTimeEntries(
     (latestLogs || [])
       .map((log) => ({
