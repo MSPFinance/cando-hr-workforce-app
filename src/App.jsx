@@ -151,7 +151,7 @@ function isWeeklyWorkforceSyncWindow(date = new Date()) {
 // LOGIN + ROLE ACCESS
 // Production path: this uses the Employees database to identify the user and role.
 // For full enterprise security later, connect this to Google SSO or Supabase Auth.
-const DEFAULT_LOGIN_EMAIL = "agent1@goday.ca";
+const DEFAULT_LOGIN_EMAIL = "";
 const DEFAULT_LOGIN_PASSWORD = "Welcome2026!";
 const ADMIN_ACCESS_LEVELS = ["TL", "Team Lead", "Supervisor", "Manager", "Approvals", "Reporting", "HR", "Payroll", "Admin", "Executive"];
 const OT_REQUESTS_ENABLED = false;
@@ -3090,9 +3090,9 @@ function ManagerOverrideModal({ title, message, onCancel, onConfirm }) {
 
 function HRWorkforceApp() {
   const [employees, setEmployees] = useState([]);
-  const [timeEntries, setTimeEntries] = useState(timeSeed);
+  const [timeEntries, setTimeEntries] = useState([]);
   const [requests, setRequests] = useState(requestsSeed);
-  const [activityLog, setActivityLog] = useState(activitySeed);
+  const [activityLog, setActivityLog] = useState([]);
   const [rules, setRules] = useState(rulesSeed);
   const [lobs, setLobs] = useState(lobSeed);
   const [departments, setDepartments] = useState(departmentSeed);
@@ -3155,7 +3155,7 @@ function HRWorkforceApp() {
   const [attendanceEmailSettings, setAttendanceEmailSettings] = useState(DEFAULT_ATTENDANCE_EMAIL_SETTINGS);
   const [lastWorkforceSync, setLastWorkforceSync] = useState(null);
   const [sessionUserEmail, setSessionUserEmail] = useState(localStorage.getItem("candoHrUserEmail") || "");
-  const [loginEmail, setLoginEmail] = useState(DEFAULT_LOGIN_EMAIL);
+  const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [authError, setAuthError] = useState("");
   const [resetNotice, setResetNotice] = useState("");
@@ -3515,7 +3515,13 @@ const loadedSupabase = await loadSupabaseReferenceData(
     setManagerOverrideModal(null);
   }
 
-  const currentUser = employees.find((e) => normalizeEmail(e.email) === normalizeEmail(sessionUserEmail)) || employees.find((e) => normalizeEmail(e.email) === normalizeEmail(DEFAULT_LOGIN_EMAIL)) || employees[0];
+  const currentUser = sessionUserEmail
+  ? employees.find(
+      (employee) =>
+        normalizeEmail(employee.email) ===
+        normalizeEmail(sessionUserEmail)
+    ) || null
+  : null;
   const canAccessAdmin = hasAdminAccess(currentUser);
   const isAuthenticated = Boolean(sessionUserEmail && currentUser);
   const managerRoles = ["Admin", "Manager", "TL", "Supervisor", "Q&T Manager", "Payroll", "Reporting", "HR"];
