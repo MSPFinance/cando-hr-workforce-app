@@ -182,3 +182,56 @@
     border-right-color: var(--border);
   }
 }
+.attendanceDetailPanel {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid #d9e8df;
+  border-radius: 12px;
+  background: #f8fcfa;
+}
+
+.attendanceDetailHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.attendanceDetailHeader h3 {
+  margin: 0 0 4px;
+}
+
+.attendanceDetailHeader p {
+  margin: 0;
+  color: #66756d;
+}
+
+.attendanceDetailFilters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.attendanceDetailFilters button {
+  min-width: 130px;
+}
+
+.attendanceDetailPanel .table {
+  margin-top: 10px;
+}
+
+@media (max-width: 800px) {
+  .attendanceDetailHeader {
+    flex-direction: column;
+  }
+
+  .attendanceDetailFilters {
+    flex-direction: column;
+  }
+
+  .attendanceDetailFilters button {
+    width: 100%;
+  }
+}

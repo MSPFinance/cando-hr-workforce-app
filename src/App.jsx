@@ -3309,6 +3309,11 @@ function HRWorkforceApp() {
   const attendanceEmailQueueRef = useRef(new Set());
   const [startupLoading, setStartupLoading] = useState(true);
   const [selectedTimeLogIds, setSelectedTimeLogIds] = useState([]);
+  const [attendanceDetailDepartment, setAttendanceDetailDepartment] =
+  useState("");
+
+const [attendanceDetailView, setAttendanceDetailView] =
+  useState("Scheduled");
 
   const [timeLogTableFilters, setTimeLogTableFilters] = useState({
   category: "All",
@@ -3817,12 +3822,16 @@ const scheduleRows =
 
     if (!departmentMap.has(department)) {
       departmentMap.set(department, {
-        department,
-        scheduled: 0,
-        loggedIn: 0,
-        noLogin: 0,
-        attendancePercent: 0,
-      });
+  department,
+  scheduled: 0,
+  loggedIn: 0,
+  noLogin: 0,
+  attendancePercent: 0,
+
+  scheduledEmployees: [],
+  loggedInEmployees: [],
+  noLoginEmployees: [],
+});
     }
 
     const row =
@@ -3830,15 +3839,63 @@ const scheduleRows =
 
     row.scheduled += 1;
 
-    const employeeId = String(
-      employee.id ||
-      employee.employee_id ||
-      ""
-    ).trim();
+const employeeId = String(
+  employee.id ||
+  employee.employee_id ||
+  ""
+).trim();
 
-    if (loggedEmployeeIds.has(employeeId)) {
-      row.loggedIn += 1;
-    }
+const employeeSummary = {
+  id: employeeId,
+
+  name:
+    employee.full_name ||
+    employee.employee_name ||
+    employee.name ||
+    "Unknown Employee",
+
+  email:
+    employee.email ||
+    employee.employee_email ||
+    "",
+
+  department:
+    employee.department ||
+    "Unassigned",
+
+  subDepartment:
+    employee.sub_department ||
+    "",
+
+  accessLevel:
+    employee.access_level ||
+    employee.role ||
+    "Employee",
+
+  country:
+    employee.country ||
+    "",
+
+  lob:
+    employee.lob ||
+    "",
+};
+
+row.scheduledEmployees.push(
+  employeeSummary
+);
+
+if (loggedEmployeeIds.has(employeeId)) {
+  row.loggedIn += 1;
+
+  row.loggedInEmployees.push(
+    employeeSummary
+  );
+} else {
+  row.noLoginEmployees.push(
+    employeeSummary
+  );
+}
   });
 
   const departments =
@@ -3908,6 +3965,22 @@ const scheduleRows =
   filteredVisibleEmployees,
   timeEntries,
 ]);
+
+const selectedAttendanceDepartment =
+  attendanceHeadcount.departments.find(
+    (departmentRow) =>
+      departmentRow.department ===
+      attendanceDetailDepartment
+  ) || null;
+
+const selectedAttendanceEmployees =
+  !selectedAttendanceDepartment
+    ? []
+    : attendanceDetailView === "Logged In"
+    ? selectedAttendanceDepartment.loggedInEmployees
+    : attendanceDetailView === "No Login"
+    ? selectedAttendanceDepartment.noLoginEmployees
+    : selectedAttendanceDepartment.scheduledEmployees;
 
   const agentScheduleRow = useMemo(() => {
   if (!selectedEmployee) return null;
@@ -7035,22 +7108,173 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
 
   <Table
     headers={[
-      "Department",
-      "Scheduled",
-      "Logged In",
-      "No Login",
-      "Attendance",
-    ]}
+  "Department",
+  "Scheduled",
+  "Logged In",
+  "No Login",
+  "Attendance",
+  "Details",
+]}
     rows={attendanceHeadcount.departments.map(
-      (row) => [
-        row.department,
-        row.scheduled,
-        row.loggedIn,
-        row.noLogin,
-        `${row.attendancePercent}%`,
-      ]
-    )}
+  (row) => [
+    row.department,
+    row.scheduled,
+    row.loggedIn,
+    row.noLogin,
+    `${row.attendancePercent}%`,
+
+    <button
+      type="button"
+      className="btn"
+      onClick={() => {
+        const isAlreadyOpen =
+          attendanceDetailDepartment ===
+          row.department;
+
+        setAttendanceDetailDepartment(
+          isAlreadyOpen
+            ? ""
+            : row.department
+        );
+
+        setAttendanceDetailView(
+          "Scheduled"
+        );
+      }}
+    >
+      {attendanceDetailDepartment ===
+      row.department
+        ? "Hide"
+        : "View"}
+    </button>,
+  ]
+)}
   />
+  {selectedAttendanceDepartment && (
+  <div className="attendanceDetailPanel">
+    <div className="attendanceDetailHeader">
+      <div>
+        <h3>
+          {selectedAttendanceDepartment.department}
+        </h3>
+
+        <p>
+          Review the employees scheduled, logged in,
+          or without a login for{" "}
+          {attendanceHeadcount.reportDate}.
+        </p>
+      </div>
+
+      <button
+        type="button"
+        className="btn"
+        onClick={() =>
+          setAttendanceDetailDepartment("")
+        }
+      >
+        Close
+      </button>
+    </div>
+
+    <div className="attendanceDetailFilters">
+      <button
+        type="button"
+        className={
+          attendanceDetailView === "Scheduled"
+            ? "primary"
+            : "btn"
+        }
+        onClick={() =>
+          setAttendanceDetailView(
+            "Scheduled"
+          )
+        }
+      >
+        Scheduled (
+        {
+          selectedAttendanceDepartment
+            .scheduled
+        }
+        )
+      </button>
+
+      <button
+        type="button"
+        className={
+          attendanceDetailView === "Logged In"
+            ? "primary"
+            : "btn"
+        }
+        onClick={() =>
+          setAttendanceDetailView(
+            "Logged In"
+          )
+        }
+      >
+        Logged In (
+        {
+          selectedAttendanceDepartment
+            .loggedIn
+        }
+        )
+      </button>
+
+      <button
+        type="button"
+        className={
+          attendanceDetailView === "No Login"
+            ? "primary"
+            : "btn"
+        }
+        onClick={() =>
+          setAttendanceDetailView(
+            "No Login"
+          )
+        }
+      >
+        No Login (
+        {
+          selectedAttendanceDepartment
+            .noLogin
+        }
+        )
+      </button>
+    </div>
+
+    <Table
+      headers={[
+        "Employee",
+        "Access Level",
+        "Sub-Department",
+        "LOB",
+        "Country",
+        "Email",
+      ]}
+      rows={selectedAttendanceEmployees.map(
+        (employee) => [
+          employee.name,
+          employee.accessLevel ||
+            "Employee",
+          employee.subDepartment ||
+            "N/A",
+          employee.lob ||
+            "N/A",
+          employee.country ||
+            "N/A",
+          employee.email ||
+            "N/A",
+        ]
+      )}
+    />
+
+    {!selectedAttendanceEmployees.length && (
+      <p className="muted">
+        No employees were found for this
+        attendance category.
+      </p>
+    )}
+  </div>
+)}
 </Card>
             <section className="reportGrid">
               {reportingSummary.map((group) => (
