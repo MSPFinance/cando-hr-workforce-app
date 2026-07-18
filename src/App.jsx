@@ -1721,21 +1721,6 @@ const convertedTime = new Intl.DateTimeFormat("en-GB", {
   hour12: false,
 }).format(realInstant);
 
-console.log("SCHEDULE TIMEZONE DEBUG", {
-  employeeId: employee?.id || employee?.employee_id,
-  employeeName: employee?.full_name,
-  employeeCountry: employee?.country,
-  employeeTimeZoneField: employee?.timezone || employee?.time_zone,
-  rawTimeValue: timeValue,
-  formattedSourceTime: formatted,
-  sourceTimeZone: SCHEDULE_SOURCE_TIME_ZONE,
-  sourceDate,
-  sourceOffset,
-  realInstant: realInstant.toISOString(),
-  destinationZone,
-  convertedTime,
-});
-
 return convertedTime;
   
 }
@@ -1757,7 +1742,6 @@ function getStableSchedule(
       sub_department: "",
     };
   }
-
   const employeeTimeZone = getEmployeeTimeZone(employee);
 
 const normalizedDay = normalizeDayName(
@@ -1765,19 +1749,7 @@ const normalizedDay = normalizeDayName(
 );
   const breaksByDay = employee.breaks_by_day || {};
   const dayBreaks = breaksByDay[normalizedDay] || {};
-console.log("===== EMPLOYEE SCHEDULE DEBUG =====");
-console.log({
-  employeeName: employee.employee_name || employee.name,
-  start_time_est: employee.start_time_est,
-  Start_Time_EST: employee.Start_Time_EST,
-  shift_start: employee.shift_start,
-  Shift_Start: employee.Shift_Start,
-  end_time_est: employee.end_time_est,
-  End_Time_EST: employee.End_Time_EST,
-  shift_end: employee.shift_end,
-  Shift_End: employee.Shift_End,
-  employee
-});
+
 
 const normalizedEmployeeId = String(
   employee?.employee_id || employee?.Employee_ID || employee?.id || ""
@@ -1802,13 +1774,6 @@ const matchingDailySchedule = Array.isArray(schedules)
       );
     })
   : null;
-
-console.log("DAILY SCHEDULE MATCH DEBUG", {
-  normalizedEmployeeId,
-  normalizedDay,
-  scheduleRowsReceived: Array.isArray(schedules) ? schedules.length : 0,
-  matchingDailySchedule,
-});
 
   const rawShiftStart =
     employee.start_time_est ??
@@ -4265,70 +4230,23 @@ useEffect(() => {
   };
   }, []);
   
-  useEffect(() => {
-  if (!supabase || isAgentOnly) return undefined;
-
-  const runInitialScheduleSync = async () => {
-    const todayKey = getLocalDateKey(new Date());
-    const lastSync = localStorage.getItem("MAGNEMITE_SCHEDULE_SYNC_DATE");
-
-    if (lastSync === todayKey) return;
-
-    localStorage.setItem("MAGNEMITE_SCHEDULE_SYNC_DATE", todayKey);
-
-    await syncWorkforcePlanningSheet({
-  silent: false,
-  automatic: false,
-  importMissing: true,
-});
-  };
-
-  runInitialScheduleSync();
-
-  return undefined;
-}, [supabase, isAgentOnly]);
+/*
+  Disabled temporarily because startup synchronization is already
+  handled by runLiveStartupSync. Running both caused duplicate
+  roster, breaks, and balance downloads during application startup.
+*/
 
   function resetFilters() {
     setFilters({ lob: "All", department: "All", subDepartment: "All", employee: "All", country: "All", category: "All", startDate: "", endDate: "" });
   }
 
-  useEffect(() => {
-    if (!isAuthenticated || isAgentOnly || startupLoading || !employees.length) return;
-  const initialRosterSync = async () => {
-    const todayKey = getLocalDateKey(new Date());
-    const lastInitialSync = localStorage.getItem("MAGNEMITE_INITIAL_ROSTER_SYNC");
+  /*
+  Disabled temporarily.
 
-    if (lastInitialSync === todayKey) {
-  console.log("Daily sync already ran, refreshing current synced employee state.");
-}
-
-    await syncWorkforcePlanningSheet({
-      silent: true,
-      automatic: true
-});
-
-    localStorage.setItem("MAGNEMITE_INITIAL_ROSTER_SYNC", todayKey);
-    // setEmployees((current) => [...current]);
-  };
-
-  initialRosterSync();
-    const checkWeeklySync = () => {
-      const now = new Date();
-      if (!isWeeklyWorkforceSyncWindow(now)) return;
-
-      const todayKey = getLocalDateKey(now);
-      const lastStoredSync = localStorage.getItem(WORKFORCE_SYNC_LAST_RUN_KEY);
-
-      // Always run on page load so refreshed browser shows the latest schedule
-
-      weeklyWorkforceSyncRef.current = todayKey;
-      syncWorkforcePlanningSheet({ silent: true, automatic: true });
-    };
-
-   // checkWeeklySync();
-// const interval = window.setInterval(checkWeeklySync, 60000);
-// return () => window.clearInterval(interval);
-  }, [isAuthenticated, isAgentOnly, startupLoading]);
+  runLiveStartupSync is now the only automatic startup roster sync.
+  Manual Sync Roster and the planned Saturday automation remain
+  available separately.
+*/
 
   const lobOptions = ["All", ...new Set([...lobs, ...visibleEmployees.map((e) => e.lob).filter(Boolean)])];
   const departmentOptions = ["All", ...new Set([...departments, ...visibleEmployees.map((e) => e.department).filter(Boolean)])];
@@ -5245,57 +5163,66 @@ console.log(
         notes: action,
       };
 
-      const entriesToSave = [];
+      /*
+  End Shift only closes the employee's current open status.
 
-      if (action === "Shift Ended" && shouldSplitAutoOvertime(selectedEmployee, time)) {
-        const regularEntry = {
-          ...baseTimeEntry,
-          id: cleanId("TIME"),
-          category: "Working",
-          category_start: schedule.shift_start,
-          category_end: schedule.shift_end,
-          approved: "Auto Logged",
-          payable_status: "Regular",
-          locked: false,
-          auto_rule: "Regular scheduled shift completed before auto overtime",
-          notes: "Regular shift completed",
-        };
+  The open status was already closed in Supabase above, so we must
+  not create another full-shift Working row. Creating that row caused
+  "Regular shift completed" to duplicate the employee's hours.
+*/
+if (action === "Shift Ended") {
+  setActivityLog((current) => [activity, ...current]);
 
-        const overtimeEntry = {
-          ...baseTimeEntry,
-          id: cleanId("TIME"),
-          category: "Overtime",
-          category_start: schedule.shift_end,
-          category_end: time,
-          approved: "Pending",
-          payable_status: "Pending Manager Approval",
-          locked: false,
-          auto_rule: "Auto overtime after scheduled shift end",
-          notes: "Auto overtime created at shift end",
-        };
+  showToast(
+    "Shift ended",
+    "The active time log was closed successfully. No duplicate full-shift record was created.",
+    "success"
+  );
 
-        entriesToSave.push(regularEntry, overtimeEntry);
-        showToast("Auto overtime created", `Time after ${schedule.shift_end} was moved to overtime pending review.`, "info");
-      } else {
-        entriesToSave.push(baseTimeEntry);
-      }
+  return;
+}
 
-      await supabaseInsert(
-        "time_logs",
-        entriesToSave.map((entry) => mapTimeEntryToSupabaseLog(entry, selectedEmployee)),
-        "Agent time log"
-      );
-      for (const entry of entriesToSave) {
-        await googleAddRow("timeLogs", mapTimeToSheet(entry));
-      }
+/*
+  Shift Started and Status Changed still create a new open
+  chronological time log.
+*/
+const entriesToSave = [baseTimeEntry];
 
-      await queueDailyAttendanceEmail(selectedEmployee, entriesToSave);
+await supabaseInsert(
+  "time_logs",
+  entriesToSave.map((entry) =>
+    mapTimeEntryToSupabaseLog(
+      entry,
+      selectedEmployee
+    )
+  ),
+  "Agent time log"
+);
 
-      setActivityLog((current) => [activity, ...current]);
-      setTimeEntries((current) => [...entriesToSave, ...current]);
-    });
-  }
+for (const entry of entriesToSave) {
+  await googleAddRow(
+    "timeLogs",
+    mapTimeToSheet(entry)
+  );
+}
 
+await queueDailyAttendanceEmail(
+  selectedEmployee,
+  entriesToSave
+);
+
+setActivityLog((current) => [
+  activity,
+  ...current,
+]);
+
+setTimeEntries((current) => [
+  ...entriesToSave,
+  ...current,
+]);
+  
+  });
+}
   function getOpenShiftEmployeesForDate(dateValue) {
     return employees.filter((employee) => {
       if (employee.employment_status !== "Active") return false;
