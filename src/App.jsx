@@ -3188,6 +3188,139 @@ function ManagerOverrideModal({ title, message, onCancel, onConfirm }) {
   );
 }
 
+function CurrentStatusTimer({ openStatusLog }) {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!openStatusLog) {
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [openStatusLog]);
+
+  const startValue =
+    openStatusLog?.clock_in ||
+    openStatusLog?.category_start ||
+    openStatusLog?.created_at;
+
+  const startTimestamp = startValue
+    ? new Date(startValue).getTime()
+    : null;
+
+  const elapsedSeconds =
+    startTimestamp &&
+    !Number.isNaN(startTimestamp)
+      ? Math.max(
+          0,
+          Math.floor(
+            (now - startTimestamp) / 1000
+          )
+        )
+      : 0;
+
+  const hours = Math.floor(
+    elapsedSeconds / 3600
+  );
+
+  const minutes = Math.floor(
+    (elapsedSeconds % 3600) / 60
+  );
+
+  const seconds =
+    elapsedSeconds % 60;
+
+  const timerDisplay =
+    hours > 0
+      ? `${String(hours).padStart(2, "0")}:${String(
+          minutes
+        ).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+      : `${String(minutes).padStart(2, "0")}:${String(
+          seconds
+        ).padStart(2, "0")}`;
+
+  const statusLabel =
+    openStatusLog?.category ||
+    openStatusLog?.status ||
+    "No active status";
+
+  return (
+    <div
+      style={{
+        marginTop: "16px",
+        padding: "16px",
+        border: "1px solid #cfe5dc",
+        borderRadius: "12px",
+        background: openStatusLog
+          ? "#f1fbf6"
+          : "#f6f7f7",
+        textAlign: "center",
+      }}
+    >
+      <span
+        style={{
+          display: "block",
+          fontSize: "12px",
+          fontWeight: "700",
+          textTransform: "uppercase",
+          letterSpacing: "0.06em",
+          color: "#50645c",
+          marginBottom: "5px",
+        }}
+      >
+        Time in current status
+      </span>
+
+      <strong
+        style={{
+          display: "block",
+          fontSize: "30px",
+          lineHeight: "1.1",
+          color: openStatusLog
+            ? "#087f5b"
+            : "#66736e",
+        }}
+      >
+        {openStatusLog
+          ? timerDisplay
+          : "00:00"}
+      </strong>
+
+      <span
+        style={{
+          display: "block",
+          marginTop: "6px",
+          fontWeight: "700",
+        }}
+      >
+        {openStatusLog
+          ? statusLabel
+          : "No active status"}
+      </span>
+
+      {openStatusLog && (
+        <small
+          style={{
+            display: "block",
+            marginTop: "4px",
+            color: "#66736e",
+          }}
+        >
+          {Math.floor(
+            elapsedSeconds / 60
+          )} minute(s) in this status
+        </small>
+      )}
+    </div>
+  );
+}
+
 function HRWorkforceApp() {
   const [employees, setEmployees] = useState([]);
   const [timeEntries, setTimeEntries] = useState([]);
@@ -3546,6 +3679,7 @@ const loadedSupabase = await loadSupabaseReferenceData(
 
     return () => window.clearInterval(interval);
   }, [employees, timeEntries]);
+ 
 
   function showToast(title, message = "", type = "success") {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
@@ -3651,6 +3785,57 @@ const visibleRequests = isAgentOnly && currentUser?.id
 const selectedEmployeeDate = selectedEmployee
   ? getEmployeeDateKey(selectedEmployee)
   : getAppDateKey();
+  const currentOpenStatusLog = useMemo(() => {
+  if (!selectedEmployee?.id) return null;
+
+  return timeEntries
+    .filter((entry) => {
+      const sameEmployee =
+        String(entry.employee_id || "") ===
+        String(selectedEmployee.id || selectedEmployee.employee_id || "");
+
+      const entryDate = String(
+        entry.date ||
+        entry.clock_in ||
+        entry.category_start ||
+        entry.created_at ||
+        ""
+      ).slice(0, 10);
+
+      const isOpen =
+        !entry.clock_out &&
+        !entry.category_end;
+
+      return (
+        sameEmployee &&
+        entryDate === selectedEmployeeDate &&
+        isOpen
+      );
+    })
+    .sort((a, b) => {
+      const aTime = new Date(
+        a.clock_in ||
+        a.category_start ||
+        a.created_at ||
+        0
+      ).getTime();
+
+      const bTime = new Date(
+        b.clock_in ||
+        b.category_start ||
+        b.created_at ||
+        0
+      ).getTime();
+
+      return bTime - aTime;
+    })[0] || null;
+}, [
+  selectedEmployee,
+  selectedEmployeeDate,
+  timeEntries,
+]);
+
+
 
 const visibleActivity = isAgentOnly && currentUser?.id
   ? activityLog.filter(
@@ -6603,6 +6788,9 @@ if (startupLoading) {
                   Automatic OT Only
                 </button>
               </div>
+              <CurrentStatusTimer
+  openStatusLog={currentOpenStatusLog}
+/>
             </Card>
 
             <Card title="My balances">
