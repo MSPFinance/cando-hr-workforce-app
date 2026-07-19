@@ -3321,6 +3321,317 @@ function CurrentStatusTimer({ openStatusLog }) {
   );
 }
 
+function DailyAttendanceSummary({
+  employee,
+  timeEntries = [],
+  schedule,
+  employeeDate,
+}) {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const hasOpenLog = timeEntries.some((entry) => {
+  const sameEmployee =
+    String(entry.employee_id || "") ===
+    String(employee?.id || employee?.employee_id || "");
+
+  const entryDate = String(
+    entry.date ||
+    entry.clock_in ||
+    entry.category_start ||
+    entry.created_at ||
+    ""
+  ).slice(0, 10);
+
+  return (
+    sameEmployee &&
+    entryDate === employeeDate &&
+    !entry.clock_out &&
+    !entry.category_end
+  );
+});
+
+    if (!hasOpenLog) {
+      return undefined;
+    }
+
+    /*
+      Update only this small attendance card.
+      Do not rerender the entire application every second.
+    */
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+    }, 30000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+}, [employee, employeeDate, timeEntries]);
+  const summary = useMemo(() => {
+    if (!employee || !schedule) {
+      return {
+        scheduledMinutes: 0,
+        trackedMinutes: 0,
+        attendancePercent: 0,
+      };
+    }
+
+    const scheduledMinutes = minutesBetween(
+      schedule.shift_start,
+      schedule.shift_end
+    );
+
+    const employeeId = String(
+      employee.id ||
+      employee.employee_id ||
+      ""
+    );
+
+    const todayEntries = timeEntries.filter((entry) => {
+      const sameEmployee =
+        String(entry.employee_id || "") === employeeId;
+
+      const entryDate = String(
+        entry.date ||
+        entry.clock_in ||
+        entry.category_start ||
+        entry.created_at ||
+        ""
+      ).slice(0, 10);
+
+      return (
+        sameEmployee &&
+        entryDate === employeeDate
+      );
+    });
+
+    const trackedMinutes = todayEntries.reduce(
+      (total, entry) => {
+        /*
+          Use the duration already calculated and saved by Supabase
+          whenever it is available.
+        */
+        const savedDuration = Number(
+          entry.duration_minutes
+        );
+
+        if (
+          Number.isFinite(savedDuration) &&
+savedDuration > 0
+        ) {
+          return total + savedDuration;
+        }
+
+        const endValue =
+          entry.category_end ||
+          entry.clock_out;
+
+        /*
+          Closed rows that contain simple HH:mm values.
+        */
+        if (endValue) {
+          return (
+            total +
+            minutesBetween(
+              entry.category_start ||
+                entry.clock_in,
+              endValue
+            )
+          );
+        }
+
+        /*
+          Include the active open status in today's live attendance.
+          Supabase clock_in is an actual timestamp.
+        */
+        const startValue =
+          entry.clock_in ||
+          entry.category_start ||
+          entry.created_at;
+
+        const startTimestamp =
+          startValue
+            ? new Date(startValue).getTime()
+            : NaN;
+
+        if (!Number.isNaN(startTimestamp)) {
+          return (
+            total +
+            Math.max(
+              0,
+              Math.floor(
+                (now - startTimestamp) /
+                  60000
+              )
+            )
+          );
+        }
+
+        return total;
+      },
+      0
+    );
+
+    const attendancePercent =
+      scheduledMinutes > 0
+        ? Math.min(
+            100,
+            (trackedMinutes /
+              scheduledMinutes) *
+              100
+          )
+        : 0;
+
+    return {
+      scheduledMinutes,
+      trackedMinutes,
+      attendancePercent,
+    };
+  }, [
+    employee,
+    employeeDate,
+    now,
+    schedule,
+    timeEntries,
+  ]);
+
+  const scheduledHours =
+    summary.scheduledMinutes / 60;
+
+  const trackedHours =
+    summary.trackedMinutes / 60;
+
+  return (
+    <div
+      style={{
+        marginTop: "12px",
+        padding: "14px",
+        border: "1px solid #cfe5dc",
+        borderRadius: "12px",
+        background: "#f6fbf8",
+      }}
+    >
+      <strong
+        style={{
+          display: "block",
+          marginBottom: "10px",
+        }}
+      >
+        Today&apos;s attendance
+      </strong>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns:
+            "repeat(3, minmax(0, 1fr))",
+          gap: "10px",
+        }}
+      >
+        <div
+          style={{
+            padding: "10px",
+            border: "1px solid #dce9e3",
+            borderRadius: "10px",
+            background: "#ffffff",
+          }}
+        >
+          <span
+            style={{
+              display: "block",
+              fontSize: "11px",
+              fontWeight: "700",
+              textTransform: "uppercase",
+              color: "#62716b",
+            }}
+          >
+            Scheduled
+          </span>
+
+          <strong>
+            {scheduledHours.toFixed(2)}h
+          </strong>
+        </div>
+
+        <div
+          style={{
+            padding: "10px",
+            border: "1px solid #dce9e3",
+            borderRadius: "10px",
+            background: "#ffffff",
+          }}
+        >
+          <span
+            style={{
+              display: "block",
+              fontSize: "11px",
+              fontWeight: "700",
+              textTransform: "uppercase",
+              color: "#62716b",
+            }}
+          >
+            Tracked
+          </span>
+
+          <strong>
+            {trackedHours.toFixed(2)}h
+          </strong>
+        </div>
+
+        <div
+          style={{
+            padding: "10px",
+            border: "1px solid #dce9e3",
+            borderRadius: "10px",
+            background: "#ffffff",
+          }}
+        >
+          <span
+            style={{
+              display: "block",
+              fontSize: "11px",
+              fontWeight: "700",
+              textTransform: "uppercase",
+              color: "#62716b",
+            }}
+          >
+            Attendance
+          </span>
+
+          <strong>
+            {summary.attendancePercent.toFixed(
+              2
+            )}
+            %
+          </strong>
+        </div>
+      </div>
+
+      <div
+        style={{
+          height: "8px",
+          marginTop: "12px",
+          borderRadius: "999px",
+          background: "#dfe9e4",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            width: `${Math.min(
+              100,
+              summary.attendancePercent
+            )}%`,
+            height: "100%",
+            borderRadius: "999px",
+            background: "#087f5b",
+            transition: "width 0.3s ease",
+          }}
+        />
+      </div>
+    </div>
+  );
+}
 function HRWorkforceApp() {
   const [employees, setEmployees] = useState([]);
   const [timeEntries, setTimeEntries] = useState([]);
@@ -3995,6 +4306,177 @@ const employeeId = String(
   ""
 ).trim();
 
+const employeeTimeZone =
+  getEmployeeTimeZone(employee);
+
+const employeeReportDay =
+  todayDayName(
+    employeeTimeZone,
+    reportDateObject
+  );
+
+const employeeSchedule =
+  getStableSchedule(
+    employee,
+    [],
+    employeeReportDay
+  );
+
+const scheduledMinutes =
+  minutesBetween(
+    employeeSchedule.shift_start,
+    employeeSchedule.shift_end
+  );
+
+const employeeLogsForDate =
+  timeEntries.filter((entry) => {
+    const sameEmployee =
+      String(entry.employee_id || "").trim() ===
+      employeeId;
+
+    const entryDate = String(
+      entry.date ||
+      entry.clock_in ||
+      entry.category_start ||
+      entry.created_at ||
+      ""
+    ).slice(0, 10);
+
+    return (
+      sameEmployee &&
+      entryDate === reportDate
+    );
+  });
+
+const trackedMinutes =
+  employeeLogsForDate.reduce(
+    (total, entry) => {
+      const isOpen =
+        !entry.clock_out &&
+        !entry.category_end;
+
+      const savedDuration =
+        Number(entry.duration_minutes);
+
+      /*
+        Use Supabase's saved duration for completed
+        chronological time-log rows.
+      */
+      if (
+        !isOpen &&
+        Number.isFinite(savedDuration) &&
+        savedDuration > 0
+      ) {
+        return total + savedDuration;
+      }
+
+      const startValue =
+  entry.clock_in ||
+  entry.category_start ||
+  entry.created_at;
+
+const endValue =
+  entry.clock_out ||
+  entry.category_end;
+
+      /*
+        Use complete timestamps when both values
+        can be parsed as real dates.
+      */
+      if (startValue && endValue) {
+        const startTimestamp =
+          new Date(startValue).getTime();
+
+        const endTimestamp =
+          new Date(endValue).getTime();
+
+        if (
+          !Number.isNaN(startTimestamp) &&
+          !Number.isNaN(endTimestamp)
+        ) {
+          return (
+            total +
+            Math.max(
+              0,
+              Math.round(
+                (endTimestamp -
+                  startTimestamp) /
+                  60000
+              )
+            )
+          );
+        }
+
+        /*
+          Fall back to HH:mm values used by older
+          or manually corrected time logs.
+        */
+        return (
+          total +
+          minutesBetween(
+            startValue,
+            endValue
+          )
+        );
+      }
+
+      /*
+        Include the currently open status only when
+        reviewing the employee's current local date.
+      */
+      const employeeCurrentDate =
+        getEmployeeDateKey(employee);
+
+      if (
+        isOpen &&
+        reportDate === employeeCurrentDate
+      ) {
+        const openStartValue =
+          entry.clock_in ||
+          entry.category_start ||
+          entry.created_at;
+
+        const openStartTimestamp =
+          openStartValue
+            ? new Date(
+                openStartValue
+              ).getTime()
+            : NaN;
+
+        if (
+          !Number.isNaN(
+            openStartTimestamp
+          )
+        ) {
+          return (
+            total +
+            Math.max(
+              0,
+              Math.floor(
+                (Date.now() -
+                  openStartTimestamp) /
+                  60000
+              )
+            )
+          );
+        }
+      }
+
+      return total;
+    },
+    0
+  );
+
+const timeAttendancePercent =
+  scheduledMinutes > 0
+    ? Math.min(
+        100,
+        (trackedMinutes /
+          scheduledMinutes) *
+          100
+      )
+    : 0;
+
 const employeeSummary = {
   id: employeeId,
 
@@ -4027,8 +4509,20 @@ const employeeSummary = {
     "",
 
   lob:
-    employee.lob ||
-    "",
+  employee.lob ||
+  "",
+
+scheduledMinutes,
+
+trackedMinutes,
+
+scheduledHours:
+  scheduledMinutes / 60,
+
+trackedHours:
+  trackedMinutes / 60,
+
+timeAttendancePercent,
 };
 
 row.scheduledEmployees.push(
@@ -6801,6 +7295,12 @@ if (startupLoading) {
                   )}
                   <div><span>Tenure</span><strong>{tenure(selectedEmployee.hire_date)}</strong></div>
                 </div>
+                <DailyAttendanceSummary
+  employee={selectedEmployee}
+  timeEntries={timeEntries}
+  schedule={agentScheduleRow?.schedule}
+  employeeDate={selectedEmployeeDate}
+/>
                 <div className="monthlyAttendanceBox">
                   <strong>Monthly attendance · {employeeMonthlyAttendance(selectedEmployee, timeEntries, requests).monthLabel}</strong>
                   <div className="reportMiniGrid">
@@ -7274,8 +7774,8 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
         </h3>
 
         <p>
-          Review the employees scheduled, logged in,
-          or without a login for{" "}
+          Review scheduled employees, login status,
+tracked hours, and time-based attendance for{" "}
           {attendanceHeadcount.reportDate}.
         </p>
       </div>
@@ -7357,30 +7857,51 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
     </div>
 
     <Table
-      headers={[
+  headers={[
+    "Employee",
+    "Scheduled",
+    "Tracked",
+    "Time Attendance",
+    "Access Level",
+    "Sub-Department",
+    "LOB",
+    "Country",
+    "Email",
+  ]}
+  rows={selectedAttendanceEmployees.map(
+    (employee) => [
+      employee.name,
+
+      `${Number(
+        employee.scheduledHours || 0
+      ).toFixed(2)}h`,
+
+      `${Number(
+        employee.trackedHours || 0
+      ).toFixed(2)}h`,
+
+      `${Number(
+        employee.timeAttendancePercent ||
+          0
+      ).toFixed(2)}%`,
+
+      employee.accessLevel ||
         "Employee",
-        "Access Level",
-        "Sub-Department",
-        "LOB",
-        "Country",
-        "Email",
-      ]}
-      rows={selectedAttendanceEmployees.map(
-        (employee) => [
-          employee.name,
-          employee.accessLevel ||
-            "Employee",
-          employee.subDepartment ||
-            "N/A",
-          employee.lob ||
-            "N/A",
-          employee.country ||
-            "N/A",
-          employee.email ||
-            "N/A",
-        ]
-      )}
-    />
+
+      employee.subDepartment ||
+        "N/A",
+
+      employee.lob ||
+        "N/A",
+
+      employee.country ||
+        "N/A",
+
+      employee.email ||
+        "N/A",
+    ]
+  )}
+/>
 
     {!selectedAttendanceEmployees.length && (
       <p className="muted">
