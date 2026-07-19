@@ -2539,50 +2539,6 @@ function toSupabaseTimestamp(dateValue, timeValue) {
   return `${cleanDate}T${cleanTime}:00`;
 }
 
-function localDateTimeToUtcIso(
-  dateKey,
-  timeKey,
-  timeZone
-) {
-  const cleanDate = formatDateOnly(dateKey);
-
-  const cleanTime =
-    formatMilitaryTime(timeKey || "23:59") ||
-    "23:59";
-
-  if (!cleanDate) {
-    return new Date().toISOString();
-  }
-
-  const [year, month, day] =
-    cleanDate.split("-").map(Number);
-
-  const [hour, minute] =
-    cleanTime.split(":").map(Number);
-
-  const initialUtcGuess = new Date(
-    Date.UTC(
-      year,
-      month - 1,
-      day,
-      hour,
-      minute,
-      0
-    )
-  );
-
-  const offsetMinutes =
-    getTimeZoneOffsetMinutes(
-      timeZone,
-      initialUtcGuess
-    );
-
-  return new Date(
-    initialUtcGuess.getTime() -
-      offsetMinutes * 60000
-  ).toISOString();
-}
-
 function mapTimeEntryToSupabaseLog(entry, employee = {}) {
   return {
     app_log_id: String(
@@ -3756,6 +3712,7 @@ function HRWorkforceApp() {
   const actionLockRef = useRef(new Set());
   const toastTimerRef = useRef(null);
   const overrideResolverRef = useRef(null);
+  const dailyTimerStopRef = useRef("");
   const weeklyWorkforceSyncRef = useRef(localStorage.getItem(WORKFORCE_SYNC_LAST_RUN_KEY) || "");
   const liveAutoSyncRef = useRef(false);
   const attendanceEmailQueueRef = useRef(new Set());
@@ -4021,41 +3978,18 @@ const loadedSupabase = await loadSupabaseReferenceData(
   }, []);
 
   useEffect(() => {
-  if (!supabase || !employees.length) {
-    return undefined;
-  }
+    const interval = window.setInterval(() => {
+      const now = new Date();
+      const currentDate = getAppDateKey(now);
+      const currentTime = getAppTimeKey(now);
+      if (currentTime === DAILY_TIMER_STOP_TIME && dailyTimerStopRef.current !== currentDate) {
+        dailyTimerStopRef.current = currentDate;
+        autoStopDailyTimers(currentDate, DAILY_TIMER_STOP_TIME);
+      }
+    }, 30000);
 
-  const runForgottenShiftCleanup = async () => {
-    try {
-      await autoStopDailyTimers();
-    } catch (error) {
-      console.warn(
-        "Automatic forgotten-shift cleanup failed:",
-        error?.message || error
-      );
-    }
-  };
-
-  /*
-    Run once when live employee data becomes available.
-    This catches shifts left open from a previous date,
-    even when the browser was closed at 23:59.
-  */
-  runForgottenShiftCleanup();
-
-  /*
-    Recheck every five minutes while the application is open.
-    The function only updates truly expired open logs.
-  */
-  const interval = window.setInterval(
-    runForgottenShiftCleanup,
-    5 * 60 * 1000
-  );
-
-  return () => {
-    window.clearInterval(interval);
-  };
-}, [employees]);
+    return () => window.clearInterval(interval);
+  }, [employees, timeEntries]);
  
 
   function showToast(title, message = "", type = "success") {
@@ -4758,24 +4692,8 @@ console.log("FIRST DATE", latestLogs?.[0]?.date);
     setTimeEntries(
   (latestLogs || [])
     .map((log) => ({
-  ...log,
-
-  supabase_id: log.id,
-
-  id:
-    log.app_log_id ||
-    log.id,
-
-  category:
-    log.category ||
-    log.status ||
-    "Working",
-
-  approved:
-    log.approval_status ||
-    "Pending",
-
-  date:
+      ...log,
+      date:
         log.date ||
         String(
           log.clock_in ||
@@ -4923,19 +4841,11 @@ useEffect(() => {
   setTimeEntries(
     (latestLogs || [])
       .map((log) => ({
-  ...log,
+        ...log,
 
-  /*
-    Preserve both identifiers.
-
-    supabase_id is the actual database primary key.
-    id remains the application-facing identifier.
-  */
-  supabase_id: log.id,
-
-  id:
-    log.app_log_id ||
-    log.id,
+        id:
+          log.app_log_id ||
+          log.id,
 
         date:
           log.date ||
@@ -5063,9 +4973,6 @@ const dateOk = (!filters.startDate || entryDate >= filters.startDate) && (!filte
 
   return categoryOk && approvalOk && payableOk;
 });
-
-const displayedTimeLogs =
-  editableTimeLogs.slice(0, 100);
 
   const filteredRequests = visibleRequests.filter((r) => {
     const employee = employees.find((e) => e.id === r.employee_id);
@@ -5995,286 +5902,80 @@ setTimeEntries((current) => [
   
   });
 }
-  
-  async function autoStopDailyTimers() {
-  if (!supabase || !employees.length) {
-    return;
-  }
-
-  /*
-    Query Supabase directly.
-
-    This avoids relying on browser state that may be
-    incomplete, stale, or limited to the most recent
-    1,000 time-log records.
-  */
-  const { data: openLogs, error: openLogsError } =
-    await supabase
-      .from("time_logs")
-      .select("*")
-      .is("clock_out", null);
-
-  if (openLogsError) {
-    throw new Error(
-      `Unable to check forgotten shifts: ${openLogsError.message}`
-    );
-  }
-
-  if (!openLogs?.length) {
-    return;
-  }
-
-  const closedRows = [];
-  const autoActivities = [];
-
-  for (const openLog of openLogs) {
-    const employee =
-      employees.find(
-        (item) =>
-          String(
-            item.id ||
-              item.employee_id ||
-              ""
-          ) ===
-          String(openLog.employee_id || "")
-      );
-
-    if (!employee) {
-      console.warn(
-        "Forgotten shift skipped because employee was not found:",
-        openLog.employee_id
-      );
-
-      continue;
-    }
-
-    const employeeTimeZone =
-      getEmployeeTimeZone(employee);
-
-    const startValue =
-      openLog.clock_in ||
-      openLog.category_start ||
-      openLog.created_at;
-
-    const startTimestamp =
-      startValue
-        ? new Date(startValue)
-        : null;
-
-    if (
-      !startTimestamp ||
-      Number.isNaN(
-        startTimestamp.getTime()
-      )
-    ) {
-      console.warn(
-        "Forgotten shift skipped because its start time is invalid:",
-        openLog.id
-      );
-
-      continue;
-    }
-
-    /*
-      Determine the date when the open status began
-      in the employee's own timezone.
-    */
-    const openLogDate =
-      new Intl.DateTimeFormat("en-CA", {
-        timeZone: employeeTimeZone,
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-      }).format(startTimestamp);
-
-    const employeeCurrentDate =
-      getEmployeeDateKey(employee);
-
-    /*
-      A log is expired only after the employee has
-      moved into a later local calendar date.
-
-      Today's genuinely active status is untouched.
-    */
-    if (
-      openLogDate >= employeeCurrentDate
-    ) {
-      continue;
-    }
-
-    const automaticClockOut =
-      localDateTimeToUtcIso(
-        openLogDate,
-        DAILY_TIMER_STOP_TIME,
-        employeeTimeZone
-      );
-
-    const automaticClockOutDate =
-      new Date(automaticClockOut);
-
-    const durationMinutes =
-      Math.max(
-        0,
-        Math.round(
-          (
-            automaticClockOutDate.getTime() -
-            startTimestamp.getTime()
-          ) / 60000
-        )
-      );
-
-    const existingNotes =
-      String(openLog.notes || "").trim();
-
-    const automaticNote =
-      `System automatically closed forgotten shift at ${DAILY_TIMER_STOP_TIME} employee local time.`;
-
-    const updatePayload = {
-      clock_out: automaticClockOut,
-      category_end: automaticClockOut,
-      duration_minutes: durationMinutes,
-
-      notes: existingNotes
-        ? `${existingNotes} | ${automaticNote}`
-        : automaticNote,
-
-      approval_status:
-        openLog.approval_status ||
-        "Pending",
-
-      payable_status:
-        "Pending Manager Review",
-
-      edited_by:
-        "Magnemite Automatic Shift Cleanup",
-
-      edited_at:
-        new Date().toISOString(),
-    };
-
-    const { data: updatedRows, error: updateError } =
-      await supabase
-        .from("time_logs")
-        .update(updatePayload)
-        .eq("id", openLog.id)
-        .is("clock_out", null)
-        .select();
-
-    if (updateError) {
-      console.warn(
-        `Unable to close forgotten shift ${openLog.id}:`,
-        updateError.message
-      );
-
-      continue;
-    }
-
-    if (!updatedRows?.length) {
-      /*
-        Another action may already have closed the row.
-        Do not create or update anything else.
-      */
-      continue;
-    }
-
-    closedRows.push(...updatedRows);
-
-    autoActivities.push({
-      id: cleanId("ACT"),
-
-      employee_id:
-        employee.id,
-
-      employee_name:
-        employee.full_name,
-
-      date:
-        openLogDate,
-
-      action:
-        "Automatic Shift Closure",
-
-      time:
-        DAILY_TIMER_STOP_TIME,
-
-      status:
-        openLog.status ||
-        openLog.category ||
-        "Working",
-
-      lob:
-        employee.lob,
-
-      department:
-        employee.department,
-
-      sub_department:
-        employee.sub_department || "",
+  function getOpenShiftEmployeesForDate(dateValue) {
+    return employees.filter((employee) => {
+      if (employee.employment_status !== "Active") return false;
+      const employeeEntries = timeEntries.filter((entry) => entry.employee_id === employee.id && entry.date === dateValue);
+      const hasShiftStart = employeeEntries.some((entry) => entry.notes === "Shift Started" || entry.category === "Working");
+      const hasShiftEnd = employeeEntries.some((entry) => entry.notes === "Shift Ended" || entry.notes === "System auto logout at 12:59" || entry.category === "Auto Logout");
+      return hasShiftStart && !hasShiftEnd;
     });
   }
 
-  if (!closedRows.length) {
-    return;
-  }
+  async function autoStopDailyTimers(dateValue = new Date().toISOString().slice(0, 10), stopTime = DAILY_TIMER_STOP_TIME) {
+    const openEmployees = getOpenShiftEmployeesForDate(dateValue);
+    if (!openEmployees.length) return;
 
-  /*
-    Replace the existing open rows in browser state.
-    Do not add new Auto Logout time rows.
-  */
-  setTimeEntries((current) =>
-    current.map((entry) => {
-      const closedLog =
-        closedRows.find(
-          (row) =>
-            String(row.id || "") ===
-              String(entry.id || "") ||
-            String(
-              row.app_log_id || ""
-            ) ===
-              String(
-                entry.app_log_id ||
-                  entry.id ||
-                  ""
-              )
-        );
-
-      if (!closedLog) {
-        return entry;
-      }
-
+    const autoEntries = openEmployees.map((employee) => {
+      const schedule = getStableSchedule(employee);
       return {
-        ...entry,
-        ...closedLog,
-
-        category:
-          closedLog.category ||
-          closedLog.status ||
-          entry.category,
-
-        approved:
-          closedLog.approval_status ||
-          entry.approved,
+        id: cleanId("TIME"),
+        employee_id: employee.id,
+        employee_name: employee.full_name,
+        date: dateValue,
+        scheduled_start: schedule.shift_start,
+        scheduled_end: schedule.shift_end,
+        schedule_break_1: formatTimeRange(schedule.break_start, schedule.break_end),
+        schedule_lunch: "",
+        schedule_break_2: formatTimeRange(schedule.second_break_start, schedule.second_break_end),
+        schedule_off_days: schedule.off_days,
+        schedule_source: "System daily timer stop",
+        clock_in: schedule.shift_start,
+        clock_out: stopTime,
+        category: "Auto Logout",
+        category_start: stopTime,
+        category_end: stopTime,
+        approved: "Pending",
+        payable_status: "Pending Manager Review",
+        locked: false,
+        auto_rule: `System stopped active timer at ${stopTime} because no shift end was recorded.`,
+        lob: employee.lob,
+        department: employee.department,
+        sub_department: employee.sub_department || "",
+        notes: "System auto logout at 12:59",
       };
-    })
-  );
+    });
 
-  /*
-    Activity is an audit display only.
-    It does not count as worked time.
-  */
-  if (autoActivities.length) {
-    setActivityLog((current) => [
-      ...autoActivities,
-      ...current,
-    ]);
+    const autoActivities = openEmployees.map((employee) => ({
+      id: cleanId("ACT"),
+      employee_id: employee.id,
+      employee_name: employee.full_name,
+      date: dateValue,
+      action: "System Auto Logout",
+      time: stopTime,
+      status: "Auto Logout",
+      lob: employee.lob,
+      department: employee.department,
+      sub_department: employee.sub_department || "",
+    }));
+
+    try {
+      await supabaseInsert(
+        "time_logs",
+        autoEntries.map((entry) => mapTimeEntryToSupabaseLog(entry, employees.find((employee) => employee.id === entry.employee_id))),
+        "Daily auto logout time log"
+      );
+      for (const entry of autoEntries) {
+        await googleAddRow("timeLogs", mapTimeToSheet(entry));
+      }
+    } catch (error) {
+      console.error("Daily auto logout sync failed:", error);
+    }
+
+    setTimeEntries((current) => [...autoEntries, ...current]);
+    setActivityLog((current) => [...autoActivities, ...current]);
+    showToast("Daily timer stop completed", `${autoEntries.length} open shift timer(s) were closed automatically at ${stopTime}.`, "info");
   }
-
-  showToast(
-    "Forgotten shifts closed",
-    `${closedRows.length} open time log(s) from a prior employee-local date were closed at ${DAILY_TIMER_STOP_TIME}. No Auto Logout time rows were created.`,
-    "info"
-  );
-}
 
   async function managerEndSelectedEmployeeShift() {
   if (!canEditTimeLogs(currentUser?.access_level || currentUser?.role || "Employee")) {
@@ -6699,15 +6400,7 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
 }
 
 function selectAllFilteredTimeLogs() {
-  const ids = displayedTimeLogs
-    .map(
-      (entry) =>
-        entry.app_log_id ||
-        entry.supabase_id ||
-        entry.id
-    )
-    .filter(Boolean);
-
+  const ids = editableTimeLogs.map((entry) => entry.id).filter(Boolean);
   setSelectedTimeLogIds(ids);
 }
 
@@ -6717,158 +6410,49 @@ function clearSelectedTimeLogs() {
 
 async function bulkApproveSelectedTimeLogs() {
   if (!selectedTimeLogIds.length) {
-    showToast(
-      "No rows selected",
-      "Please select at least one time log.",
-      "warning"
-    );
+    showToast("No rows selected", "Please select at least one time log.", "warning");
     return;
   }
 
-  return runProtectedAction(
-    "bulk-approve-time-logs",
-    "Bulk time log approval",
-    async () => {
-      const approvedAt =
-        new Date().toISOString();
+  return runProtectedAction("bulk-approve-time-logs", "Bulk time log approval", async () => {
+    const updates = {
+      approved: "Approved",
+      approval_status: "Approved",
+      payable_status: "Approved Payable",
+      approved_by: currentUser.email,
+      edited_by: currentUser.email,
+      edited_at: new Date().toISOString(),
+      notes: "Bulk approved by manager",
+    };
 
-      const updates = {
-        approved: "Approved",
-        approval_status: "Approved",
-        payable_status: "Approved Payable",
-        approved_by: currentUser.email,
-        edited_by: currentUser.email,
-        edited_at: approvedAt,
-        notes: "Bulk approved by manager",
-      };
+    setTimeEntries((current) =>
+      current.map((entry) =>
+        selectedTimeLogIds.includes(entry.id)
+          ? { ...entry, ...updates }
+          : entry
+      )
+    );
 
-      /*
-        Resolve the selected browser identifiers back
-        to the actual loaded rows.
-      */
-      const selectedEntries =
-        timeEntries.filter((entry) => {
-          const selectionId =
-            entry.app_log_id ||
-            entry.supabase_id ||
-            entry.id;
-
-          return selectedTimeLogIds.includes(
-            selectionId
-          );
-        });
-
-      const appLogIds = selectedEntries
-        .map((entry) => entry.app_log_id)
-        .filter(Boolean);
-
-      const databaseIds = selectedEntries
-  .filter(
-    (entry) =>
-      !entry.app_log_id
-  )
-  .map(
-    (entry) =>
-      entry.supabase_id ||
-      entry.id
-  )
-  .filter(Boolean);
-
-      if (!selectedEntries.length) {
-        throw new Error(
-          "The selected time logs could not be matched to the loaded records."
-        );
-      }
-
-      const savedRows = [];
-
-      if (supabase && appLogIds.length) {
-        const {
-          data,
-          error,
-        } = await supabase
-          .from("time_logs")
-          .update({
-            approval_status: "Approved",
-            payable_status: "Approved Payable",
-            approved_by: currentUser.email,
-            edited_by: currentUser.email,
-            edited_at: approvedAt,
-          })
-          .in("app_log_id", appLogIds)
-          .select();
-
-        if (error) {
-          throw new Error(
-            `Approval by app log ID failed: ${error.message}`
-          );
-        }
-
-        savedRows.push(...(data || []));
-      }
-
-      if (supabase && databaseIds.length) {
-        const {
-          data,
-          error,
-        } = await supabase
-          .from("time_logs")
-          .update({
-            approval_status: "Approved",
-            payable_status: "Approved Payable",
-            approved_by: currentUser.email,
-            edited_by: currentUser.email,
-            edited_at: approvedAt,
-          })
-          .in("id", databaseIds)
-          .select();
-
-        if (error) {
-          throw new Error(
-            `Approval by database ID failed: ${error.message}`
-          );
-        }
-
-        savedRows.push(...(data || []));
-      }
-
-      if (
-        supabase &&
-        savedRows.length !== selectedEntries.length
-      ) {
-        throw new Error(
-          `Only ${savedRows.length} of ${selectedEntries.length} selected time logs were saved in Supabase. No local approval was applied.`
-        );
-      }
-
-      /*
-        Update browser state only after Supabase confirms
-        that the records were saved.
-      */
-      setTimeEntries((current) =>
-        current.map((entry) => {
-          const entrySelectionId =
-            entry.app_log_id ||
-            entry.supabase_id ||
-            entry.id;
-
-          return selectedTimeLogIds.includes(
-            entrySelectionId
-          )
-            ? { ...entry, ...updates }
-            : entry;
+    if (supabase) {
+      const { error } = await supabase
+        .from("time_logs")
+        .update({
+          approval_status: "Approved",
+          payable_status: "Approved Payable",
+          approved_by: currentUser.email,
+          edited_by: currentUser.email,
+          edited_at: new Date().toISOString(),
         })
-      );
+        .in("app_log_id", selectedTimeLogIds);
 
-      setSelectedTimeLogIds([]);
-
-      showToast(
-        "Bulk approval completed",
-        `${savedRows.length || selectedEntries.length} selected time log(s) were approved and saved.`,
-        "success"
-      );
+      if (error) {
+        throw new Error(error.message);
+      }
     }
-  );
+
+    setSelectedTimeLogIds([]);
+    showToast("Bulk approval completed", "Selected time logs were approved.", "success");
+  });
 }
 
   function editTimeEntryLocal(id, field, value) {
@@ -8004,30 +7588,13 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
 </select>
 </div>
 
-<p className="helperText">
-  Showing the most recent{" "}
-  {displayedTimeLogs.length} of{" "}
-  {editableTimeLogs.length} matching time logs.
-  Use the filters above to locate older records.
-</p>
-
               <Table
                 headers={["Select", "Employee", "Date", "LOB", "Category", "Start", "End", "Duration", "Approval", "Payable", "Notes", "Save"]}
-                rows={displayedTimeLogs.map((t) => [
-                 <input
+                rows={editableTimeLogs.map((t) => [
+                  <input
   type="checkbox"
-  checked={selectedTimeLogIds.includes(
-    t.app_log_id ||
-t.supabase_id ||
-t.id
-  )}
-  onChange={() =>
-    toggleTimeLogSelection(
-      t.app_log_id ||
-t.supabase_id ||
-t.id
-    )
-  }
+  checked={selectedTimeLogIds.includes(t.id)}
+  onChange={() => toggleTimeLogSelection(t.id)}
 />,
                   <strong>{t.employee_name}</strong>,
                   <input type="date" value={t.date || today} onChange={(event) => editTimeEntryLocal(t.id, "date", event.target.value)} />,
