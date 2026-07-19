@@ -157,6 +157,13 @@ const ADMIN_ACCESS_LEVELS = ["TL", "Team Lead", "Supervisor", "Manager", "Approv
 const OT_REQUESTS_ENABLED = false;
 const EARLY_SHIFT_START_GRACE_MINUTES = 15;
 const REQUEST_TYPE_OPTIONS = ["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave"];
+const APPROVED_ATTENDANCE_ABSENCE_TYPES = [
+  "PTO",
+  "VTO",
+  "Sick Leave",
+  "Paid Leave",
+  "Unpaid Leave",
+];
 
 const ROLE_PROFILE_OPTIONS = ["Employee", "TL", "Manager", "Approvals", "Reporting", "HR", "Payroll", "Admin", "Executive"];
 
@@ -4287,6 +4294,10 @@ const scheduleRows =
   const reportDateObject =
     new Date(`${reportDate}T12:00:00`);
 
+  /*
+    Employees with at least one time log on the selected
+    date are considered Logged In.
+  */
   const loggedEmployeeIds = new Set(
     timeEntries
       .filter((entry) => {
@@ -4306,6 +4317,9 @@ const scheduleRows =
       .filter(Boolean)
   );
 
+  /*
+    Only active employees are included in attendance.
+  */
   const activeEmployees =
     filteredVisibleEmployees.filter((employee) => {
       const status = String(
@@ -4319,6 +4333,10 @@ const scheduleRows =
       return status === "active";
     });
 
+  /*
+    Remove employees whose normal schedule marks the
+    selected weekday as an off day.
+  */
   const scheduledEmployees =
     activeEmployees.filter((employee) => {
       const employeeTimeZone =
@@ -4340,6 +4358,52 @@ const scheduleRows =
       );
     });
 
+  /*
+    Find one approved absence covering the selected date.
+
+    A request counts only when:
+    - it belongs to the employee;
+    - its status is Approved;
+    - its type is an approved absence type;
+    - the selected report date falls inside the request.
+  */
+  const findApprovedAbsence = (employeeId) =>
+    requests.find((request) => {
+      const requestEmployeeId = String(
+        request.employee_id ||
+        request.Employee_ID ||
+        ""
+      ).trim();
+
+      const requestStatus = String(
+        request.status ||
+        request.approval_status ||
+        request.Status ||
+        ""
+      )
+        .trim()
+        .toLowerCase();
+
+      const requestType = String(
+        request.type ||
+        request.request_type ||
+        request.Request_Type ||
+        ""
+      ).trim();
+
+      return (
+        requestEmployeeId === String(employeeId) &&
+        requestStatus === "approved" &&
+        APPROVED_ATTENDANCE_ABSENCE_TYPES.includes(
+          requestType
+        ) &&
+        requestCoversDate(
+          request,
+          reportDate
+        )
+      );
+    });
+
   const departmentMap = new Map();
 
   scheduledEmployees.forEach((employee) => {
@@ -4349,16 +4413,19 @@ const scheduleRows =
 
     if (!departmentMap.has(department)) {
       departmentMap.set(department, {
-  department,
-  scheduled: 0,
-  loggedIn: 0,
-  noLogin: 0,
-  attendancePercent: 0,
+        department,
 
-  scheduledEmployees: [],
-  loggedInEmployees: [],
-  noLoginEmployees: [],
-});
+        scheduled: 0,
+        loggedIn: 0,
+        approvedAbsence: 0,
+        noLogin: 0,
+        attendancePercent: 0,
+
+        scheduledEmployees: [],
+        loggedInEmployees: [],
+        approvedAbsenceEmployees: [],
+        noLoginEmployees: [],
+      });
     }
 
     const row =
@@ -4366,264 +4433,309 @@ const scheduleRows =
 
     row.scheduled += 1;
 
-const employeeId = String(
-  employee.id ||
-  employee.employee_id ||
-  ""
-).trim();
-
-const employeeTimeZone =
-  getEmployeeTimeZone(employee);
-
-const employeeReportDay =
-  todayDayName(
-    employeeTimeZone,
-    reportDateObject
-  );
-
-const employeeSchedule =
-  getStableSchedule(
-    employee,
-    [],
-    employeeReportDay
-  );
-
-const scheduledMinutes =
-  minutesBetween(
-    employeeSchedule.shift_start,
-    employeeSchedule.shift_end
-  );
-
-const employeeLogsForDate =
-  timeEntries.filter((entry) => {
-    const sameEmployee =
-      String(entry.employee_id || "").trim() ===
-      employeeId;
-
-    const entryDate = String(
-      entry.date ||
-      entry.clock_in ||
-      entry.category_start ||
-      entry.created_at ||
+    const employeeId = String(
+      employee.id ||
+      employee.employee_id ||
       ""
-    ).slice(0, 10);
+    ).trim();
 
-    return (
-      sameEmployee &&
-      entryDate === reportDate
-    );
-  });
+    const employeeTimeZone =
+      getEmployeeTimeZone(employee);
 
-const trackedMinutes =
-  employeeLogsForDate.reduce(
-    (total, entry) => {
-      const isOpen =
-        !entry.clock_out &&
-        !entry.category_end;
+    const employeeReportDay =
+      todayDayName(
+        employeeTimeZone,
+        reportDateObject
+      );
 
-      const savedDuration =
-        Number(entry.duration_minutes);
+    const employeeSchedule =
+      getStableSchedule(
+        employee,
+        [],
+        employeeReportDay
+      );
 
-      /*
-        Use Supabase's saved duration for completed
-        chronological time-log rows.
-      */
-      if (
-        !isOpen &&
-        Number.isFinite(savedDuration) &&
-        savedDuration > 0
-      ) {
-        return total + savedDuration;
-      }
+    const scheduledMinutes =
+      minutesBetween(
+        employeeSchedule.shift_start,
+        employeeSchedule.shift_end
+      );
 
-      const startValue =
-  entry.clock_in ||
-  entry.category_start ||
-  entry.created_at;
+    const employeeLogsForDate =
+      timeEntries.filter((entry) => {
+        const sameEmployee =
+          String(
+            entry.employee_id || ""
+          ).trim() === employeeId;
 
-const endValue =
-  entry.clock_out ||
-  entry.category_end;
-
-      /*
-        Use complete timestamps when both values
-        can be parsed as real dates.
-      */
-      if (startValue && endValue) {
-        const startTimestamp =
-          new Date(startValue).getTime();
-
-        const endTimestamp =
-          new Date(endValue).getTime();
-
-        if (
-          !Number.isNaN(startTimestamp) &&
-          !Number.isNaN(endTimestamp)
-        ) {
-          return (
-            total +
-            Math.max(
-              0,
-              Math.round(
-                (endTimestamp -
-                  startTimestamp) /
-                  60000
-              )
-            )
-          );
-        }
-
-        /*
-          Fall back to HH:mm values used by older
-          or manually corrected time logs.
-        */
-        return (
-          total +
-          minutesBetween(
-            startValue,
-            endValue
-          )
-        );
-      }
-
-      /*
-        Include the currently open status only when
-        reviewing the employee's current local date.
-      */
-      const employeeCurrentDate =
-        getEmployeeDateKey(employee);
-
-      if (
-        isOpen &&
-        reportDate === employeeCurrentDate
-      ) {
-        const openStartValue =
+        const entryDate = String(
+          entry.date ||
           entry.clock_in ||
           entry.category_start ||
-          entry.created_at;
+          entry.created_at ||
+          ""
+        ).slice(0, 10);
 
-        const openStartTimestamp =
-          openStartValue
-            ? new Date(
-                openStartValue
-              ).getTime()
-            : NaN;
+        return (
+          sameEmployee &&
+          entryDate === reportDate
+        );
+      });
 
-        if (
-          !Number.isNaN(
-            openStartTimestamp
-          )
-        ) {
-          return (
-            total +
-            Math.max(
-              0,
-              Math.floor(
-                (Date.now() -
-                  openStartTimestamp) /
-                  60000
+    const trackedMinutes =
+      employeeLogsForDate.reduce(
+        (total, entry) => {
+          const isOpen =
+            !entry.clock_out &&
+            !entry.category_end;
+
+          const savedDuration =
+            Number(entry.duration_minutes);
+
+          if (
+            !isOpen &&
+            Number.isFinite(savedDuration) &&
+            savedDuration > 0
+          ) {
+            return total + savedDuration;
+          }
+
+          const startValue =
+            entry.clock_in ||
+            entry.category_start ||
+            entry.created_at;
+
+          const endValue =
+            entry.clock_out ||
+            entry.category_end;
+
+          if (startValue && endValue) {
+            const startTimestamp =
+              new Date(startValue).getTime();
+
+            const endTimestamp =
+              new Date(endValue).getTime();
+
+            if (
+              !Number.isNaN(startTimestamp) &&
+              !Number.isNaN(endTimestamp)
+            ) {
+              return (
+                total +
+                Math.max(
+                  0,
+                  Math.round(
+                    (
+                      endTimestamp -
+                      startTimestamp
+                    ) / 60000
+                  )
+                )
+              );
+            }
+
+            return (
+              total +
+              minutesBetween(
+                startValue,
+                endValue
               )
-            )
-          );
-        }
-      }
+            );
+          }
 
-      return total;
-    },
-    0
-  );
+          /*
+            Include an open status only when reviewing
+            the employee's current local date.
+          */
+          const employeeCurrentDate =
+            getEmployeeDateKey(employee);
 
-const timeAttendancePercent =
-  scheduledMinutes > 0
-    ? Math.min(
-        100,
-        (trackedMinutes /
-          scheduledMinutes) *
-          100
-      )
-    : 0;
+          if (
+            isOpen &&
+            reportDate === employeeCurrentDate
+          ) {
+            const openStartTimestamp =
+              startValue
+                ? new Date(
+                    startValue
+                  ).getTime()
+                : NaN;
 
-const employeeSummary = {
-  id: employeeId,
+            if (
+              !Number.isNaN(
+                openStartTimestamp
+              )
+            ) {
+              return (
+                total +
+                Math.max(
+                  0,
+                  Math.floor(
+                    (
+                      Date.now() -
+                      openStartTimestamp
+                    ) / 60000
+                  )
+                )
+              );
+            }
+          }
 
-  name:
-    employee.full_name ||
-    employee.employee_name ||
-    employee.name ||
-    "Unknown Employee",
+          return total;
+        },
+        0
+      );
 
-  email:
-    employee.email ||
-    employee.employee_email ||
-    "",
+    const timeAttendancePercent =
+      scheduledMinutes > 0
+        ? Math.min(
+            100,
+            (
+              trackedMinutes /
+              scheduledMinutes
+            ) * 100
+          )
+        : 0;
 
-  department:
-    employee.department ||
-    "Unassigned",
+    const approvedAbsence =
+      findApprovedAbsence(employeeId);
 
-  subDepartment:
-    employee.sub_department ||
-    "",
+    /*
+      Classification priority:
 
-  accessLevel:
-    employee.access_level ||
-    employee.role ||
-    "Employee",
+      1. Logged In
+      2. Approved Absence
+      3. No Login / Unjustified
+    */
+    const attendanceStatus =
+      loggedEmployeeIds.has(employeeId)
+        ? "Logged In"
+        : approvedAbsence
+        ? "Approved Absence"
+        : "Unjustified No Login";
 
-  country:
-    employee.country ||
-    "",
+    const approvedAbsenceType =
+      approvedAbsence
+        ? String(
+            approvedAbsence.type ||
+            approvedAbsence.request_type ||
+            approvedAbsence.Request_Type ||
+            "Approved Leave"
+          )
+        : "";
 
-  lob:
-  employee.lob ||
-  "",
+    const employeeSummary = {
+      id: employeeId,
 
-scheduledMinutes,
+      name:
+        employee.full_name ||
+        employee.employee_name ||
+        employee.name ||
+        "Unknown Employee",
 
-trackedMinutes,
+      email:
+        employee.email ||
+        employee.employee_email ||
+        "",
 
-scheduledHours:
-  scheduledMinutes / 60,
+      department:
+        employee.department ||
+        "Unassigned",
 
-trackedHours:
-  trackedMinutes / 60,
+      subDepartment:
+        employee.sub_department ||
+        "",
 
-timeAttendancePercent,
-};
+      accessLevel:
+        employee.access_level ||
+        employee.role ||
+        "Employee",
 
-row.scheduledEmployees.push(
-  employeeSummary
-);
+      country:
+        employee.country ||
+        "",
 
-if (loggedEmployeeIds.has(employeeId)) {
-  row.loggedIn += 1;
+      lob:
+        employee.lob ||
+        "",
 
-  row.loggedInEmployees.push(
-    employeeSummary
-  );
-} else {
-  row.noLoginEmployees.push(
-    employeeSummary
-  );
-}
+      scheduledMinutes,
+      trackedMinutes,
+
+      scheduledHours:
+        scheduledMinutes / 60,
+
+      trackedHours:
+        trackedMinutes / 60,
+
+      timeAttendancePercent,
+
+      attendanceStatus,
+      approvedAbsenceType,
+
+      approvedAbsenceReason:
+        approvedAbsence?.reason ||
+        approvedAbsence?.manager_notes ||
+        "",
+    };
+
+    row.scheduledEmployees.push(
+      employeeSummary
+    );
+
+    if (
+      attendanceStatus === "Logged In"
+    ) {
+      row.loggedIn += 1;
+
+      row.loggedInEmployees.push(
+        employeeSummary
+      );
+    } else if (
+      attendanceStatus ===
+      "Approved Absence"
+    ) {
+      row.approvedAbsence += 1;
+
+      row.approvedAbsenceEmployees.push(
+        employeeSummary
+      );
+    } else {
+      row.noLoginEmployees.push(
+        employeeSummary
+      );
+    }
   });
 
   const departments =
     Array.from(departmentMap.values())
       .map((row) => {
+        /*
+          No Login now represents only employees who
+          neither logged in nor had an approved absence.
+        */
         const noLogin =
           Math.max(
             0,
             row.scheduled -
-            row.loggedIn
+              row.loggedIn -
+              row.approvedAbsence
           );
 
+        /*
+          Attendance Compliance includes employees who
+          logged in plus employees with approved leave.
+        */
         const attendancePercent =
           row.scheduled > 0
             ? Math.round(
-                (row.loggedIn /
-                  row.scheduled) *
-                  100
+                (
+                  (
+                    row.loggedIn +
+                    row.approvedAbsence
+                  ) /
+                  row.scheduled
+                ) * 100
               )
             : 0;
 
@@ -4653,27 +4765,48 @@ if (loggedEmployeeIds.has(employeeId)) {
       0
     );
 
+  const approvedAbsence =
+    departments.reduce(
+      (total, row) =>
+        total + row.approvedAbsence,
+      0
+    );
+
+  const noLogin =
+    Math.max(
+      0,
+      scheduled -
+        loggedIn -
+        approvedAbsence
+    );
+
+  const attendancePercent =
+    scheduled > 0
+      ? Math.round(
+          (
+            (
+              loggedIn +
+              approvedAbsence
+            ) /
+            scheduled
+          ) * 100
+        )
+      : 0;
+
   return {
     reportDate,
     scheduled,
     loggedIn,
-    noLogin: Math.max(
-      0,
-      scheduled - loggedIn
-    ),
-    attendancePercent:
-      scheduled > 0
-        ? Math.round(
-            (loggedIn / scheduled) *
-              100
-          )
-        : 0,
+    approvedAbsence,
+    noLogin,
+    attendancePercent,
     departments,
   };
 }, [
   filters.startDate,
   filteredVisibleEmployees,
   timeEntries,
+  requests,
 ]);
 
 const selectedAttendanceDepartment =
@@ -4688,9 +4821,14 @@ const selectedAttendanceEmployees =
     ? []
     : attendanceDetailView === "Logged In"
     ? selectedAttendanceDepartment.loggedInEmployees
+    : attendanceDetailView ===
+      "Approved Absence"
+    ? selectedAttendanceDepartment
+        .approvedAbsenceEmployees
     : attendanceDetailView === "No Login"
     ? selectedAttendanceDepartment.noLoginEmployees
-    : selectedAttendanceDepartment.scheduledEmployees;
+    : selectedAttendanceDepartment
+        .scheduledEmployees;
 
   const agentScheduleRow = useMemo(() => {
   if (!selectedEmployee) return null;
@@ -8123,8 +8261,10 @@ t.id
             </div>
             <Card title="Daily Attendance Headcount">
   <p className="helperText">
-    Scheduled headcount compared with employees who created
-    at least one time log on the selected date.
+    Scheduled headcount classified as Logged In,
+    Approved Absence, or Unjustified No Login for the
+    selected date. Attendance Compliance includes logged-in
+    employees and employees with approved leave.
   </p>
 
   <div className="reportMiniGrid">
@@ -8144,206 +8284,213 @@ t.id
     />
 
     <Info
-      label="No Login"
+      label="Approved Absence"
+      value={attendanceHeadcount.approvedAbsence}
+    />
+
+    <Info
+      label="Unjustified No Login"
       value={attendanceHeadcount.noLogin}
     />
 
     <Info
-      label="Attendance"
+      label="Attendance Compliance"
       value={`${attendanceHeadcount.attendancePercent}%`}
     />
   </div>
 
   <Table
     headers={[
-  "Department",
-  "Scheduled",
-  "Logged In",
-  "No Login",
-  "Attendance",
-  "Details",
-]}
+      "Department",
+      "Scheduled",
+      "Logged In",
+      "Approved Absence",
+      "Unjustified",
+      "Compliance",
+      "Details",
+    ]}
     rows={attendanceHeadcount.departments.map(
-  (row) => [
-    row.department,
-    row.scheduled,
-    row.loggedIn,
-    row.noLogin,
-    `${row.attendancePercent}%`,
+      (row) => [
+        row.department,
+        row.scheduled,
+        row.loggedIn,
+        row.approvedAbsence,
+        row.noLogin,
+        `${row.attendancePercent}%`,
 
-    <button
-      type="button"
-      className="btn"
-      onClick={() => {
-        const isAlreadyOpen =
-          attendanceDetailDepartment ===
-          row.department;
+        <button
+          type="button"
+          className="btn"
+          onClick={() => {
+            if (
+              attendanceDetailDepartment ===
+              row.department
+            ) {
+              setAttendanceDetailDepartment("");
+              return;
+            }
 
-        setAttendanceDetailDepartment(
-          isAlreadyOpen
-            ? ""
-            : row.department
-        );
+            setAttendanceDetailDepartment(
+              row.department
+            );
 
-        setAttendanceDetailView(
-          "Scheduled"
-        );
+            setAttendanceDetailView(
+              "Scheduled"
+            );
+          }}
+        >
+          {attendanceDetailDepartment ===
+          row.department
+            ? "Hide"
+            : "View"}
+        </button>,
+      ]
+    )}
+  />
+
+  {selectedAttendanceDepartment && (
+    <div
+      style={{
+        marginTop: "18px",
+        paddingTop: "18px",
+        borderTop: "1px solid #dce9e3",
       }}
     >
-      {attendanceDetailDepartment ===
-      row.department
-        ? "Hide"
-        : "View"}
-    </button>,
-  ]
-)}
-  />
-  {selectedAttendanceDepartment && (
-  <div className="attendanceDetailPanel">
-    <div className="attendanceDetailHeader">
-      <div>
-        <h3>
-          {selectedAttendanceDepartment.department}
-        </h3>
+      <h3>
+        {selectedAttendanceDepartment.department}
+        {" — "}Attendance Details
+      </h3>
 
-        <p>
-          Review scheduled employees, login status,
-tracked hours, and time-based attendance for{" "}
-          {attendanceHeadcount.reportDate}.
-        </p>
+      <div
+        className="attendanceDetailFilters"
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "8px",
+          marginBottom: "14px",
+        }}
+      >
+        <button
+          type="button"
+          className={
+            attendanceDetailView === "Scheduled"
+              ? "primary"
+              : "btn"
+          }
+          onClick={() =>
+            setAttendanceDetailView("Scheduled")
+          }
+        >
+          Scheduled (
+          {selectedAttendanceDepartment.scheduled})
+        </button>
+
+        <button
+          type="button"
+          className={
+            attendanceDetailView === "Logged In"
+              ? "primary"
+              : "btn"
+          }
+          onClick={() =>
+            setAttendanceDetailView("Logged In")
+          }
+        >
+          Logged In (
+          {selectedAttendanceDepartment.loggedIn})
+        </button>
+
+        <button
+          type="button"
+          className={
+            attendanceDetailView ===
+            "Approved Absence"
+              ? "primary"
+              : "btn"
+          }
+          onClick={() =>
+            setAttendanceDetailView(
+              "Approved Absence"
+            )
+          }
+        >
+          Approved Absence (
+          {
+            selectedAttendanceDepartment
+              .approvedAbsence
+          }
+          )
+        </button>
+
+        <button
+          type="button"
+          className={
+            attendanceDetailView === "No Login"
+              ? "primary"
+              : "btn"
+          }
+          onClick={() =>
+            setAttendanceDetailView("No Login")
+          }
+        >
+          Unjustified No Login (
+          {selectedAttendanceDepartment.noLogin})
+        </button>
       </div>
 
-      <button
-        type="button"
-        className="btn"
-        onClick={() =>
-          setAttendanceDetailDepartment("")
-        }
-      >
-        Close
-      </button>
+      <Table
+        headers={[
+          "Employee",
+          "Status",
+          "Scheduled",
+          "Tracked",
+          "Time Attendance",
+          "Access Level",
+          "Sub-Department",
+          "LOB",
+          "Country",
+          "Email",
+        ]}
+        rows={selectedAttendanceEmployees.map(
+          (employee) => [
+            employee.name,
+
+            employee.attendanceStatus ===
+            "Approved Absence"
+              ? `${employee.approvedAbsenceType} — Approved`
+              : employee.attendanceStatus,
+
+            `${Number(
+              employee.scheduledHours || 0
+            ).toFixed(2)}h`,
+
+            `${Number(
+              employee.trackedHours || 0
+            ).toFixed(2)}h`,
+
+            `${Number(
+              employee.timeAttendancePercent || 0
+            ).toFixed(2)}%`,
+
+            employee.accessLevel ||
+              "Employee",
+
+            employee.subDepartment ||
+              "N/A",
+
+            employee.lob ||
+              "N/A",
+
+            employee.country ||
+              "N/A",
+
+            employee.email ||
+              "N/A",
+          ]
+        )}
+      />
     </div>
-
-    <div className="attendanceDetailFilters">
-      <button
-        type="button"
-        className={
-          attendanceDetailView === "Scheduled"
-            ? "primary"
-            : "btn"
-        }
-        onClick={() =>
-          setAttendanceDetailView(
-            "Scheduled"
-          )
-        }
-      >
-        Scheduled (
-        {
-          selectedAttendanceDepartment
-            .scheduled
-        }
-        )
-      </button>
-
-      <button
-        type="button"
-        className={
-          attendanceDetailView === "Logged In"
-            ? "primary"
-            : "btn"
-        }
-        onClick={() =>
-          setAttendanceDetailView(
-            "Logged In"
-          )
-        }
-      >
-        Logged In (
-        {
-          selectedAttendanceDepartment
-            .loggedIn
-        }
-        )
-      </button>
-
-      <button
-        type="button"
-        className={
-          attendanceDetailView === "No Login"
-            ? "primary"
-            : "btn"
-        }
-        onClick={() =>
-          setAttendanceDetailView(
-            "No Login"
-          )
-        }
-      >
-        No Login (
-        {
-          selectedAttendanceDepartment
-            .noLogin
-        }
-        )
-      </button>
-    </div>
-
-    <Table
-  headers={[
-    "Employee",
-    "Scheduled",
-    "Tracked",
-    "Time Attendance",
-    "Access Level",
-    "Sub-Department",
-    "LOB",
-    "Country",
-    "Email",
-  ]}
-  rows={selectedAttendanceEmployees.map(
-    (employee) => [
-      employee.name,
-
-      `${Number(
-        employee.scheduledHours || 0
-      ).toFixed(2)}h`,
-
-      `${Number(
-        employee.trackedHours || 0
-      ).toFixed(2)}h`,
-
-      `${Number(
-        employee.timeAttendancePercent ||
-          0
-      ).toFixed(2)}%`,
-
-      employee.accessLevel ||
-        "Employee",
-
-      employee.subDepartment ||
-        "N/A",
-
-      employee.lob ||
-        "N/A",
-
-      employee.country ||
-        "N/A",
-
-      employee.email ||
-        "N/A",
-    ]
   )}
-/>
-
-    {!selectedAttendanceEmployees.length && (
-      <p className="muted">
-        No employees were found for this
-        attendance category.
-      </p>
-    )}
-  </div>
-)}
 </Card>
             <section className="reportGrid">
               {reportingSummary.map((group) => (
