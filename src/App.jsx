@@ -5124,6 +5124,58 @@ if (breakRowsError) {
 }
 
 useEffect(() => {
+  if (!supabase || !isAuthenticated) {
+    return undefined;
+  }
+
+  let cancelled = false;
+
+  const loadAuthenticatedEmployeeBreaks = async () => {
+    const {
+      data: latestBreakRows,
+      error: breakRowsError,
+    } = await supabase
+      .from("employee_breaks")
+      .select(
+        [
+          "employee_id",
+          "employee_name",
+          "day_name",
+          "first_break_start",
+          "first_break_end",
+          "second_break_start",
+          "second_break_end",
+          "source",
+          "updated_at",
+        ].join(",")
+      );
+
+    if (breakRowsError) {
+      console.warn(
+        "Authenticated employee breaks load failed:",
+        breakRowsError.message
+      );
+      return;
+    }
+
+    if (!cancelled) {
+      setEmployeeBreakRows(latestBreakRows || []);
+
+      console.log(
+        "Authenticated employee break rows loaded:",
+        latestBreakRows?.length || 0
+      );
+    }
+  };
+
+  loadAuthenticatedEmployeeBreaks();
+
+  return () => {
+    cancelled = true;
+  };
+}, [supabase, isAuthenticated]);
+
+useEffect(() => {
   if (!supabase || !isAuthenticated || isAgentOnly) {
     setStartupLoading(false);
     return;
