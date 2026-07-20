@@ -1261,9 +1261,7 @@ function buildEmployeeBreakRowsForSupabase(employeesList = []) {
         employee_name: employee.full_name || "",
         day_name: day,
 
-        lunch_start: null,
-        lunch_end: null,
-
+        
         first_break_start: cleanBreakTime(dayBreaks.first_break_start),
         first_break_end: cleanBreakTime(dayBreaks.first_break_end),
 
@@ -1735,7 +1733,8 @@ return convertedTime;
 function getStableSchedule(
   employee,
   schedules = [],
-  dayName = ""
+  dayName = todayDayName(),
+  employeeBreakRows = []
 ) {
   if (!employee) {
     return {
@@ -1749,40 +1748,89 @@ function getStableSchedule(
       sub_department: "",
     };
   }
-  const employeeTimeZone = getEmployeeTimeZone(employee);
 
-const normalizedDay = normalizeDayName(
-  dayName || todayDayName(employeeTimeZone)
-);
-  const breaksByDay = employee.breaks_by_day || {};
-  const dayBreaks = breaksByDay[normalizedDay] || {};
+  const employeeTimeZone =
+    getEmployeeTimeZone(employee);
 
+  const normalizedDay =
+    normalizeDayName(
+      dayName ||
+        todayDayName(employeeTimeZone)
+    );
 
-const normalizedEmployeeId = String(
-  employee?.employee_id || employee?.Employee_ID || employee?.id || ""
-).trim();
+  const normalizedEmployeeId = String(
+    employee?.employee_id ||
+      employee?.Employee_ID ||
+      employee?.id ||
+      ""
+  ).trim();
 
-const matchingDailySchedule = Array.isArray(schedules)
-  ? schedules.find((scheduleRow) => {
-      const scheduleEmployeeId = String(
-        scheduleRow?.employee_id ||
-        scheduleRow?.Employee_ID ||
-        scheduleRow?.employeeId ||
-        ""
-      ).trim();
+  /*
+    Supabase employee_breaks is the primary source
+    for daily first and second break schedules.
+  */
+  const matchingBreakRow =
+    Array.isArray(employeeBreakRows)
+      ? employeeBreakRows.find((row) => {
+          const rowEmployeeId = String(
+            row?.employee_id ||
+              row?.Employee_ID ||
+              ""
+          ).trim();
 
-      const scheduleDay = normalizeDayName(
-        scheduleRow?.day || scheduleRow?.Day || ""
-      );
+          const rowDay =
+            normalizeDayName(
+              row?.day_name ||
+                row?.Day_Name ||
+                row?.day ||
+                row?.Day ||
+                ""
+            );
 
-      return (
-        scheduleEmployeeId === normalizedEmployeeId &&
-        scheduleDay === normalizedDay
-      );
-    })
-  : null;
+          return (
+            rowEmployeeId ===
+              normalizedEmployeeId &&
+            rowDay === normalizedDay
+          );
+        })
+      : null;
+
+  /*
+    Legacy Google Sheets break information remains
+    as a fallback while the new Supabase source is tested.
+  */
+ const dayBreaks = matchingBreakRow || {};
+
+  const matchingDailySchedule =
+    Array.isArray(schedules)
+      ? schedules.find((scheduleRow) => {
+          const scheduleEmployeeId =
+            String(
+              scheduleRow?.employee_id ||
+                scheduleRow?.Employee_ID ||
+                scheduleRow?.employeeId ||
+                ""
+            ).trim();
+
+          const scheduleDay =
+            normalizeDayName(
+              scheduleRow?.day_name ||
+                scheduleRow?.day ||
+                scheduleRow?.Day ||
+                ""
+            );
+
+          return (
+            scheduleEmployeeId ===
+              normalizedEmployeeId &&
+            scheduleDay === normalizedDay
+          );
+        })
+      : null;
 
   const rawShiftStart =
+    matchingDailySchedule?.shift_start ??
+    matchingDailySchedule?.start_time_est ??
     employee.start_time_est ??
     employee.Start_Time_EST ??
     employee.shift_start ??
@@ -1790,53 +1838,76 @@ const matchingDailySchedule = Array.isArray(schedules)
     "";
 
   const rawShiftEnd =
+    matchingDailySchedule?.shift_end ??
+    matchingDailySchedule?.end_time_est ??
     employee.end_time_est ??
     employee.End_Time_EST ??
     employee.shift_end ??
     employee.Shift_End ??
     "";
 
+  const rawFirstBreakStart =
+    matchingBreakRow?.first_break_start ||
+    dayBreaks.first_break_start ||
+    matchingDailySchedule?.first_break_start ||
+    matchingDailySchedule?.break_start ||
+    employee.break_start ||
+    "Not Available";
+
+  const rawFirstBreakEnd =
+    matchingBreakRow?.first_break_end ||
+    dayBreaks.first_break_end ||
+    matchingDailySchedule?.first_break_end ||
+    matchingDailySchedule?.break_end ||
+    employee.break_end ||
+    "Not Available";
+
+  const rawSecondBreakStart =
+    matchingBreakRow?.second_break_start ||
+    dayBreaks.second_break_start ||
+    matchingDailySchedule?.second_break_start ||
+    employee.second_break_start ||
+    "Not Available";
+
+  const rawSecondBreakEnd =
+    matchingBreakRow?.second_break_end ||
+    dayBreaks.second_break_end ||
+    matchingDailySchedule?.second_break_end ||
+    employee.second_break_end ||
+    "Not Available";
+
   return {
-    shift_start: convertEasternScheduleToEmployeeLocal(
-      rawShiftStart,
-      employee
-    ),
+    shift_start:
+      convertEasternScheduleToEmployeeLocal(
+        rawShiftStart,
+        employee
+      ),
 
-    shift_end: convertEasternScheduleToEmployeeLocal(
-      rawShiftEnd,
-      employee
-    ),
+    shift_end:
+      convertEasternScheduleToEmployeeLocal(
+        rawShiftEnd,
+        employee
+      ),
 
-    break_start: convertEasternScheduleToEmployeeLocal(
-      dayBreaks.first_break_start ||
-        employee.break_start ||
-        "Not Available",
-      employee
-    ),
+    break_start:
+  formatMilitaryTime(rawFirstBreakStart),
 
-    break_end: convertEasternScheduleToEmployeeLocal(
-      dayBreaks.first_break_end ||
-        employee.break_end ||
-        "Not Available",
-      employee
-    ),
+break_end:
+  formatMilitaryTime(rawFirstBreakEnd),
 
-    second_break_start: convertEasternScheduleToEmployeeLocal(
-      dayBreaks.second_break_start ||
-        employee.second_break_start ||
-        "Not Available",
-      employee
-    ),
+second_break_start:
+  formatMilitaryTime(rawSecondBreakStart),
 
-    second_break_end: convertEasternScheduleToEmployeeLocal(
-      dayBreaks.second_break_end ||
-        employee.second_break_end ||
-        "Not Available",
-      employee
-    ),
+second_break_end:
+  formatMilitaryTime(rawSecondBreakEnd),
 
-    off_days: employee.off_days || "",
-    sub_department: employee.sub_department || "",
+    off_days:
+      matchingDailySchedule?.off_days ||
+      employee.off_days ||
+      "",
+
+    sub_department:
+      employee.sub_department || "",
   };
 }
 
@@ -3685,6 +3756,10 @@ savedDuration > 0
 }
 function HRWorkforceApp() {
   const [employees, setEmployees] = useState([]);
+  const [
+  employeeBreakRows,
+  setEmployeeBreakRows,
+] = useState([]);
   const [timeEntries, setTimeEntries] = useState([]);
   const [requests, setRequests] = useState(requestsSeed);
   const [activityLog, setActivityLog] = useState([]);
@@ -4261,7 +4336,12 @@ const scheduleRows =
         return {
           employee,
           day,
-          schedule: getStableSchedule(employee, [], day),
+          schedule: getStableSchedule(
+  employee,
+  [],
+  day,
+  employeeBreakRows
+),
         };
       })
     : filteredVisibleEmployees.map((employee) => {
@@ -4273,10 +4353,11 @@ const scheduleRows =
       employee,
       day: employeeDay,
       schedule: getStableSchedule(
-        employee,
-        [],
-        employeeDay
-      ),
+  employee,
+  [],
+  employeeDay,
+  employeeBreakRows
+),
     };
   });
 
@@ -4854,12 +4935,17 @@ const selectedAttendanceEmployees =
     employee: scheduleEmployee,
     day: employeeDay,
     schedule: getStableSchedule(
-      scheduleEmployee,
-      [],
-      employeeDay
-    ),
+  scheduleEmployee,
+  [],
+  employeeDay,
+  employeeBreakRows
+),
   };
-}, [employees, selectedEmployee]);
+}, [
+  employees,
+  selectedEmployee,
+  employeeBreakRows,
+]);
 
 const agentShiftSummary = buildShiftSummaryFromSchedule(
   agentScheduleRow?.schedule
@@ -4983,7 +5069,45 @@ console.log("FIRST DATE", latestLogs?.[0]?.date);
     }))
   );
 } else {
-  console.warn("Requests refresh failed:", requestsError);
+  console.warn(
+    "Requests refresh failed:",
+    requestsError
+  );
+}
+
+const {
+  data: latestBreakRows,
+  error: breakRowsError,
+} = await supabase
+  .from("employee_breaks")
+  .select(
+    [
+      "employee_id",
+      "employee_name",
+      "day_name",
+      "first_break_start",
+      "first_break_end",
+      "second_break_start",
+      "second_break_end",
+      "source",
+      "updated_at",
+    ].join(",")
+  );
+
+if (breakRowsError) {
+  console.warn(
+    "Employee breaks refresh failed:",
+    breakRowsError
+  );
+} else {
+  setEmployeeBreakRows(
+    latestBreakRows || []
+  );
+
+  console.log(
+    "Employee break rows loaded:",
+    latestBreakRows?.length || 0
+  );
 }
 }
 
