@@ -3775,7 +3775,13 @@ function HRWorkforceApp() {
   const [reportView, setReportView] = useState("LOB");
   const [filters, setFilters] = useState({ lob: "All", department: "All", subDepartment: "All", employee: "All", country: "All", category: "All", startDate: "", endDate: "" });
   const [agentStatus, setAgentStatus] = useState("Working");
-  const [newTime, setNewTime] = useState({ category: "Working", category_start: "08:00", category_end: "09:00", notes: "" });
+  const [newTime, setNewTime] = useState({
+  date: today,
+  category: "Working",
+  category_start: "08:00",
+  category_end: "09:00",
+  notes: "",
+});
   const [newRequest, setNewRequest] = useState({ type: "PTO", start_date: today, end_date: today, hours: 8, reason: "" });
   const [newRule, setNewRule] = useState({
     department: "Operations",
@@ -5333,7 +5339,22 @@ useEffect(() => {
 
   const lobOptions = ["All", ...new Set([...lobs, ...visibleEmployees.map((e) => e.lob).filter(Boolean)])];
   const departmentOptions = ["All", ...new Set([...departments, ...visibleEmployees.map((e) => e.department).filter(Boolean)])];
-  const subDepartmentOptions = ["All", ...new Set([...subDepartments, ...visibleEmployees.map((e) => e.sub_department).filter(Boolean)])];
+  const subDepartmentOptions = [
+  "All",
+  ...new Set(
+    [
+      ...subDepartments,
+      ...visibleEmployees.map(
+        (employee) => employee.sub_department
+      ),
+      ...visibleTime.map(
+        (timeLog) => timeLog.sub_department
+      ),
+    ]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  ),
+];
   const employeeOptions = ["All", ...visibleEmployees.map((e) => e.full_name)];
   const countryOptions = ["All", ...new Set(visibleEmployees.map((e) => e.country).filter(Boolean))];
   const categoryOptions = ["All", ...timeCategories, "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change"];
@@ -5349,19 +5370,90 @@ useEffect(() => {
 
   return raw.slice(0, 10);
 };
-  const filteredTime = visibleTime.filter((t) => {
-    const entryDate = normalizeDateForFilter(t.date);
-const dateOk = (!filters.startDate || entryDate >= filters.startDate) && (!filters.endDate || entryDate <= filters.endDate);
-    return (
-      dateOk &&
-      (filters.lob === "All" || t.lob === filters.lob) &&
-      (filters.department === "All" || t.department === filters.department) &&
-      (filters.subDepartment === "All" || (t.sub_department || employees.find((e) => e.id === t.employee_id)?.sub_department || "") === filters.subDepartment) &&
-      (filters.employee === "All" || t.employee_name === filters.employee) &&
-      (filters.country === "All" || employees.find((e) => e.id === t.employee_id)?.country === filters.country) &&
-      (filters.category === "All" || t.category === filters.category)
+  const filteredTime = visibleTime.filter((timeLog) => {
+  const timeLogEmployee =
+    employees.find(
+      (employee) =>
+        String(employee.id || employee.employee_id || "") ===
+        String(timeLog.employee_id || "")
+    ) || null;
+
+  const entryDate =
+    normalizeDateForFilter(
+      timeLog.date ||
+      timeLog.clock_in ||
+      timeLog.category_start ||
+      timeLog.created_at
     );
-  });
+
+  const entryLob =
+    timeLog.lob ||
+    timeLogEmployee?.lob ||
+    "";
+
+  const entryDepartment =
+    timeLog.department ||
+    timeLogEmployee?.department ||
+    "";
+
+  const entrySubDepartment = String(
+  timeLog.sub_department ||
+  timeLogEmployee?.sub_department ||
+  ""
+).trim();
+
+  const entryCountry =
+    timeLog.country ||
+    timeLogEmployee?.country ||
+    "";
+
+  const entryEmployeeName =
+    timeLog.employee_name ||
+    timeLogEmployee?.full_name ||
+    "";
+
+  const entryCategory =
+    timeLog.category ||
+    timeLog.status ||
+    "Working";
+
+  const dateOk =
+    (!filters.startDate ||
+      entryDate >= filters.startDate) &&
+    (!filters.endDate ||
+      entryDate <= filters.endDate);
+
+  return (
+    dateOk &&
+    (
+      filters.lob === "All" ||
+      entryLob === filters.lob
+    ) &&
+    (
+      filters.department === "All" ||
+      entryDepartment === filters.department
+    ) &&
+    (
+  filters.subDepartment === "All" ||
+  entrySubDepartment.toLowerCase() ===
+    String(filters.subDepartment || "")
+      .trim()
+      .toLowerCase()
+) &&
+    (
+      filters.employee === "All" ||
+      entryEmployeeName === filters.employee
+    ) &&
+    (
+      filters.country === "All" ||
+      entryCountry === filters.country
+    ) &&
+    (
+      filters.category === "All" ||
+      entryCategory === filters.category
+    )
+  );
+});
   const editableTimeLogs = filteredTime.filter((t) => {
   const categoryOk =
     timeLogTableFilters.category === "All" ||
@@ -6657,13 +6749,26 @@ setTimeEntries((current) => [
       showToast("Access denied", "Only TLs, Managers, Reporting, HR, Payroll, and Admin users can edit time logs.", "danger");
       return null;
     }
+
+    if (!newTime.date) {
+  showToast(
+    "Date required",
+    "Select the date for this time entry.",
+    "warning"
+  );
+  return null;
+}
+
     if (newTime.category === "Overtime") {
       showToast("Manual overtime disabled", "Overtime is created automatically after the scheduled shift end.", "warning");
       return null;
     }
     const schedule = getStableSchedule(selectedEmployee);
-    const employeeDate = getEmployeeDateKey(selectedEmployee);
-    const key = `manual-time-${selectedEmployee.id}-${newTime.category}-${newTime.category_start}-${newTime.category_end}`;
+    const employeeDate =
+  newTime.date ||
+  getEmployeeDateKey(selectedEmployee);
+    const key =
+  `manual-time-${selectedEmployee.id}-${employeeDate}-${newTime.category}-${newTime.category_start}-${newTime.category_end}`;
     return runProtectedAction(key, "Manual time entry", async () => {
       const duplicate = timeEntries.some(
         (entry) =>
@@ -6680,7 +6785,21 @@ setTimeEntries((current) => [
         return "silent";
       }
 
-      const manualClass = getAutoWorkClassification(selectedEmployee, newTime.category_start);
+      const isHistoricalEntry =
+  employeeDate !== getEmployeeDateKey(selectedEmployee);
+
+const manualClass = isHistoricalEntry
+  ? {
+      category: "Working",
+      approval: "Pending",
+      payableStatus: "Pending Review",
+      locked: false,
+      reason: "Historical manual time entry",
+    }
+  : getAutoWorkClassification(
+      selectedEmployee,
+      newTime.category_start
+    );
       const manualCategory = newTime.category === "Working" && manualClass.category !== "Working" ? manualClass.category : newTime.category;
       const manualApproval = ["Off-Day Unscheduled", "Early Unscheduled"].includes(manualCategory) ? "Pending Approval" : "Pending";
 
@@ -8263,6 +8382,17 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
               <p className="helperText">Managers and TLs can add new time entries and edit previous time logs for agents. Each saved correction is retained in the approval/audit trail.</p>
               <FormGrid>
                 <select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{filteredVisibleEmployees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select>
+                <input
+  type="date"
+  value={newTime.date}
+  max={today}
+  onChange={(e) =>
+    setNewTime({
+      ...newTime,
+      date: e.target.value,
+    })
+  }
+/>
                 <select value={newTime.category} onChange={(e) => setNewTime({ ...newTime, category: e.target.value })}><TimeCategoryOptions /></select>
                 <input type="time" value={newTime.category_start} onChange={(e) => setNewTime({ ...newTime, category_start: e.target.value })} />
                 <input type="time" value={newTime.category_end} onChange={(e) => setNewTime({ ...newTime, category_end: e.target.value })} />
