@@ -2949,6 +2949,11 @@ async function loadSupabaseReferenceData(
       return {
   ...base,
 
+  supabase_employee_id:
+  supabaseProfile.employee_id ||
+  supabaseProfile.Employee_ID ||
+  "",
+
   email:
     supabaseProfile.email ||
     supabaseProfile.employee_email ||
@@ -3859,6 +3864,7 @@ const [attendanceDetailView, setAttendanceDetailView] =
   category: "All",
   approval: "All",
   payable: "All",
+  sortOrder: "newest",
 });
 
 
@@ -4235,6 +4241,18 @@ const isAgentOnly = !managerRoles.includes(userRole);
 const selectedEmployee = isAgentOnly
   ? currentUser
   : employees.find((e) => e.id === selectedEmployeeId) || currentUser || null;
+const filteredTimeLogEmployee =
+  filters.employee !== "All"
+    ? employees.find(
+        (employee) =>
+          employee.full_name === filters.employee
+      ) || null
+    : null;
+const filteredTimeLogEmployeeId =
+  filteredTimeLogEmployee?.supabase_employee_id ||
+  filteredTimeLogEmployee?.employee_id ||
+  filteredTimeLogEmployee?.id ||
+  "";
 
   const visibleEmployees = isAgentOnly && currentUser
   ? [currentUser]
@@ -4973,13 +4991,44 @@ const agentShiftSummary = buildShiftSummaryFromSchedule(
 );
 
   if (supabase) {
-  const { data: latestLogs, error: logsError } = await supabase
+  let historicalLogsQuery = supabase
   .from("time_logs")
   .select("*")
-  .order("created_at", {
+  .order("clock_in", {
     ascending: false,
-  })
-  .limit(1000);
+  });
+
+if (
+  filters.employee !== "All" &&
+  filteredTimeLogEmployeeId
+) {
+  historicalLogsQuery =
+    historicalLogsQuery.eq(
+      "employee_id",
+      String(filteredTimeLogEmployeeId)
+    );
+}
+
+if (filters.startDate) {
+  historicalLogsQuery =
+    historicalLogsQuery.gte(
+      "clock_in",
+      `${filters.startDate}T00:00:00`
+    );
+}
+
+if (filters.endDate) {
+  historicalLogsQuery =
+    historicalLogsQuery.lte(
+      "clock_in",
+      `${filters.endDate}T23:59:59`
+    );
+}
+
+const {
+  data: latestLogs,
+  error: logsError,
+} = await historicalLogsQuery.limit(5000);
 console.log("FIRST LOG", latestLogs?.[0]);
 console.log("FIRST DATE", latestLogs?.[0]?.date);
 
@@ -5225,20 +5274,54 @@ useEffect(() => {
   if (!supabase) return undefined;
 
   const reloadLiveLogsOnly = async () => {
-    const { data: latestLogs, error } = await supabase
+    let liveLogsQuery = supabase
   .from("time_logs")
   .select("*")
-  .order("created_at", {
+  .order("clock_in", {
     ascending: false,
-  })
-  .limit(1000);
+  });
+
+if (
+  filters.employee !== "All" &&
+  filteredTimeLogEmployeeId
+) {
+  liveLogsQuery = liveLogsQuery.eq(
+    "employee_id",
+    String(filteredTimeLogEmployeeId)
+  );
+}
+
+if (filters.startDate) {
+  liveLogsQuery = liveLogsQuery.gte(
+    "clock_in",
+    `${filters.startDate}T00:00:00`
+  );
+}
+
+if (filters.endDate) {
+  liveLogsQuery = liveLogsQuery.lte(
+    "clock_in",
+    `${filters.endDate}T23:59:59`
+  );
+}
+
+const {
+  data: latestLogs,
+  error,
+} = await liveLogsQuery.limit(5000);
 
     if (!error) {
 
       console.log(
-  "Newest time logs loaded:",
-  latestLogs?.length || 0,
-  latestLogs?.slice(0, 3)
+  "Filtered realtime time logs loaded:",
+  {
+    employee: filters.employee,
+    employeeId: filteredTimeLogEmployeeId,
+    startDate: filters.startDate,
+    endDate: filters.endDate,
+    count: latestLogs?.length || 0,
+    sample: latestLogs?.slice(0, 3),
+  }
 );
   setTimeEntries(
     (latestLogs || [])
@@ -5315,9 +5398,14 @@ useEffect(() => {
 });
 
   return () => {
-    supabase.removeChannel(channel);
-  };
-  }, []);
+  supabase.removeChannel(channel);
+};
+}, [
+  filters.employee,
+  filters.startDate,
+  filters.endDate,
+  filteredTimeLogEmployeeId,
+]);
   
 /*
   Disabled temporarily because startup synchronization is already
@@ -5470,8 +5558,28 @@ useEffect(() => {
   return categoryOk && approvalOk && payableOk;
 });
 
+const sortedEditableTimeLogs = [...editableTimeLogs].sort((a, b) => {
+  const dateA = new Date(
+    a.clock_in ||
+    a.category_start ||
+    a.created_at ||
+    0
+  );
+
+  const dateB = new Date(
+    b.clock_in ||
+    b.category_start ||
+    b.created_at ||
+    0
+  );
+
+  return timeLogTableFilters.sortOrder === "oldest"
+    ? dateA - dateB
+    : dateB - dateA;
+});
+
 const displayedTimeLogs =
-  editableTimeLogs.slice(0, 100);
+  sortedEditableTimeLogs.slice(0, 100);
 
   const filteredRequests = visibleRequests.filter((r) => {
     const employee = employees.find((e) => e.id === r.employee_id);
@@ -8545,8 +8653,26 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
   onChange={(e) => setTimeLogTableFilters({ ...timeLogTableFilters, payable: e.target.value })}
 >
   {["All", "Regular", "Pending Manager Approval", "Approved Payable", "Not Payable"].map((status) => (
-    <option key={status}>{status}</option>
-  ))}
+  <option key={status}>{status}</option>
+))}
+</select>
+
+<select
+  value={timeLogTableFilters.sortOrder}
+    onChange={(e) =>
+    setTimeLogTableFilters({
+      ...timeLogTableFilters,
+      sortOrder: e.target.value,
+    })
+  }
+>
+  <option value="newest">
+  Newest → Oldest
+</option>
+
+<option value="oldest">
+  Oldest → Newest
+</option>
 </select>
 </div>
 
