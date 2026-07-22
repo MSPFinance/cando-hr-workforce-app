@@ -6827,10 +6827,112 @@ const manualClass = isHistoricalEntry
         ...newTime,
         category: manualCategory,
       };
-      await supabaseInsert("time_logs", mapTimeEntryToSupabaseLog(item, selectedEmployee), "Manual time log");
-      await googleAddRow("timeLogs", mapTimeToSheet(item));
-      await queueDailyAttendanceEmail(selectedEmployee, [item]);
-      setTimeEntries((current) => [item, ...current]);
+      const savedRows = await supabaseInsert(
+  "time_logs",
+  mapTimeEntryToSupabaseLog(
+    item,
+    selectedEmployee
+  ),
+  "Manual time log"
+);
+
+if (!savedRows?.length) {
+  throw new Error(
+    "Supabase did not return the saved manual time entry."
+  );
+}
+
+const savedRow = savedRows[0];
+
+const savedTimeEntry = {
+  ...item,
+  ...savedRow,
+
+  supabase_id: savedRow.id,
+
+  id:
+    savedRow.app_log_id ||
+    savedRow.id ||
+    item.id,
+
+  employee_id:
+    savedRow.employee_id ||
+    item.employee_id,
+
+  employee_name:
+    savedRow.employee_name ||
+    item.employee_name,
+
+  date:
+    savedRow.date ||
+    String(
+      savedRow.clock_in ||
+      savedRow.category_start ||
+      savedRow.created_at ||
+      item.date
+    ).slice(0, 10),
+
+  category:
+    savedRow.category ||
+    savedRow.status ||
+    item.category,
+
+  approved:
+    savedRow.approval_status ||
+    item.approved,
+
+  payable_status:
+    savedRow.payable_status ||
+    item.payable_status,
+};
+
+await googleAddRow(
+  "timeLogs",
+  mapTimeToSheet(savedTimeEntry)
+);
+
+await queueDailyAttendanceEmail(
+  selectedEmployee,
+  [savedTimeEntry]
+);
+
+setTimeEntries((current) => {
+  const savedSupabaseId = String(
+    savedTimeEntry.supabase_id || ""
+  );
+
+  const savedAppId = String(
+    savedTimeEntry.app_log_id ||
+    savedTimeEntry.id ||
+    ""
+  );
+
+  const withoutDuplicate = current.filter(
+    (entry) => {
+      const entrySupabaseId = String(
+        entry.supabase_id || ""
+      );
+
+      const entryAppId = String(
+        entry.app_log_id ||
+        entry.id ||
+        ""
+      );
+
+      return (
+        (!savedSupabaseId ||
+          entrySupabaseId !== savedSupabaseId) &&
+        (!savedAppId ||
+          entryAppId !== savedAppId)
+      );
+    }
+  );
+
+  return [
+    savedTimeEntry,
+    ...withoutDuplicate,
+  ];
+});
     });
   }
 
