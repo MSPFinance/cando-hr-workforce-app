@@ -1734,7 +1734,9 @@ function getStableSchedule(
   employee,
   schedules = [],
   dayName = todayDayName(),
-  employeeBreakRows = []
+  employeeBreakRows = [],
+  scheduleExceptions = [],
+  scheduleDate = ""
 ) {
   if (!employee) {
     return {
@@ -1764,7 +1766,55 @@ function getStableSchedule(
       employee?.id ||
       ""
   ).trim();
+const matchingScheduleException =
+  Array.isArray(scheduleExceptions)
+    ? scheduleExceptions.find((exceptionRow) => {
+        const exceptionEmployeeId = String(
+          exceptionRow?.employee_id ||
+            exceptionRow?.Employee_ID ||
+            ""
+        ).trim();
 
+        const exceptionDay = normalizeDayName(
+          exceptionRow?.weekday ||
+            exceptionRow?.Weekday ||
+            ""
+        );
+        const targetDate =
+  formatDateOnly(scheduleDate) ||
+  getEmployeeDateKey(employee);
+
+const exceptionStartDate =
+  formatDateOnly(
+    exceptionRow?.start_date ||
+      exceptionRow?.Start_Date ||
+      ""
+  );
+
+const exceptionEndDate =
+  formatDateOnly(
+    exceptionRow?.end_date ||
+      exceptionRow?.End_Date ||
+      ""
+  );
+
+const dateIsValid =
+  (!exceptionStartDate ||
+    targetDate >= exceptionStartDate) &&
+  (!exceptionEndDate ||
+    targetDate <= exceptionEndDate);
+
+        return (
+  exceptionEmployeeId === normalizedEmployeeId &&
+  exceptionDay === normalizedDay &&
+  dateIsValid &&
+  normalizeBoolean(
+    exceptionRow?.enabled ??
+      exceptionRow?.Enabled
+  )
+);
+      })
+    : null;
   /*
     Supabase employee_breaks is the primary source
     for daily first and second break schedules.
@@ -1829,52 +1879,72 @@ function getStableSchedule(
       : null;
 
   const rawShiftStart =
-    matchingDailySchedule?.shift_start ??
-    matchingDailySchedule?.start_time_est ??
-    employee.start_time_est ??
-    employee.Start_Time_EST ??
-    employee.shift_start ??
-    employee.Shift_Start ??
-    "";
+  matchingScheduleException?.shift_start_est ??
+  matchingScheduleException?.Shift_Start_EST ??
+  matchingDailySchedule?.shift_start ??
+  matchingDailySchedule?.start_time_est ??
+  employee.start_time_est ??
+  employee.Start_Time_EST ??
+  employee.shift_start ??
+  employee.Shift_Start ??
+  "";
 
   const rawShiftEnd =
-    matchingDailySchedule?.shift_end ??
-    matchingDailySchedule?.end_time_est ??
-    employee.end_time_est ??
-    employee.End_Time_EST ??
-    employee.shift_end ??
-    employee.Shift_End ??
-    "";
+  matchingScheduleException?.shift_end_est ??
+  matchingScheduleException?.Shift_End_EST ??
+  matchingDailySchedule?.shift_end ??
+  matchingDailySchedule?.end_time_est ??
+  employee.end_time_est ??
+  employee.End_Time_EST ??
+  employee.shift_end ??
+  employee.Shift_End ??
+  "";
 
   const rawFirstBreakStart =
-    matchingBreakRow?.first_break_start ||
-    dayBreaks.first_break_start ||
-    matchingDailySchedule?.first_break_start ||
-    matchingDailySchedule?.break_start ||
-    employee.break_start ||
-    "Not Available";
+  (
+    matchingScheduleException?.break_1_start_est ??
+    matchingScheduleException?.Break_1_Start_EST
+  ) ||
+  matchingBreakRow?.first_break_start ||
+  dayBreaks.first_break_start ||
+  matchingDailySchedule?.first_break_start ||
+  matchingDailySchedule?.break_start ||
+  employee.break_start ||
+  "Not Available";
 
-  const rawFirstBreakEnd =
-    matchingBreakRow?.first_break_end ||
-    dayBreaks.first_break_end ||
-    matchingDailySchedule?.first_break_end ||
-    matchingDailySchedule?.break_end ||
-    employee.break_end ||
-    "Not Available";
+const rawFirstBreakEnd =
+  (
+    matchingScheduleException?.break_1_end_est ??
+    matchingScheduleException?.Break_1_End_EST
+  ) ||
+  matchingBreakRow?.first_break_end ||
+  dayBreaks.first_break_end ||
+  matchingDailySchedule?.first_break_end ||
+  matchingDailySchedule?.break_end ||
+  employee.break_end ||
+  "Not Available";
 
-  const rawSecondBreakStart =
-    matchingBreakRow?.second_break_start ||
-    dayBreaks.second_break_start ||
-    matchingDailySchedule?.second_break_start ||
-    employee.second_break_start ||
-    "Not Available";
+const rawSecondBreakStart =
+  (
+    matchingScheduleException?.break_2_start_est ??
+    matchingScheduleException?.Break_2_Start_EST
+  ) ||
+  matchingBreakRow?.second_break_start ||
+  dayBreaks.second_break_start ||
+  matchingDailySchedule?.second_break_start ||
+  employee.second_break_start ||
+  "Not Available";
 
-  const rawSecondBreakEnd =
-    matchingBreakRow?.second_break_end ||
-    dayBreaks.second_break_end ||
-    matchingDailySchedule?.second_break_end ||
-    employee.second_break_end ||
-    "Not Available";
+const rawSecondBreakEnd =
+  (
+    matchingScheduleException?.break_2_end_est ??
+    matchingScheduleException?.Break_2_End_EST
+  ) ||
+  matchingBreakRow?.second_break_end ||
+  dayBreaks.second_break_end ||
+  matchingDailySchedule?.second_break_end ||
+  employee.second_break_end ||
+  "Not Available";
 
   return {
     shift_start:
@@ -3761,6 +3831,7 @@ savedDuration > 0
 }
 function HRWorkforceApp() {
   const [employees, setEmployees] = useState([]);
+  const [scheduleExceptions, setScheduleExceptions] = useState([]);
   const [
   employeeBreakRows,
   setEmployeeBreakRows,
@@ -4364,7 +4435,8 @@ const scheduleRows =
   employee,
   [],
   day,
-  employeeBreakRows
+  employeeBreakRows,
+  scheduleExceptions
 ),
         };
       })
@@ -4380,7 +4452,8 @@ const scheduleRows =
   employee,
   [],
   employeeDay,
-  employeeBreakRows
+  employeeBreakRows,
+  scheduleExceptions
 ),
     };
   });
@@ -4935,18 +5008,22 @@ const selectedAttendanceEmployees =
     : selectedAttendanceDepartment
         .scheduledEmployees;
 
-  const agentScheduleRow = useMemo(() => {
-  if (!selectedEmployee) return null;
+  const agentWeeklySchedule = useMemo(() => {
+  if (!selectedEmployee) return [];
 
-  const employeeTimeZone = getEmployeeTimeZone(selectedEmployee);
-  const employeeDay = todayDayName(employeeTimeZone);
-
-  // Find the same employee record used throughout the Schedule tab.
   const scheduleEmployee =
     employees.find(
       (employee) =>
-        String(employee.id || employee.employee_id || "") ===
-        String(selectedEmployee.id || selectedEmployee.employee_id || "")
+        String(
+          employee.id ||
+          employee.employee_id ||
+          ""
+        ) ===
+        String(
+          selectedEmployee.id ||
+          selectedEmployee.employee_id ||
+          ""
+        )
     ) ||
     employees.find(
       (employee) =>
@@ -4955,25 +5032,178 @@ const selectedAttendanceEmployees =
     ) ||
     selectedEmployee;
 
-  return {
-    employee: scheduleEmployee,
-    day: employeeDay,
-    schedule: getStableSchedule(
-  scheduleEmployee,
-  [],
-  employeeDay,
-  employeeBreakRows
-),
-  };
+  const employeeTimeZone =
+    getEmployeeTimeZone(scheduleEmployee);
+
+  const employeeTodayKey =
+    getEmployeeDateKey(scheduleEmployee);
+
+  const employeeToday =
+    new Date(`${employeeTodayKey}T12:00:00`);
+
+  /*
+    JavaScript:
+    Sunday = 0
+    Monday = 1
+
+    This calculates the Monday belonging to the
+    employee's current local week.
+  */
+  const currentDayIndex =
+    employeeToday.getDay();
+
+  const daysFromMonday =
+    currentDayIndex === 0
+      ? -6
+      : 1 - currentDayIndex;
+
+  const mondayDate =
+    new Date(employeeToday);
+
+  mondayDate.setDate(
+    employeeToday.getDate() +
+      daysFromMonday
+  );
+
+  const weeklyDays = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+  ];
+
+  return weeklyDays.map(
+    (day, index) => {
+      const rowDate =
+        new Date(mondayDate);
+
+      rowDate.setDate(
+        mondayDate.getDate() + index
+      );
+
+      const dateKey =
+        getLocalDateKey(rowDate);
+
+      const schedule =
+        getStableSchedule(
+          scheduleEmployee,
+          [],
+          day,
+          employeeBreakRows,
+          scheduleExceptions,
+          dateKey
+        );
+
+      const normalizedEmployeeId =
+        String(
+          scheduleEmployee.employee_id ||
+          scheduleEmployee.Employee_ID ||
+          scheduleEmployee.id ||
+          ""
+        ).trim();
+
+      const matchingException =
+        scheduleExceptions.find(
+          (exceptionRow) => {
+            const exceptionEmployeeId =
+              String(
+                exceptionRow?.employee_id ||
+                exceptionRow?.Employee_ID ||
+                ""
+              ).trim();
+
+            const exceptionDay =
+              normalizeDayName(
+                exceptionRow?.weekday ||
+                exceptionRow?.Weekday ||
+                ""
+              );
+
+            const exceptionStartDate =
+              formatDateOnly(
+                exceptionRow?.start_date ||
+                exceptionRow?.Start_Date ||
+                ""
+              );
+
+            const exceptionEndDate =
+              formatDateOnly(
+                exceptionRow?.end_date ||
+                exceptionRow?.End_Date ||
+                ""
+              );
+
+            const dateIsValid =
+              (!exceptionStartDate ||
+                dateKey >=
+                  exceptionStartDate) &&
+              (!exceptionEndDate ||
+                dateKey <=
+                  exceptionEndDate);
+
+            return (
+              exceptionEmployeeId ===
+                normalizedEmployeeId &&
+              exceptionDay === day &&
+              dateIsValid &&
+              normalizeBoolean(
+                exceptionRow?.enabled ??
+                  exceptionRow?.Enabled
+              )
+            );
+          }
+        );
+
+      const isOffDay =
+        normalizeOffDays(
+          scheduleEmployee.off_days
+        ).some(
+          (offDay) =>
+            normalizeDayName(offDay) ===
+            day
+        );
+
+      return {
+        employee: scheduleEmployee,
+        day,
+        date: dateKey,
+        schedule,
+        isToday:
+          dateKey === employeeTodayKey,
+        isOffDay:
+          isOffDay &&
+          !matchingException,
+        isException:
+          Boolean(matchingException),
+      };
+    }
+  );
 }, [
   employees,
   selectedEmployee,
   employeeBreakRows,
+  scheduleExceptions,
 ]);
 
-const agentShiftSummary = buildShiftSummaryFromSchedule(
-  agentScheduleRow?.schedule
-);
+/*
+  Preserve the existing single-day object because
+  Today’s Attendance and other Agent Portal sections
+  already depend on agentScheduleRow.
+*/
+const agentScheduleRow =
+  agentWeeklySchedule.find(
+    (row) => row.isToday
+  ) ||
+  agentWeeklySchedule[0] ||
+  null;
+
+const agentShiftSummary =
+  buildShiftSummaryFromSchedule(
+    agentScheduleRow?.schedule
+  );
 
       async function saveScheduleChanges() {
   showToast(
@@ -4982,8 +5212,49 @@ const agentShiftSummary = buildShiftSummaryFromSchedule(
     "info"
   );
 }
+async function loadScheduleExceptions() {
+  if (!supabase) {
+    return [];
+  }
 
+  const {
+    data,
+    error,
+  } = await supabase
+    .from("schedule_exceptions")
+    .select("*")
+    .eq("enabled", true)
+    .order("priority", {
+      ascending: false,
+    });
+
+  if (error) {
+    console.warn(
+      "Schedule exceptions load failed:",
+      error.message
+    );
+
+    return [];
+  }
+
+  const loadedExceptions =
+    Array.isArray(data) ? data : [];
+
+  setScheduleExceptions(
+    loadedExceptions
+  );
+
+  console.log(
+    "Schedule exceptions loaded:",
+    loadedExceptions.length,
+    loadedExceptions
+  );
+
+  return loadedExceptions;
+}
   async function refreshLiveData() {
+      await loadScheduleExceptions();
+
   const loadedSupabase = await loadSupabaseReferenceData(
   employees,
   () => {},
@@ -5185,7 +5456,7 @@ useEffect(() => {
 
   let cancelled = false;
 
-  const loadAuthenticatedEmployeeBreaks = async () => {
+  const loadAuthenticatedScheduleData = async () => {
     const {
       data: latestBreakRows,
       error: breakRowsError,
@@ -5223,11 +5494,16 @@ useEffect(() => {
     }
   };
 
-  loadAuthenticatedEmployeeBreaks();
+  const loadAuthenticatedData = async () => {
+  await loadScheduleExceptions();
+  await loadAuthenticatedScheduleData();
+};
 
-  return () => {
-    cancelled = true;
-  };
+loadAuthenticatedData();
+
+return () => {
+  cancelled = true;
+};
 }, [supabase, isAuthenticated]);
 
 useEffect(() => {
