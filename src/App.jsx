@@ -2765,24 +2765,52 @@ async function googleDeleteRow(tab, idColumn, idValue) {
 }
 
 
-async function supabaseInsert(table, payload, context = "Supabase insert") {
+async function supabaseInsert(
+  table,
+  payload,
+  context = "Supabase insert"
+) {
   if (!supabase) {
-    console.warn(`${context}: Supabase client is not configured. Check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.`);
-    return null;
+    throw new Error(
+      `${context}: Supabase is not configured. Check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.`
+    );
   }
 
-  const rows = Array.isArray(payload) ? payload : [payload];
-  const { data, error } = await supabase.from(table).insert(rows).select();
+  const rows = Array.isArray(payload)
+    ? payload
+    : [payload];
+
+  console.log(`${context} payload:`, rows);
+
+  const { data, error } = await supabase
+    .from(table)
+    .insert(rows)
+    .select();
 
   if (error) {
-    console.error(`${context} failed on ${table}:`, error);
-    return null;
+    console.error(
+      `${context} failed on ${table}:`,
+      error
+    );
+
+    throw new Error(
+      `${context} failed: ${error.message}`
+    );
   }
 
-  console.log(`${context} saved to ${table}:`, data);
+  if (!data?.length) {
+    throw new Error(
+      `${context} failed: Supabase did not return the saved row.`
+    );
+  }
+
+  console.log(
+    `${context} saved to ${table}:`,
+    data
+  );
+
   return data;
 }
-
 function toSupabaseTimestamp(dateValue, timeValue) {
   const cleanDate = formatDateOnly(dateValue || today) || today;
   const cleanTime = formatMilitaryTime(timeValue || "00:00") || "00:00";
@@ -6781,14 +6809,22 @@ console.log(
   "Previous open time logs closed:",
   closedPreviousLogs.length
 );
+const selectedEmployeeTimeLogId =
+  selectedEmployee.supabase_employee_id ||
+  selectedEmployee.employee_id ||
+  selectedEmployee.Employee_ID ||
+  selectedEmployee.id;
+
       const duplicate = timeEntries.some(
-        (entry) =>
-          entry.employee_id === selectedEmployee.id &&
-          entry.date === employeeDate &&
-          entry.category === resolvedStatus &&
-          entry.category_start === time &&
-          entry.notes === action
-      );
+  (entry) =>
+    String(entry.employee_id || "") ===
+      String(selectedEmployeeTimeLogId || "") &&
+    entry.date === employeeDate &&
+    entry.category === newTime.category &&
+    entry.category_start === newTime.category_start &&
+    entry.category_end === newTime.category_end &&
+    entry.notes === newTime.notes
+);
 
       if (duplicate) {
         showToast("Duplicate status log prevented", "This same status/action was already logged for this minute.", "warning");
@@ -7240,250 +7276,389 @@ setTimeEntries((current) => [
   showToast("Shift ended", `${selectedEmployee.full_name}'s open shift was closed by manager.`, "success");
 }
   async function saveTime() {
-    if (!canEditTimeLogs(currentUser?.access_level || currentUser?.role || "Employee")) {
-      showToast("Access denied", "Only TLs, Managers, Reporting, HR, Payroll, and Admin users can edit time logs.", "danger");
-      return null;
-    }
+  if (
+    !canEditTimeLogs(
+      currentUser?.access_level ||
+        currentUser?.role ||
+        "Employee"
+    )
+  ) {
+    showToast(
+      "Access denied",
+      "Only TLs, Managers, Reporting, HR, Payroll, and Admin users can edit time logs.",
+      "danger"
+    );
 
-if (!selectedEmployee?.id) {
-  showToast(
-    "Employee required",
-    "Please select an employee before adding a manual time entry.",
-    "warning"
-  );
-  return null;
-}
+    return null;
+  }
 
-    if (!newTime.date) {
-  showToast(
-    "Date required",
-    "Select the date for this time entry.",
-    "warning"
-  );
-  return null;
-}
+  if (!selectedEmployee?.id) {
+    showToast(
+      "Employee required",
+      "Please select an employee before adding a manual time entry.",
+      "warning"
+    );
 
-    if (newTime.category === "Overtime") {
-      showToast("Manual overtime disabled", "Overtime is created automatically after the scheduled shift end.", "warning");
-      return null;
-    }
-    const schedule = getStableSchedule(selectedEmployee);
-    const employeeDate =
-  newTime.date ||
-  getEmployeeDateKey(selectedEmployee);
-    const key =
-  `manual-time-${selectedEmployee.id}-${employeeDate}-${newTime.category}-${newTime.category_start}-${newTime.category_end}`;
-    return runProtectedAction(key, "Manual time entry", async () => {
+    return null;
+  }
+
+  if (!newTime.date) {
+    showToast(
+      "Date required",
+      "Select the date for this time entry.",
+      "warning"
+    );
+
+    return null;
+  }
+
+  if (
+    !newTime.category_start ||
+    !newTime.category_end
+  ) {
+    showToast(
+      "Time required",
+      "Select both the start and end time.",
+      "warning"
+    );
+
+    return null;
+  }
+
+  if (
+    timeToMinutes(newTime.category_end) <=
+    timeToMinutes(newTime.category_start)
+  ) {
+    showToast(
+      "Invalid time range",
+      "The end time must be later than the start time.",
+      "warning"
+    );
+
+    return null;
+  }
+
+  if (newTime.category === "Overtime") {
+    showToast(
+      "Manual overtime disabled",
+      "Overtime is created automatically after the scheduled shift end.",
+      "warning"
+    );
+
+    return null;
+  }
+
+  const schedule =
+    getStableSchedule(selectedEmployee);
+
+  const employeeDate =
+    newTime.date ||
+    getEmployeeDateKey(selectedEmployee);
+
+  const selectedEmployeeTimeLogId =
+    selectedEmployee.supabase_employee_id ||
+    selectedEmployee.employee_id ||
+    selectedEmployee.Employee_ID ||
+    selectedEmployee.id;
+
+  const key =
+    `manual-time-${selectedEmployeeTimeLogId}-` +
+    `${employeeDate}-` +
+    `${newTime.category}-` +
+    `${newTime.category_start}-` +
+    `${newTime.category_end}-` +
+    `${newTime.notes || ""}`;
+
+  return runProtectedAction(
+    key,
+    "Manual time entry",
+    async () => {
       const duplicate = timeEntries.some(
         (entry) =>
-          entry.employee_id === selectedEmployee.id &&
-          entry.date === employeeDate &&
-          entry.category === newTime.category &&
-          entry.category_start === newTime.category_start &&
-          entry.category_end === newTime.category_end &&
-          entry.notes === newTime.notes
+          String(entry.employee_id || "") ===
+            String(
+              selectedEmployeeTimeLogId || ""
+            ) &&
+          String(entry.date || "").slice(0, 10) ===
+            employeeDate &&
+          (entry.category ||
+            entry.status) ===
+            newTime.category &&
+          formatLogTimeForInput(
+            entry.category_start ||
+              entry.clock_in,
+            entry,
+            employees
+          ) ===
+            formatMilitaryTime(
+              newTime.category_start
+            ) &&
+          formatLogTimeForInput(
+            entry.category_end ||
+              entry.clock_out,
+            entry,
+            employees
+          ) ===
+            formatMilitaryTime(
+              newTime.category_end
+            ) &&
+          String(entry.notes || "").trim() ===
+            String(newTime.notes || "").trim()
       );
 
       if (duplicate) {
-        showToast("Duplicate time entry prevented", "This exact time entry already exists and was not added again.", "warning");
+        showToast(
+          "Duplicate time entry prevented",
+          "This exact time entry already exists and was not added again.",
+          "warning"
+        );
+
         return "silent";
       }
 
-      const isHistoricalEntry =
-  employeeDate !== getEmployeeDateKey(selectedEmployee);
+      const manualClass =
+        getAutoWorkClassification(
+          selectedEmployee,
+          newTime.category_start
+        );
 
-const manualClass = isHistoricalEntry
-  ? {
-      category: "Working",
-      approval: "Pending",
-      payableStatus: "Pending Review",
-      locked: false,
-      reason: "Historical manual time entry",
-    }
-  : getAutoWorkClassification(
-      selectedEmployee,
-      newTime.category_start
-    );
-      const manualCategory = newTime.category === "Working" && manualClass.category !== "Working" ? manualClass.category : newTime.category;
-      const manualApproval = ["Off-Day Unscheduled", "Early Unscheduled"].includes(manualCategory) ? "Pending Approval" : "Pending";
+      const manualCategory =
+        newTime.category === "Working" &&
+        manualClass.category !== "Working"
+          ? manualClass.category
+          : newTime.category;
 
-console.log("Selected Employee:", selectedEmployee);
-
+      const manualApproval = [
+        "Off-Day Unscheduled",
+        "Early Unscheduled",
+      ].includes(manualCategory)
+        ? "Pending Approval"
+        : "Pending";
 
       const item = {
-        id: `TIME-${Date.now().toString().slice(-6)}`,
+        id: `TIME-${Date.now()
+          .toString()
+          .slice(-6)}`,
+
         employee_id:
-  selectedEmployee.employee_id ||
-  selectedEmployee.Employee_ID ||
-  selectedEmployee.id,
+          selectedEmployeeTimeLogId,
 
-employee_name:
-  selectedEmployee.full_name ||
-  selectedEmployee.employee_name ||
-  selectedEmployee.Full_Name ||
-  "",
+        employee_name:
+          selectedEmployee.full_name ||
+          selectedEmployee.employee_name ||
+          "",
 
-  employee_email:
-  selectedEmployee.email ||
-  selectedEmployee.auth_email ||
-  selectedEmployee.Auth_Email ||
-  "",
+        employee_email:
+          selectedEmployee.email ||
+          selectedEmployee.auth_email ||
+          "",
+
         date: employeeDate,
-        scheduled_start: schedule.shift_start,
-        scheduled_end: schedule.shift_end,
-        schedule_break_1: formatTimeRange(schedule.break_start, schedule.break_end),
+
+        scheduled_start:
+          schedule.shift_start,
+
+        scheduled_end:
+          schedule.shift_end,
+
+        schedule_break_1:
+          formatTimeRange(
+            schedule.break_start,
+            schedule.break_end
+          ),
+
         schedule_lunch: "",
-        schedule_break_2: formatTimeRange(schedule.second_break_start, schedule.second_break_end),
-        schedule_off_days: schedule.off_days,
-        schedule_source: "Employee Master Schedule",
-        clock_in: schedule.shift_start,
-        clock_out: schedule.shift_end,
-        approved: manualApproval,
-        payable_status: manualApproval === "Pending Approval" || manualCategory === "Overtime" ? "Pending Manager Approval" : "Pending Review",
-        locked: manualApproval === "Pending Approval",
-        auto_rule: manualClass.reason,
-        lob: selectedEmployee.lob,
-        department: selectedEmployee.department,
-        sub_department: selectedEmployee.sub_department || "",
-        ...newTime,
-        category: manualCategory,
+
+        schedule_break_2:
+          formatTimeRange(
+            schedule.second_break_start,
+            schedule.second_break_end
+          ),
+
+        schedule_off_days:
+          schedule.off_days,
+
+        schedule_source:
+          "Employee Master Schedule",
+
+        clock_in:
+          newTime.category_start,
+
+        clock_out:
+          newTime.category_end,
+
+        category_start:
+          newTime.category_start,
+
+        category_end:
+          newTime.category_end,
+
+        approved:
+          manualApproval,
+
+        payable_status:
+          manualApproval ===
+            "Pending Approval" ||
+          manualCategory === "Overtime"
+            ? "Pending Manager Approval"
+            : "Pending Review",
+
+        locked:
+          manualApproval ===
+          "Pending Approval",
+
+        auto_rule:
+          manualClass.reason,
+
+        lob:
+          selectedEmployee.lob || "",
+
+        department:
+          selectedEmployee.department || "",
+
+        sub_department:
+          selectedEmployee.sub_department || "",
+
+        notes:
+          newTime.notes || "",
+
+        category:
+          manualCategory,
+
+        created_by:
+          currentUser?.email || "",
       };
 
-      console.log("Item being saved:", item);
-
-      const savedRows = await supabaseInsert(
-  "time_logs",
-  mapTimeEntryToSupabaseLog(
-    item,
-    selectedEmployee
-  ),
-  "Manual time log"
-);
-
-if (!savedRows?.length) {
-  throw new Error(
-    "Supabase did not return the saved manual time entry."
-  );
-}
-
-const savedRow = savedRows[0];
-
-const savedTimeEntry = {
-  ...item,
-  ...savedRow,
-
-  supabase_id: savedRow.id,
-
-  id:
-    savedRow.app_log_id ||
-    savedRow.id ||
-    item.id,
-
-  employee_id:
-  selectedEmployee.id ||
-  selectedEmployee.employee_id ||
-  selectedEmployee.Employee_ID ||
-  item.employee_id,
-
-employee_name:
-  selectedEmployee.full_name ||
-  selectedEmployee.employee_name ||
-  selectedEmployee.Full_Name ||
-  item.employee_name,
-
-  lob:
-  selectedEmployee.lob ||
-  selectedEmployee.LOB ||
-  item.lob,
-
-department:
-  selectedEmployee.department ||
-  selectedEmployee.Department ||
-  item.department,
-
-sub_department:
-  selectedEmployee.sub_department ||
-  selectedEmployee.Sub_Department ||
-  item.sub_department,
-
-created_by:
-  item.created_by ||
-  currentUser?.email ||
-  currentUser?.auth_email ||
-  "",
-
-  date:
-    savedRow.date ||
-    String(
-      savedRow.clock_in ||
-      savedRow.category_start ||
-      savedRow.created_at ||
-      item.date
-    ).slice(0, 10),
-
-  category:
-    savedRow.category ||
-    savedRow.status ||
-    item.category,
-
-  approved:
-    savedRow.approval_status ||
-    item.approved,
-
-  payable_status:
-    savedRow.payable_status ||
-    item.payable_status,
-};
-
-await googleAddRow(
-  "timeLogs",
-  mapTimeToSheet(savedTimeEntry)
-);
-
-await queueDailyAttendanceEmail(
-  selectedEmployee,
-  [savedTimeEntry]
-);
-
-setTimeEntries((current) => {
-  const savedSupabaseId = String(
-    savedTimeEntry.supabase_id || ""
-  );
-
-  const savedAppId = String(
-    savedTimeEntry.app_log_id ||
-    savedTimeEntry.id ||
-    ""
-  );
-
-  const withoutDuplicate = current.filter(
-    (entry) => {
-      const entrySupabaseId = String(
-        entry.supabase_id || ""
+      console.log(
+        "Manual item being saved:",
+        item
       );
 
-      const entryAppId = String(
-        entry.app_log_id ||
-        entry.id ||
-        ""
+      const savedRows =
+        await supabaseInsert(
+          "time_logs",
+          mapTimeEntryToSupabaseLog(
+            item,
+            selectedEmployee
+          ),
+          "Manual time log"
+        );
+
+      const savedRow =
+        savedRows?.[0];
+
+      if (!savedRow) {
+        throw new Error(
+          "Supabase did not return the saved manual time entry."
+        );
+      }
+
+      const savedTimeEntry = {
+        ...item,
+        ...savedRow,
+
+        supabase_id:
+          savedRow.id,
+
+        id:
+          savedRow.app_log_id ||
+          item.id ||
+          savedRow.id,
+
+        employee_id:
+          savedRow.employee_id ||
+          selectedEmployeeTimeLogId,
+
+        employee_name:
+          savedRow.employee_name ||
+          item.employee_name,
+
+        date:
+          savedRow.date ||
+          String(
+            savedRow.clock_in ||
+              savedRow.category_start ||
+              item.date
+          ).slice(0, 10),
+
+        category:
+          savedRow.category ||
+          savedRow.status ||
+          item.category,
+
+        approved:
+          savedRow.approval_status ||
+          item.approved,
+
+        payable_status:
+          savedRow.payable_status ||
+          item.payable_status,
+      };
+
+      await googleAddRow(
+        "timeLogs",
+        mapTimeToSheet(savedTimeEntry)
       );
 
-      return (
-        (!savedSupabaseId ||
-          entrySupabaseId !== savedSupabaseId) &&
-        (!savedAppId ||
-          entryAppId !== savedAppId)
+      await queueDailyAttendanceEmail(
+        selectedEmployee,
+        [savedTimeEntry]
       );
+
+      setTimeEntries((current) => {
+        const withoutDuplicate =
+          current.filter((entry) => {
+            const sameSupabaseRow =
+              savedTimeEntry.supabase_id &&
+              String(
+                entry.supabase_id ||
+                  entry.id ||
+                  ""
+              ) ===
+                String(
+                  savedTimeEntry.supabase_id
+                );
+
+            const sameApplicationRow =
+              savedTimeEntry.id &&
+              String(
+                entry.app_log_id ||
+                  entry.id ||
+                  ""
+              ) ===
+                String(savedTimeEntry.id);
+
+            return (
+              !sameSupabaseRow &&
+              !sameApplicationRow
+            );
+          });
+
+        return [
+          savedTimeEntry,
+          ...withoutDuplicate,
+        ];
+      });
+
+      setFilters((current) => ({
+        ...current,
+        employee:
+          selectedEmployee.full_name ||
+          current.employee,
+        startDate: employeeDate,
+        endDate: employeeDate,
+      }));
+
+      setNewTime((current) => ({
+        ...current,
+        date: employeeDate,
+        notes: "",
+      }));
+
+      return savedTimeEntry;
     }
   );
-
-  return [
-    savedTimeEntry,
-    ...withoutDuplicate,
-  ];
-});
-    });
-  }
+}
 
   async function saveRequest() {
     const key = `request-${selectedEmployee.id}-${newRequest.type}-${newRequest.start_date}-${newRequest.end_date}-${newRequest.hours}-${newRequest.reason}`;
