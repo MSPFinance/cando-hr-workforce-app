@@ -720,18 +720,108 @@ function formatHours(minutes) {
   return `${hours.toFixed(hours % 1 === 0 ? 0 : 2)}h`;
 }
 
-function getTimeLogDuration(entry) {
-  const start = entry.category_start || entry.clock_in;
-  const end = entry.category_end || entry.clock_out;
+function getTimeLogDuration(
+  entry,
+  employeesList = []
+) {
+  const startValue =
+    entry.category_start ||
+    entry.clock_in;
 
-  if (end) return formatHours(minutesBetween(start, end));
+  const endValue =
+    entry.category_end ||
+    entry.clock_out;
 
-  const startMinutes = timeToMinutes(start);
-  const nowMinutes = timeToMinutes(getAppTimeKey(new Date()));
+  if (startValue && endValue) {
+    const startIsSimpleTime =
+      /^(\d{1,2}):(\d{2})(?::\d{2})?$/.test(
+        String(startValue)
+      );
 
-  if (startMinutes === null || nowMinutes === null) return "Active";
+    const endIsSimpleTime =
+      /^(\d{1,2}):(\d{2})(?::\d{2})?$/.test(
+        String(endValue)
+      );
 
-  return `${formatHours(Math.max(0, nowMinutes - startMinutes))} active`;
+    /*
+      When both values are complete timestamps,
+      calculate the exact elapsed duration.
+    */
+    if (
+      !startIsSimpleTime &&
+      !endIsSimpleTime
+    ) {
+      const startTimestamp =
+        new Date(startValue).getTime();
+
+      const endTimestamp =
+        new Date(endValue).getTime();
+
+      if (
+        !Number.isNaN(startTimestamp) &&
+        !Number.isNaN(endTimestamp)
+      ) {
+        return formatHours(
+          Math.max(
+            0,
+            Math.round(
+              (endTimestamp -
+                startTimestamp) /
+                60000
+            )
+          )
+        );
+      }
+    }
+
+    /*
+      During an unsaved edit, one value may be a
+      timestamp and the other may already be HH:mm.
+
+      Convert both to the employee's displayed local
+      time before calculating the preview.
+    */
+    const localStart =
+      formatLogTimeForInput(
+        startValue,
+        entry,
+        employeesList
+      );
+
+    const localEnd =
+      formatLogTimeForInput(
+        endValue,
+        entry,
+        employeesList
+      );
+
+    return formatHours(
+      minutesBetween(
+        localStart,
+        localEnd
+      )
+    );
+  }
+
+  if (startValue) {
+    const startTimestamp =
+      new Date(startValue).getTime();
+
+    if (!Number.isNaN(startTimestamp)) {
+      return `${formatHours(
+        Math.max(
+          0,
+          Math.floor(
+            (Date.now() -
+              startTimestamp) /
+              60000
+          )
+        )
+      )} active`;
+    }
+  }
+
+  return "0h";
 }
 
 function csv(rows, headers) {
@@ -7801,123 +7891,478 @@ async function bulkApproveSelectedTimeLogs() {
 }
 
   async function saveEditedTimeEntry(id) {
-    if (!canEditTimeLogs(currentUser?.access_level || currentUser?.role || "Employee")) {
-      showToast("Access denied", "Only TLs, Managers, Reporting, HR, Payroll, and Admin users can save time log corrections.", "danger");
-      return null;
-    }
+  if (
+    !canEditTimeLogs(
+      currentUser?.access_level ||
+        currentUser?.role ||
+        "Employee"
+    )
+  ) {
+    showToast(
+      "Access denied",
+      "Only TLs, Managers, Reporting, HR, Payroll, and Admin users can save time log corrections.",
+      "danger"
+    );
 
-    const timeEntry = timeEntries.find(
-  (entry) =>
-    String(entry.id || "") === String(id) ||
-    String(entry.app_log_id || "") === String(id)
-);
-    if (!timeEntry) {
-      showToast("Time entry not found", "The selected time log could not be found.", "danger");
-      return null;
-    }
+    return null;
+  }
 
-    const key = `time-log-edit-${id}-${timeEntry.date}-${timeEntry.category}-${timeEntry.category_start}-${timeEntry.category_end}`;
+  const timeEntry = timeEntries.find(
+    (entry) =>
+      String(entry.id || "") === String(id) ||
+      String(entry.app_log_id || "") === String(id) ||
+      String(entry.supabase_id || "") === String(id)
+  );
 
-    return runProtectedAction(key, "Time log correction", async () => {
-      const correctedStart = formatMilitaryTime(
-  timeEntry.category_start
-);
+  if (!timeEntry) {
+    showToast(
+      "Time entry not found",
+      "The selected time log could not be found.",
+      "danger"
+    );
 
-const correctedEnd = timeEntry.category_end
-  ? formatMilitaryTime(timeEntry.category_end)
-  : null;
+    return null;
+  }
 
-const correctedEntry = {
-  ...timeEntry,
+  const employee =
+    employees.find(
+      (item) =>
+        String(
+          item.id ||
+            item.employee_id ||
+            ""
+        ) ===
+        String(timeEntry.employee_id || "")
+    ) || {};
 
-  // The editable Start and End fields are the values being saved.
-  category_start: correctedStart,
-  category_end: correctedEnd,
+  const employeeTimeZone =
+    getEmployeeTimeZone(employee);
 
-  // Keep clock fields synchronized with the manager correction.
-  clock_in: correctedStart,
-  clock_out: correctedEnd,
+  const correctedDate =
+    formatDateOnly(timeEntry.date) ||
+    getEmployeeDateKey(employee);
 
-  duration_minutes: correctedEnd
-    ? minutesBetween(correctedStart, correctedEnd)
-    : 0,
+  const correctedStart =
+  formatLogTimeForInput(
+    timeEntry.category_start ||
+      timeEntry.clock_in,
+    timeEntry,
+    employees
+  );
 
-  edited_by: currentUser.email,
-  edited_at: new Date().toISOString(),
-  approved_by: currentUser.email,
-};
+const correctedEnd =
+  timeEntry.category_end ||
+  timeEntry.clock_out
+    ? formatLogTimeForInput(
+        timeEntry.category_end ||
+          timeEntry.clock_out,
+        timeEntry,
+        employees
+      )
+    : null;
 
-console.log("Saving corrected entry:", correctedEntry);
+  if (
+    !correctedStart ||
+    correctedStart === "Not Available"
+  ) {
+    showToast(
+      "Invalid start time",
+      "Enter a valid start time before saving.",
+      "warning"
+    );
+
+    return null;
+  }
+
+  const startMinutes =
+    timeToMinutes(correctedStart);
+
+  const endMinutes =
+    correctedEnd
+      ? timeToMinutes(correctedEnd)
+      : null;
+
+  let endDate = correctedDate;
+
+  /*
+    If the ending time is earlier than the starting
+    time, treat the log as crossing midnight.
+  */
+  if (
+    endMinutes !== null &&
+    startMinutes !== null &&
+    endMinutes < startMinutes
+  ) {
+    const nextDate =
+      new Date(`${correctedDate}T12:00:00`);
+
+    nextDate.setDate(
+      nextDate.getDate() + 1
+    );
+
+    endDate =
+      getLocalDateKey(nextDate);
+  }
+
+  const correctedClockIn =
+    localDateTimeToUtcIso(
+      correctedDate,
+      correctedStart,
+      employeeTimeZone
+    );
+
+  const correctedClockOut =
+    correctedEnd
+      ? localDateTimeToUtcIso(
+          endDate,
+          correctedEnd,
+          employeeTimeZone
+        )
+      : null;
+
+  const durationMinutes =
+    correctedClockOut
+      ? Math.max(
+          0,
+          Math.round(
+            (
+              new Date(
+                correctedClockOut
+              ).getTime() -
+              new Date(
+                correctedClockIn
+              ).getTime()
+            ) / 60000
+          )
+        )
+      : 0;
+
+  const key =
+    `time-log-edit-${id}-` +
+    `${correctedDate}-` +
+    `${correctedStart}-` +
+    `${correctedEnd || "open"}`;
+
+  return runProtectedAction(
+    key,
+    "Time log correction",
+    async () => {
+      const updatePayload = {
+        date: correctedDate,
+        clock_in:
+          correctedClockIn,
+
+        clock_out:
+          correctedClockOut,
+
+        category_start:
+          correctedClockIn,
+
+        category_end:
+          correctedClockOut,
+
+        break_start:
+    timeEntry.category === "Break"
+      ? correctedClockIn
+      : null,
+
+break_end:
+    timeEntry.category === "Break"
+      ? correctedClockOut
+      : null,  
+
+        duration_minutes:
+          durationMinutes,
+
+        status:
+          timeEntry.category ||
+          timeEntry.status ||
+          "Working",
+
+        approval_status:
+          timeEntry.approved ||
+          timeEntry.approval_status ||
+          "Pending",
+
+        payable_status:
+          timeEntry.payable_status ||
+          "",
+
+        notes:
+          timeEntry.notes || "",
+
+        edited_by:
+          currentUser.email,
+
+        edited_at:
+          new Date().toISOString(),
+
+        approved_by:
+          currentUser.email,
+      };
+
+      let savedRow = null;
 
       if (supabase) {
-  const payload = mapTimeEntryToSupabaseLog(
-    correctedEntry,
-    employees.find((e) => e.id === correctedEntry.employee_id) || {}
-  );
+        let updateQuery =
+          supabase
+            .from("time_logs")
+            .update(updatePayload);
 
-console.log("correctedEntry.id =", correctedEntry.id);
-console.log("correctedEntry.app_log_id =", correctedEntry.app_log_id);
-console.log("id parameter =", id);
-console.log("payload.app_log_id =", payload.app_log_id);
+        /*
+          Prefer the actual Supabase primary key.
+          Fall back to app_log_id for older rows.
+        */
+        if (
+          timeEntry.supabase_id ||
+          (
+            timeEntry.id &&
+            timeEntry.id !==
+              timeEntry.app_log_id
+          )
+        ) {
+          updateQuery =
+            updateQuery.eq(
+              "id",
+              timeEntry.supabase_id ||
+                timeEntry.id
+            );
+        } else {
+          updateQuery =
+            updateQuery.eq(
+              "app_log_id",
+              String(
+                timeEntry.app_log_id ||
+                  timeEntry.id ||
+                  id
+              )
+            );
+        }
 
-  const matchId = String(
-    correctedEntry.app_log_id ||
-    correctedEntry.id ||
-    id
-  );
+        const {
+          data,
+          error,
+        } =
+          await updateQuery.select();
 
-  const { data, error } = await supabase
-    .from("time_logs")
-    .update(payload)
-    .eq("app_log_id", matchId)
-    .select();
+        if (error) {
+          console.error(
+            "Supabase time-log update error:",
+            error
+          );
 
-  console.log("Supabase update result:", data);
+          throw new Error(
+            error.message
+          );
+        }
 
-  if (error) {
-    console.error("Supabase update error:", error);
-    throw error;
-  }
-}
+        if (!data?.length) {
+          throw new Error(
+            "Supabase did not return an updated time-log row."
+          );
+        }
 
-// Historical time log edits are saved in Supabase.
-// Google Sheets remains source for schedules/breaks only.
-console.log("Skipping Google Sheets timeLogs update for historical edit.");
+        savedRow = data[0];
+      }
+
+      const updatedFrontendRow =
+        savedRow
+          ? {
+              ...timeEntry,
+              ...savedRow,
+
+              supabase_id:
+                savedRow.id,
+
+              id:
+                savedRow.app_log_id ||
+                timeEntry.id ||
+                savedRow.id,
+
+              app_log_id:
+                savedRow.app_log_id ||
+                timeEntry.app_log_id ||
+                timeEntry.id,
+
+              date:
+                correctedDate,
+
+              category:
+                savedRow.category ||
+                savedRow.status ||
+                timeEntry.category,
+
+              approved:
+                savedRow.approval_status ||
+                timeEntry.approved,
+
+              /*
+                Keep the table inputs in employee-local
+                HH:mm after Supabase returns UTC.
+              */
+              category_start:
+                formatLogTimeForInput(
+                  savedRow.category_start ||
+                    savedRow.clock_in,
+                  {
+                    ...timeEntry,
+                    employee_id:
+                      timeEntry.employee_id,
+                  },
+                  employees
+                ),
+
+              category_end:
+                savedRow.category_end ||
+                savedRow.clock_out
+                  ? formatLogTimeForInput(
+                      savedRow.category_end ||
+                        savedRow.clock_out,
+                      {
+                        ...timeEntry,
+                        employee_id:
+                          timeEntry.employee_id,
+                      },
+                      employees
+                    )
+                  : "",
+
+              clock_in:
+                savedRow.clock_in,
+
+              clock_out:
+                savedRow.clock_out,
+
+              duration_minutes:
+                savedRow.duration_minutes ??
+                durationMinutes,
+            }
+          : {
+              ...timeEntry,
+
+              date:
+                correctedDate,
+
+              category_start:
+                correctedStart,
+
+              category_end:
+                correctedEnd || "",
+
+              clock_in:
+                correctedClockIn,
+
+              clock_out:
+                correctedClockOut,
+
+              duration_minutes:
+                durationMinutes,
+
+              edited_by:
+                currentUser.email,
+
+              edited_at:
+                new Date().toISOString(),
+            };
+
+      /*
+        Replace the complete browser row with the
+        exact row returned by Supabase.
+      */
+      setTimeEntries((current) =>
+        current.map((entry) => {
+          const sameRow =
+            String(
+              entry.supabase_id ||
+                ""
+            ) ===
+              String(
+                savedRow?.id ||
+                  timeEntry.supabase_id ||
+                  ""
+              ) ||
+            String(
+              entry.app_log_id ||
+                entry.id ||
+                ""
+            ) ===
+              String(
+                timeEntry.app_log_id ||
+                  timeEntry.id ||
+                  id
+              );
+
+          return sameRow
+            ? updatedFrontendRow
+            : entry;
+        })
+      );
 
       try {
-  await googleAddRow(
-    "approvals",
-    mapApprovalToSheet({
-      id: cleanId("TIMEEDIT"),
-      employee_id: correctedEntry.employee_id,
-      employee_name: correctedEntry.employee_name,
-      approval_type: "Time Log Manual Correction",
-      related_record_id: correctedEntry.id,
-      request_type: correctedEntry.category,
-      decision: "Corrected",
-      previous_status: timeEntry.approved || "Pending Review",
-      new_status: correctedEntry.approved || "Pending Review",
-      approved_by: currentUser.email,
-      approved_date: new Date(),
-      hours: (minutesBetween(correctedEntry.category_start, correctedEntry.category_end) / 60).toFixed(2),
-      notes: correctedEntry.notes || "Manager/TL time log correction saved from Time tab.",
-    })
-  );
-} catch (error) {
-  console.warn("Google approval log skipped for historical time edit:", error);
-}
+        await googleAddRow(
+          "approvals",
+          mapApprovalToSheet({
+            id:
+              cleanId("TIMEEDIT"),
 
-      setTimeEntries((current) =>
-  current.map((entry) =>
-    String(entry.id || "") === String(id) ||
-    String(entry.app_log_id || "") === String(id)
-      ? correctedEntry
-      : entry
-  )
-);
-      showToast("Time log saved", "The previous time log was corrected and retained for audit review.", "success");
-    });
-  }
+            employee_id:
+              timeEntry.employee_id,
+
+            employee_name:
+              timeEntry.employee_name,
+
+            approval_type:
+              "Time Log Manual Correction",
+
+            related_record_id:
+              timeEntry.app_log_id ||
+              timeEntry.id,
+
+            request_type:
+              timeEntry.category,
+
+            decision:
+              "Corrected",
+
+            previous_status:
+              timeEntry.approved ||
+              "Pending Review",
+
+            new_status:
+              updatedFrontendRow.approved ||
+              "Pending Review",
+
+            approved_by:
+              currentUser.email,
+
+            approved_date:
+              new Date(),
+
+            hours:
+              (
+                durationMinutes / 60
+              ).toFixed(2),
+
+            notes:
+              timeEntry.notes ||
+              "Manager/TL time log correction saved from Time tab.",
+          })
+        );
+      } catch (error) {
+        console.warn(
+          "Approval audit log skipped:",
+          error
+        );
+      }
+
+      showToast(
+        "Time log saved",
+        `The corrected time and ${durationMinutes}-minute duration were saved to Supabase and updated on screen.`,
+        "success"
+      );
+    }
+  );
+}
 
   function importEmployees(event) {
     if (isAgentOnly) return;
@@ -8584,6 +9029,218 @@ if (startupLoading) {
               </div>
             </div>
 
+            <div
+  style={{
+    marginTop: "18px",
+    padding: "18px",
+    border: "1px solid #d9e8e1",
+    borderRadius: "14px",
+    background: "#ffffff",
+  }}
+>
+  <div
+    style={{
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: "12px",
+      marginBottom: "14px",
+    }}
+  >
+    <div>
+      <span
+        style={{
+          display: "block",
+          fontSize: "12px",
+          fontWeight: "700",
+          textTransform: "uppercase",
+          color: "#62716b",
+        }}
+      >
+        Current week
+      </span>
+
+      <strong
+  style={{
+    display: "block",
+    marginTop: "3px",
+    fontSize: "16px",
+  }}
+>
+  Weekly Overview
+</strong>
+    </div>
+
+    <small>
+      {agentWeeklySchedule[0]?.date || ""}
+      {" — "}
+      {agentWeeklySchedule[
+        agentWeeklySchedule.length - 1
+      ]?.date || ""}
+    </small>
+  </div>
+
+  <div
+    style={{
+      display: "grid",
+      gap: "9px",
+    }}
+  >
+    <div
+  style={{
+    display: "grid",
+    gridTemplateColumns:
+      "repeat(7, minmax(110px, 1fr))",
+    gap: "8px",
+    overflowX: "auto",
+    paddingBottom: "4px",
+  }}
+>
+  {agentWeeklySchedule.map((row) => {
+    const isOff =
+      row.isOffDay;
+
+    return (
+      <div
+        key={row.day}
+        style={{
+          minWidth: "110px",
+          padding: "10px",
+          borderRadius: "10px",
+          border: row.isToday
+            ? "1px solid #138a67"
+            : row.isException
+            ? "1px solid #d7a92f"
+            : "1px solid #dfe8e3",
+
+          background: isOff
+            ? "#f3f5f4"
+            : row.isToday
+            ? "#edf9f4"
+            : row.isException
+            ? "#fff9e8"
+            : "#ffffff",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: "6px",
+            marginBottom: "6px",
+          }}
+        >
+          <strong
+            style={{
+              fontSize: "13px",
+            }}
+          >
+            {row.day.slice(0, 3)}
+          </strong>
+
+          {row.isToday && (
+            <span
+              style={{
+                fontSize: "9px",
+                fontWeight: "700",
+                color: "#087f5b",
+                textTransform: "uppercase",
+              }}
+            >
+              Today
+            </span>
+          )}
+        </div>
+
+        <small
+          style={{
+            display: "block",
+            color: "#66736e",
+            marginBottom: "6px",
+          }}
+        >
+          {row.date.slice(5)}
+        </small>
+
+        {isOff ? (
+          <strong
+            style={{
+              fontSize: "12px",
+              color: "#66736e",
+            }}
+          >
+            Off
+          </strong>
+        ) : (
+          <>
+            <strong
+              style={{
+                display: "block",
+                fontSize: "12px",
+                marginBottom: "5px",
+              }}
+            >
+              {formatTimeRange(
+                row.schedule.shift_start,
+                row.schedule.shift_end
+              )}
+            </strong>
+
+            {row.isToday ? (
+  <small
+    style={{
+      display: "block",
+      lineHeight: "1.35",
+      color: "#087f5b",
+      fontWeight: "700",
+    }}
+  >
+    See Today&apos;s Shift above
+  </small>
+) : (
+  <small
+    style={{
+      display: "block",
+      lineHeight: "1.35",
+      color: "#62716b",
+    }}
+  >
+    B1{" "}
+    {formatTimeRange(
+      row.schedule.break_start,
+      row.schedule.break_end
+    )}
+    <br />
+    B2{" "}
+    {formatTimeRange(
+      row.schedule.second_break_start,
+      row.schedule.second_break_end
+    )}
+  </small>
+)}
+
+            {row.isException && (
+              <span
+                style={{
+                  display: "block",
+                  marginTop: "6px",
+                  fontSize: "9px",
+                  fontWeight: "700",
+                  color: "#8a6700",
+                  textTransform: "uppercase",
+                }}
+              >
+                Exception
+              </span>
+            )}
+          </>
+        )}
+      </div>
+    );
+  })}
+</div>
+
             <div className="agentGrid">
               <Card title="My shift actions">
               <div className="agentActions">
@@ -8674,10 +9331,12 @@ if (startupLoading) {
 
               <Card title="My activity today">
                 <ActivityList activities={visibleActivity} />
-              </Card>
+                                          </Card>
             </div>
-          </section>
-        )}
+          </div>
+        </div>
+      </section>
+    )}
 
         {!isAgentOnly && tab === "dashboard" && (
           <section className="dashboardFloorSection">
@@ -9011,7 +9670,7 @@ t.id
     )
   }
 />,
-                  getTimeLogDuration(t),
+                  getTimeLogDuration(t, employees),
                   <select value={t.approved || "Pending"} onChange={(event) => editTimeEntryLocal(t.id, "approved", event.target.value)}>
                     {["Pending", "Pending Approval", "Approved", "Denied", "Auto Logged"].map((status) => <option key={status}>{status}</option>)}
                   </select>,
