@@ -1850,12 +1850,20 @@ function getStableSchedule(
         todayDayName(employeeTimeZone)
     );
 
-  const normalizedEmployeeId = String(
-    employee?.employee_id ||
-      employee?.Employee_ID ||
-      employee?.id ||
-      ""
-  ).trim();
+  const employeeIdentifierCandidates = [
+  employee?.employee_id,
+  employee?.Employee_ID,
+  employee?.id,
+  employee?.supabase_employee_id,
+]
+  .map((value) =>
+    String(value || "").trim().toLowerCase()
+  )
+  .filter(Boolean);
+
+  const normalizedEmployeeId =
+  employeeIdentifierCandidates[0] || "";
+
 const matchingScheduleException =
   Array.isArray(scheduleExceptions)
     ? scheduleExceptions.find((exceptionRow) => {
@@ -1895,7 +1903,9 @@ const dateIsValid =
     targetDate <= exceptionEndDate);
 
         return (
-  exceptionEmployeeId === normalizedEmployeeId &&
+  employeeIdentifierCandidates.includes(
+  exceptionEmployeeId.toLowerCase()
+) &&
   exceptionDay === normalizedDay &&
   dateIsValid &&
   normalizeBoolean(
@@ -1905,6 +1915,8 @@ const dateIsValid =
 );
       })
     : null;
+
+    
   /*
     Supabase employee_breaks is the primary source
     for daily first and second break schedules.
@@ -5187,13 +5199,16 @@ const selectedAttendanceEmployees =
           dateKey
         );
 
-      const normalizedEmployeeId =
-        String(
-          scheduleEmployee.employee_id ||
-          scheduleEmployee.Employee_ID ||
-          scheduleEmployee.id ||
-          ""
-        ).trim();
+      const employeeIdentifierCandidates = [
+  scheduleEmployee.employee_id,
+  scheduleEmployee.Employee_ID,
+  scheduleEmployee.id,
+  scheduleEmployee.supabase_employee_id,
+]
+  .map((value) =>
+    String(value || "").trim().toLowerCase()
+  )
+  .filter(Boolean);
 
       const matchingException =
         scheduleExceptions.find(
@@ -5235,8 +5250,9 @@ const selectedAttendanceEmployees =
                   exceptionEndDate);
 
             return (
-              exceptionEmployeeId ===
-                normalizedEmployeeId &&
+              employeeIdentifierCandidates.includes(
+  exceptionEmployeeId.toLowerCase()
+) &&
               exceptionDay === day &&
               dateIsValid &&
               normalizeBoolean(
