@@ -2841,7 +2841,7 @@ function mapTimeEntryToSupabaseLog(entry, employee = {}) {
   ""
 ),
     employee_id: String(entry.employee_id || employee.id || ""),
-    employee_email: employee.email || entry.employee_email || "",
+    employee_email: entry.employee_email || employee.email || employee.auth_email || "",
     employee_name: entry.employee_name || employee.full_name || "",
     status: entry.category || entry.status || "Working",
     clock_in: toSupabaseTimestamp(
@@ -4410,10 +4410,15 @@ const loadedSupabase = await loadSupabaseReferenceData(
   const managerRoles = ["Admin", "Manager", "TL", "Supervisor", "Q&T Manager", "Payroll", "Reporting", "HR"];
 const userRole = currentUser?.role || currentUser?.access_level || "";
 const isAgentOnly = !managerRoles.includes(userRole);
-  const [selectedEmployeeId, setSelectedEmployeeId] = useState(currentUser?.id || "");
+  const [selectedEmployeeId, setSelectedEmployeeId] =
+  useState("");
 const selectedEmployee = isAgentOnly
   ? currentUser
-  : employees.find((e) => e.id === selectedEmployeeId) || currentUser || null;
+  : employees.find(
+      (employee) =>
+        String(employee.id || employee.employee_id || "") ===
+        String(selectedEmployeeId || "")
+    ) || currentUser || null;
 const filteredTimeLogEmployee =
   filters.employee !== "All"
     ? employees.find(
@@ -7240,6 +7245,15 @@ setTimeEntries((current) => [
       return null;
     }
 
+if (!selectedEmployee?.id) {
+  showToast(
+    "Employee required",
+    "Please select an employee before adding a manual time entry.",
+    "warning"
+  );
+  return null;
+}
+
     if (!newTime.date) {
   showToast(
     "Date required",
@@ -7293,10 +7307,27 @@ const manualClass = isHistoricalEntry
       const manualCategory = newTime.category === "Working" && manualClass.category !== "Working" ? manualClass.category : newTime.category;
       const manualApproval = ["Off-Day Unscheduled", "Early Unscheduled"].includes(manualCategory) ? "Pending Approval" : "Pending";
 
+console.log("Selected Employee:", selectedEmployee);
+
+
       const item = {
         id: `TIME-${Date.now().toString().slice(-6)}`,
-        employee_id: selectedEmployee.id,
-        employee_name: selectedEmployee.full_name,
+        employee_id:
+  selectedEmployee.employee_id ||
+  selectedEmployee.Employee_ID ||
+  selectedEmployee.id,
+
+employee_name:
+  selectedEmployee.full_name ||
+  selectedEmployee.employee_name ||
+  selectedEmployee.Full_Name ||
+  "",
+
+  employee_email:
+  selectedEmployee.email ||
+  selectedEmployee.auth_email ||
+  selectedEmployee.Auth_Email ||
+  "",
         date: employeeDate,
         scheduled_start: schedule.shift_start,
         scheduled_end: schedule.shift_end,
@@ -7317,6 +7348,9 @@ const manualClass = isHistoricalEntry
         ...newTime,
         category: manualCategory,
       };
+
+      console.log("Item being saved:", item);
+
       const savedRows = await supabaseInsert(
   "time_logs",
   mapTimeEntryToSupabaseLog(
@@ -7346,12 +7380,37 @@ const savedTimeEntry = {
     item.id,
 
   employee_id:
-    savedRow.employee_id ||
-    item.employee_id,
+  selectedEmployee.id ||
+  selectedEmployee.employee_id ||
+  selectedEmployee.Employee_ID ||
+  item.employee_id,
 
-  employee_name:
-    savedRow.employee_name ||
-    item.employee_name,
+employee_name:
+  selectedEmployee.full_name ||
+  selectedEmployee.employee_name ||
+  selectedEmployee.Full_Name ||
+  item.employee_name,
+
+  lob:
+  selectedEmployee.lob ||
+  selectedEmployee.LOB ||
+  item.lob,
+
+department:
+  selectedEmployee.department ||
+  selectedEmployee.Department ||
+  item.department,
+
+sub_department:
+  selectedEmployee.sub_department ||
+  selectedEmployee.Sub_Department ||
+  item.sub_department,
+
+created_by:
+  item.created_by ||
+  currentUser?.email ||
+  currentUser?.auth_email ||
+  "",
 
   date:
     savedRow.date ||
@@ -9013,7 +9072,7 @@ if (startupLoading) {
             <div className="agentHero">
               <div>
                 <span>Agent Portal</span>
-                <h2>Welcome, {selectedEmployee.full_name}</h2>
+                <h2>Welcome, {selectedEmployee?.full_name || "Employee"}</h2>
                 <p>{selectedEmployee.role} · {selectedEmployee.lob} · {selectedEmployee.department}{selectedEmployee.sub_department ? ` · ${selectedEmployee.sub_department}` : ""}</p>
                 <div className="profileGrid">
                   <Info label="LOB" value={selectedEmployee.lob} />
@@ -9542,7 +9601,29 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
             <Card title="Manager / TL editable time log">
               <p className="helperText">Managers and TLs can add new time entries and edit previous time logs for agents. Each saved correction is retained in the approval/audit trail.</p>
               <FormGrid>
-                <select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{filteredVisibleEmployees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select>
+                <select
+  value={selectedEmployeeId}
+  onChange={(e) => setSelectedEmployeeId(e.target.value)}
+>
+  <option value="">Select employee</option>
+
+  {filteredVisibleEmployees.map((employee) => {
+    const employeeId =
+      employee.id ||
+      employee.employee_id ||
+      employee.Employee_ID ||
+      "";
+
+    return (
+      <option
+        key={employeeId || employee.email}
+        value={String(employeeId)}
+      >
+        {employee.full_name}
+      </option>
+    );
+  })}
+</select>
                 <input
   type="date"
   value={newTime.date}
