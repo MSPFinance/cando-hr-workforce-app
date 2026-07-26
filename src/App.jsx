@@ -2049,6 +2049,9 @@ const rawSecondBreakEnd =
   "Not Available";
 
   return {
+      has_schedule_exception:
+    Boolean(matchingScheduleException),
+
     shift_start:
       convertEasternScheduleToEmployeeLocal(
         rawShiftStart,
@@ -2112,47 +2115,97 @@ function isTodayOffDay(employee) {
   );
 }
 
-function getAutoWorkClassification(employee, currentTime) {
+function getAutoWorkClassification(
+  employee,
+  currentTime,
+  effectiveSchedule = null
+) {
   if (!employee) {
-    return { category: "Working", approval: "Auto Logged", payableStatus: "Regular", locked: false, reason: "No employee selected" };
+    return {
+      category: "Working",
+      approval: "Auto Logged",
+      payableStatus: "Regular",
+      locked: false,
+      reason: "No employee selected",
+    };
   }
 
-  const nowMinutes = timeToMinutes(currentTime);
-  const schedule = getStableSchedule(employee);
-const shiftStart = timeToMinutes(schedule.shift_start);
-const shiftEnd = timeToMinutes(schedule.shift_end);
+  const nowMinutes =
+    timeToMinutes(currentTime);
 
-  if (isTodayOffDay(employee)) {
+  const schedule =
+    effectiveSchedule ||
+    getStableSchedule(employee);
+
+  const shiftStart =
+    timeToMinutes(schedule.shift_start);
+
+  const shiftEnd =
+    timeToMinutes(schedule.shift_end);
+
+  /*
+    A valid Schedule_Exceptions row replaces the
+    employee's normal off-day rule for that date.
+  */
+  const effectiveOffDay =
+    !schedule.has_schedule_exception &&
+    isTodayOffDay(employee);
+
+  if (effectiveOffDay) {
     return {
       category: "Off-Day Unscheduled",
       approval: "Pending Approval",
-      payableStatus: "Pending Manager Approval",
+      payableStatus:
+        "Pending Manager Approval",
       locked: true,
-      reason: "Employee is scheduled off today",
+      reason:
+        "Employee is scheduled off today",
     };
   }
 
-  if (nowMinutes !== null && shiftStart !== null && nowMinutes < shiftStart - EARLY_SHIFT_START_GRACE_MINUTES) {
+  if (
+    nowMinutes !== null &&
+    shiftStart !== null &&
+    nowMinutes <
+      shiftStart -
+        EARLY_SHIFT_START_GRACE_MINUTES
+  ) {
     return {
       category: "Early Unscheduled",
       approval: "Pending Approval",
-      payableStatus: "Pending Manager Approval",
+      payableStatus:
+        "Pending Manager Approval",
       locked: true,
-      reason: `Employee started more than ${EARLY_SHIFT_START_GRACE_MINUTES} minutes before scheduled shift`,
+      reason:
+        `Employee started more than ${EARLY_SHIFT_START_GRACE_MINUTES} minutes before scheduled shift`,
     };
   }
 
-  if (nowMinutes !== null && shiftEnd !== null && nowMinutes > shiftEnd) {
+  if (
+    nowMinutes !== null &&
+    shiftEnd !== null &&
+    nowMinutes > shiftEnd
+  ) {
     return {
       category: "Overtime",
       approval: "Pending",
-      payableStatus: "Pending Manager Approval",
+      payableStatus:
+        "Pending Manager Approval",
       locked: false,
-      reason: "Auto overtime after scheduled shift end",
+      reason:
+        "Auto overtime after scheduled shift end",
     };
   }
 
-  return { category: "Working", approval: "Auto Logged", payableStatus: "Regular", locked: false, reason: "Within scheduled shift" };
+  return {
+    category: "Working",
+    approval: "Auto Logged",
+    payableStatus: "Regular",
+    locked: false,
+    reason: schedule.has_schedule_exception
+      ? "Within approved schedule exception"
+      : "Within scheduled shift",
+  };
 }
 
 function shouldSplitAutoOvertime(employee, endTime) {
@@ -6518,11 +6571,57 @@ User can now log into the Agent Portal.`
   }
 
     const now = new Date();
-    const time = getEmployeeTimeKey(selectedEmployee, now);
-    const employeeDate = getEmployeeDateKey(selectedEmployee, now);
-    const schedule = getStableSchedule(selectedEmployee);
 
-    const autoClass = getAutoWorkClassification(selectedEmployee, time);
+const time =
+  getEmployeeTimeKey(
+    selectedEmployee,
+    now
+  );
+
+const employeeDate =
+  getEmployeeDateKey(
+    selectedEmployee,
+    now
+  );
+
+const employeeDay =
+  todayDayName(
+    getEmployeeTimeZone(selectedEmployee),
+    now
+  );
+
+const schedule =
+  getStableSchedule(
+    selectedEmployee,
+    [],
+    employeeDay,
+    employeeBreakRows,
+    scheduleExceptions,
+    employeeDate
+  );
+
+const autoClass =
+  getAutoWorkClassification(
+    selectedEmployee,
+    time,
+    schedule
+  );
+
+console.log(
+  "AGENT SCHEDULE CLASSIFICATION",
+  {
+    employee:
+      selectedEmployee.full_name,
+    employeeId:
+      selectedEmployee.id,
+    employeeDate,
+    employeeDay,
+    schedule,
+    autoClass,
+    scheduleExceptionsLoaded:
+      scheduleExceptions.length,
+  }
+);
 
     let latestRequestsForEmployee = requests;
 
