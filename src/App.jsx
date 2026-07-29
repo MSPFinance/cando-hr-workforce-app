@@ -1406,6 +1406,56 @@ async function syncScheduleExceptionsToSupabase(
   };
 }
 
+async function fetchScheduleExceptionRows() {
+  if (!WORKFORCE_SYNC_SHEET_ID) {
+    return [];
+  }
+
+  for (const sheetName of WORKFORCE_EXCEPTION_SHEET_NAMES) {
+    const url =
+      `https://docs.google.com/spreadsheets/d/` +
+      `${WORKFORCE_SYNC_SHEET_ID}/gviz/tq?` +
+      `tqx=out:csv&sheet=` +
+      encodeURIComponent(sheetName);
+
+    try {
+      const response = await fetch(url, {
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        continue;
+      }
+
+      const text = await response.text();
+
+      if (
+        !text ||
+        text.toLowerCase().includes("<html")
+      ) {
+        continue;
+      }
+
+      const rows = parseCsvText(text);
+
+      const mappedRows = rows
+        .map(mapScheduleExceptionSyncRow)
+        .filter(Boolean);
+
+      if (mappedRows.length) {
+        return mappedRows;
+      }
+    } catch (error) {
+      console.warn(
+        `Schedule exceptions sheet ${sheetName} failed:`,
+        error?.message || error
+      );
+    }
+  }
+
+  return [];
+}
+
 function mapBreaksSyncRow(row) {
   const employeeId = String(
     firstValue(row, [
