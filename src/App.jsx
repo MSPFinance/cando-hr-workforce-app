@@ -1350,46 +1350,24 @@ async function syncScheduleExceptionsToSupabase(
     ).values()
   );
 
-  /*
-    Remove only records previously synchronized from
-    the Google Sheet.
-
-    This preserves manually created Supabase exceptions
-    from other sources.
-  */
-  const {
-    data: deletedRows,
-    error: deleteError,
-  } = await supabase
-    .from("schedule_exceptions")
-    .delete()
-    .eq(
-      "source",
-      "Schedule_Exceptions Google Sheet"
-    )
-    .select("id");
-
-  if (deleteError) {
-    throw new Error(
-      `Unable to clear prior schedule exceptions: ${deleteError.message}`
-    );
-  }
+ 
 
   if (!uniqueRows.length) {
-    return {
-      syncedCount: 0,
-      deletedCount:
-        deletedRows?.length || 0,
-    };
-  }
+  return {
+    syncedCount: 0,
+    deletedCount: 0,
+  };
+}
 
   const {
-    data: insertedRows,
-    error: insertError,
-  } = await supabase
-    .from("schedule_exceptions")
-    .insert(uniqueRows)
-    .select();
+  data: insertedRows,
+  error: insertError,
+} = await supabase
+  .from("schedule_exceptions")
+  .upsert(uniqueRows, {
+    onConflict: "exception_id",
+  })
+  .select();
 
   if (insertError) {
     throw new Error(
@@ -1398,12 +1376,11 @@ async function syncScheduleExceptionsToSupabase(
   }
 
   return {
-    syncedCount:
-      insertedRows?.length || 0,
+  syncedCount:
+    insertedRows?.length || 0,
 
-    deletedCount:
-      deletedRows?.length || 0,
-  };
+  deletedCount: 0,
+};
 }
 
 async function fetchScheduleExceptionRows() {
