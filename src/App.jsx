@@ -6788,6 +6788,12 @@ if (
 
     const key = `agent-action-${selectedEmployee.id}-${action}-${resolvedStatus}-${time}`;
     return runProtectedAction(key, action, async () => {
+      const selectedEmployeeTimeLogId =
+  selectedEmployee.supabase_employee_id ||
+  selectedEmployee.employee_id ||
+  selectedEmployee.Employee_ID ||
+  selectedEmployee.id;
+
       let closedPreviousLogs = [];
 
 if (supabase) {
@@ -6800,7 +6806,10 @@ if (supabase) {
   const { data: openLogs, error: openLogsError } = await supabase
     .from("time_logs")
     .select("*")
-    .eq("employee_id", String(selectedEmployee.id))
+    .eq(
+  "employee_id",
+  String(selectedEmployeeTimeLogId)
+)
     .is("clock_out", null);
 
   if (openLogsError) {
@@ -6908,28 +6917,8 @@ console.log(
   "Previous open time logs closed:",
   closedPreviousLogs.length
 );
-const selectedEmployeeTimeLogId =
-  selectedEmployee.supabase_employee_id ||
-  selectedEmployee.employee_id ||
-  selectedEmployee.Employee_ID ||
-  selectedEmployee.id;
 
-      const duplicate = timeEntries.some(
-  (entry) =>
-    String(entry.employee_id || "") ===
-      String(selectedEmployeeTimeLogId || "") &&
-    entry.date === employeeDate &&
-    entry.category === newTime.category &&
-    entry.category_start === newTime.category_start &&
-    entry.category_end === newTime.category_end &&
-    entry.notes === newTime.notes
-);
-
-      if (duplicate) {
-        showToast("Duplicate status log prevented", "This same status/action was already logged for this minute.", "warning");
-        return "silent";
-      }
-
+      
       const activity = {
         id: `ACT-${Date.now().toString().slice(-6)}`,
         employee_id: selectedEmployee.id,
@@ -6945,7 +6934,7 @@ const selectedEmployeeTimeLogId =
 
       const baseTimeEntry = {
         id: `TIME-${Date.now().toString().slice(-6)}`,
-        employee_id: selectedEmployee.id,
+        employee_id: selectedEmployeeTimeLogId,
         employee_name: selectedEmployee.full_name,
         date: employeeDate,
         scheduled_start: schedule.shift_start,
