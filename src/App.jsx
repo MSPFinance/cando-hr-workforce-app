@@ -6794,129 +6794,7 @@ if (
   selectedEmployee.Employee_ID ||
   selectedEmployee.id;
 
-      let closedPreviousLogs = [];
-
-if (supabase) {
-  /*
-    Supabase is the source of truth for time logs.
-
-    Before creating a new status, locate every open status for this
-    employee and close it using the exact start time of the new status.
-  */
-  const { data: openLogs, error: openLogsError } = await supabase
-    .from("time_logs")
-    .select("*")
-    .eq(
-  "employee_id",
-  String(selectedEmployeeTimeLogId)
-)
-    .is("clock_out", null);
-
-  if (openLogsError) {
-    throw new Error(
-      `Unable to check the employee's current status: ${openLogsError.message}`
-    );
-  }
-
-  for (const openLog of openLogs || []) {
-    const clockOutTimestamp = now.toISOString();
-
-    const startValue =
-      openLog.category_start ||
-      openLog.clock_in ||
-      openLog.created_at;
-
-    const startDate = startValue
-      ? new Date(startValue)
-      : null;
-
-    const durationMinutes =
-      startDate &&
-      !Number.isNaN(startDate.getTime())
-        ? Math.max(
-            0,
-            Math.round(
-              (now.getTime() -
-                startDate.getTime()) /
-                60000
-            )
-          )
-        : 0;
-
-    const closePayload = {
-      clock_out: clockOutTimestamp,
-      category_end: clockOutTimestamp,
-      duration_minutes:
-        Number(durationMinutes) || 0,
-    };
-
-    const { data: closedRows, error: closeError } =
-      await supabase
-        .from("time_logs")
-        .update(closePayload)
-        .eq("id", openLog.id)
-        .is("clock_out", null)
-        .select();
-
-    if (closeError) {
-      throw new Error(
-        `Unable to close the previous status: ${closeError.message}`
-      );
-    }
-
-    closedPreviousLogs.push(
-      ...(closedRows || [])
-    );
-  }
-}
-
-/*
-  Update the browser state after Supabase successfully closes
-  the previous status.
-*/
-if (closedPreviousLogs.length) {
-  setTimeEntries((current) =>
-    current.map((entry) => {
-      const savedClosedLog =
-        closedPreviousLogs.find(
-          (closedLog) =>
-            String(closedLog.id) ===
-              String(entry.id) ||
-            String(
-              closedLog.app_log_id || ""
-            ) ===
-              String(
-                entry.app_log_id ||
-                entry.id ||
-                ""
-              )
-        );
-
-      if (!savedClosedLog) {
-        return entry;
-      }
-
-      return {
-        ...entry,
-        ...savedClosedLog,
-
-        category:
-          savedClosedLog.category ||
-          savedClosedLog.status ||
-          entry.category,
-
-        approved:
-          savedClosedLog.approval_status ||
-          entry.approved,
-      };
-    })
-  );
-}
-
-console.log(
-  "Previous open time logs closed:",
-  closedPreviousLogs.length
-);
+     
 
       
       const activity = {
@@ -6959,7 +6837,78 @@ console.log(
         sub_department: selectedEmployee.sub_department || "",
         notes: action,
       };
+      if (!supabase) {
+  throw new Error(
+    "Supabase is not configured. The time status was not saved."
+  );
+}
+const { data: statusResults, error: statusError } =
+  await supabase.rpc(
+    "process_time_log_status",
+    {
+      p_employee_id:
+        String(selectedEmployeeTimeLogId),
 
+      p_employee_email:
+        selectedEmployee.email ||
+        selectedEmployee.auth_email ||
+        "",
+
+      p_employee_name:
+        selectedEmployee.full_name || "",
+
+      p_status:
+        resolvedStatus,
+
+      p_action:
+        action,
+
+      p_event_time:
+        now.toISOString(),
+
+      p_app_log_id:
+        String(baseTimeEntry.id),
+
+      p_approval_status:
+        approvalStatus,
+
+      p_payable_status:
+        baseTimeEntry.payable_status,
+
+      p_notes:
+        action,
+
+      p_lob:
+        selectedEmployee.lob || "",
+
+      p_department:
+        selectedEmployee.department || "",
+
+      p_sub_department:
+        selectedEmployee.sub_department || "",
+    }
+  );
+
+if (statusError) {
+  throw new Error(
+    `Unable to process the time status: ${statusError.message}`
+  );
+}
+
+const statusResult =
+  Array.isArray(statusResults)
+    ? statusResults[0]
+    : statusResults;
+if (!statusResult) {
+  throw new Error(
+    "Supabase completed the request but did not return a time-log result."
+  );
+}
+
+console.log(
+  "Time-log transaction result:",
+  statusResult
+);
       /*
   End Shift only closes the employee's current open status.
 
@@ -6968,33 +6917,78 @@ console.log(
   "Regular shift completed" to duplicate the employee's hours.
 */
 if (action === "Shift Ended") {
-  setActivityLog((current) => [activity, ...current]);
+  setActivityLog((current) => [
+    activity,
+    ...current,
+  ]);
+
+  if (
+    statusResult?.result_action ===
+    "no_open_log"
+  ) {
+    showToast(
+      "No active shift found",
+      "There was no open time log to close.",
+      "warning"
+    );
+
+    return "silent";
+  }
 
   showToast(
     "Shift ended",
-    "The active time log was closed successfully. No duplicate full-shift record was created.",
+    "The active time log was closed. No additional full-shift row was created.",
     "success"
   );
 
   return;
 }
 
+if (
+  statusResult?.result_action ===
+  "same_status_ignored"
+) {
+  showToast(
+    "Status already active",
+    `${resolvedStatus} is already the employee's current status. No additional time log was created.`,
+    "warning"
+  );
+
+  return "silent";
+}
+
 /*
   Shift Started and Status Changed still create a new open
   chronological time log.
 */
-const entriesToSave = [baseTimeEntry];
+const savedTimeEntry = {
+  ...baseTimeEntry,
 
-await supabaseInsert(
-  "time_logs",
-  entriesToSave.map((entry) =>
-    mapTimeEntryToSupabaseLog(
-      entry,
-      selectedEmployee
-    )
-  ),
-  "Agent time log"
-);
+  supabase_id:
+    statusResult?.log_id || "",
+
+  id:
+    statusResult?.app_log_id ||
+    baseTimeEntry.id,
+
+  app_log_id:
+    statusResult?.app_log_id ||
+    baseTimeEntry.id,
+
+  employee_id:
+    statusResult?.employee_id ||
+    selectedEmployeeTimeLogId,
+
+  category:
+    statusResult?.status ||
+    resolvedStatus,
+
+  clock_in:
+    statusResult?.clock_in ||
+    baseTimeEntry.clock_in,
+};
+
+const entriesToSave = [savedTimeEntry];
 
 for (const entry of entriesToSave) {
   await googleAddRow(
