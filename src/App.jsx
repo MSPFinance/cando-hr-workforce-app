@@ -80,6 +80,9 @@ const WORKFORCE_SYNC_SHEET_ID = "1cmYlztzC9oc8z6LSD6ER_UqU2F17Lq7fiMAAWLnMy5s";
 const WORKFORCE_SYNC_SHEET_NAMES = ["App_Schedules"];
 const WORKFORCE_BREAKS_SHEET_NAMES = ["Breaks"];
 const WORKFORCE_BALANCES_SHEET_NAMES = ["App_Balances", "employee_balances"];
+const WORKFORCE_EXCEPTION_SHEET_NAMES = [
+  "Schedule_Exceptions",
+];
 const WORKFORCE_SYNC_AUTOMATIC_ENABLED = true;
 const WORKFORCE_SYNC_SCHEDULE_DAY = 6; // Saturday in the Magnemite app timezone.
 const WORKFORCE_SYNC_SCHEDULE_TIME = "05:00"; // Saturday morning sync window.
@@ -1163,6 +1166,245 @@ async function fetchWorkforceSheetRows() {
   return [];
 }
 
+function mapScheduleExceptionSyncRow(row) {
+  const exceptionId = String(
+    firstValue(row, [
+      "Exception_ID",
+      "Exception ID",
+      "exception_id",
+    ]) || ""
+  ).trim();
+
+  const employeeId = String(
+    firstValue(row, [
+      "Employee_ID",
+      "Employee ID",
+      "employee_id",
+    ]) || ""
+  ).trim();
+
+  const fullName = String(
+    firstValue(row, [
+      "Full_Name",
+      "Full Name",
+      "Employee Name",
+      "Employee",
+      "full_name",
+    ]) || ""
+  ).trim();
+
+  const weekday = normalizeDayName(
+    firstValue(row, [
+      "Weekday",
+      "weekday",
+      "Day",
+      "day",
+    ])
+  );
+
+  if (!employeeId || !weekday) {
+    return null;
+  }
+
+  const startDate = formatDateOnly(
+    firstValue(row, [
+      "Start_Date",
+      "Start Date",
+      "start_date",
+    ])
+  );
+
+  const endDate = formatDateOnly(
+    firstValue(row, [
+      "End_Date",
+      "End Date",
+      "end_date",
+    ])
+  );
+
+  return {
+    exception_id:
+      exceptionId ||
+      `EXC-${employeeId}-${weekday
+        .slice(0, 3)
+        .toUpperCase()}`,
+
+    employee_id: employeeId,
+    full_name: fullName,
+
+    start_date: startDate || null,
+    end_date: endDate || null,
+
+    weekday,
+
+    shift_start_est:
+      formatMilitaryTime(
+        firstValue(row, [
+          "Shift_Start_EST",
+          "Shift Start EST",
+          "shift_start_est",
+        ])
+      ) || null,
+
+    shift_end_est:
+      formatMilitaryTime(
+        firstValue(row, [
+          "Shift_End_EST",
+          "Shift End EST",
+          "shift_end_est",
+        ])
+      ) || null,
+
+    break_1_start_est:
+      formatMilitaryTime(
+        firstValue(row, [
+          "Break_1_Start_EST",
+          "Break 1 Start EST",
+          "break_1_start_est",
+        ])
+      ) || null,
+
+    break_1_end_est:
+      formatMilitaryTime(
+        firstValue(row, [
+          "Break_1_End_EST",
+          "Break 1 End EST",
+          "break_1_end_est",
+        ])
+      ) || null,
+
+    break_2_start_est:
+      formatMilitaryTime(
+        firstValue(row, [
+          "Break_2_Start_EST",
+          "Break 2 Start EST",
+          "break_2_start_est",
+        ])
+      ) || null,
+
+    break_2_end_est:
+      formatMilitaryTime(
+        firstValue(row, [
+          "Break_2_End_EST",
+          "Break 2 End EST",
+          "break_2_end_est",
+        ])
+      ) || null,
+
+    enabled: normalizeBoolean(
+      firstValue(row, [
+        "Enabled",
+        "enabled",
+      ])
+    ),
+
+    priority: safeNumber(
+      firstValue(row, [
+        "Priority",
+        "priority",
+      ]),
+      1
+    ),
+
+    notes: String(
+      firstValue(row, [
+        "Notes",
+        "notes",
+      ]) || ""
+    ).trim(),
+
+    source:
+      "Schedule_Exceptions Google Sheet",
+
+    updated_at: new Date().toISOString(),
+  };
+}
+
+async function syncScheduleExceptionsToSupabase(
+  exceptionRows = []
+) {
+  if (!supabase) {
+    throw new Error(
+      "Supabase is not configured."
+    );
+  }
+
+  if (!Array.isArray(exceptionRows)) {
+    return {
+      syncedCount: 0,
+      deletedCount: 0,
+    };
+  }
+
+  /*
+    Deduplicate the Google Sheet rows.
+
+    Each exception is identified by exception_id.
+  */
+  const uniqueRows = Array.from(
+    new Map(
+      exceptionRows.map((row) => [
+        row.exception_id,
+        row,
+      ])
+    ).values()
+  );
+
+  /*
+    Remove only records previously synchronized from
+    the Google Sheet.
+
+    This preserves manually created Supabase exceptions
+    from other sources.
+  */
+  const {
+    data: deletedRows,
+    error: deleteError,
+  } = await supabase
+    .from("schedule_exceptions")
+    .delete()
+    .eq(
+      "source",
+      "Schedule_Exceptions Google Sheet"
+    )
+    .select("id");
+
+  if (deleteError) {
+    throw new Error(
+      `Unable to clear prior schedule exceptions: ${deleteError.message}`
+    );
+  }
+
+  if (!uniqueRows.length) {
+    return {
+      syncedCount: 0,
+      deletedCount:
+        deletedRows?.length || 0,
+    };
+  }
+
+  const {
+    data: insertedRows,
+    error: insertError,
+  } = await supabase
+    .from("schedule_exceptions")
+    .insert(uniqueRows)
+    .select();
+
+  if (insertError) {
+    throw new Error(
+      `Unable to sync schedule exceptions: ${insertError.message}`
+    );
+  }
+
+  return {
+    syncedCount:
+      insertedRows?.length || 0,
+
+    deletedCount:
+      deletedRows?.length || 0,
+  };
+}
 
 function mapBreaksSyncRow(row) {
   const employeeId = String(
@@ -4126,13 +4368,24 @@ const [attendanceDetailView, setAttendanceDetailView] =
     const { silent = false, automatic = false } = options;
 
     try {
-      const [workforceRows, breakRows, balanceRows] = await Promise.all([
-        fetchWorkforceSheetRows(),
-        fetchBreaksSheetRows(),
-        fetchBalanceSheetRows(),
-      ]);
+      const [
+  workforceRows,
+  breakRows,
+  balanceRows,
+  exceptionRows,
+] = await Promise.all([
+  fetchWorkforceSheetRows(),
+  fetchBreaksSheetRows(),
+  fetchBalanceSheetRows(),
+  fetchScheduleExceptionRows(),
+]);
 
-      if (!workforceRows.length && !breakRows.length && !balanceRows.length) {
+      if (
+  !workforceRows.length &&
+  !breakRows.length &&
+  !balanceRows.length &&
+  !exceptionRows.length
+) {
         if (!silent) {
           showToast(
             "Workforce sheet not synced",
@@ -4152,6 +4405,18 @@ const [attendanceDetailView, setAttendanceDetailView] =
 rosterResult = mergeWorkforceRowsIntoEmployees(employees, workforceRows, { importMissing: true });
 breakResult = mergeBreakRowsIntoEmployees(rosterResult.employees, breakRows);
 balanceResult = mergeBalanceRowsIntoEmployees(breakResult.employees, balanceRows);
+
+const exceptionSyncResult =
+  await syncScheduleExceptionsToSupabase(
+    exceptionRows
+  );
+
+console.log(
+  "Schedule exception sync completed:",
+  exceptionSyncResult
+);
+
+await loadScheduleExceptions();
 
 finalSyncedEmployees = balanceResult.employees;
 setEmployees(finalSyncedEmployees);
@@ -4239,21 +4504,23 @@ if (typeof refreshLiveData === "function") {
         breakMissingCount: breakResult.missingCount,
         balanceUpdatedCount: balanceResult.updatedCount,
         balanceMissingCount: balanceResult.missingCount,
+        exceptionSyncedCount:
+  exceptionSyncResult.syncedCount,
       };
 
       setLastWorkforceSync({ ...syncResult, syncedAt, syncMode, nextScheduledSync: "Saturday 5:00 AM" });
 
       setDatabaseStatus(
-        `${syncMode} completed: ${rosterResult.updatedCount} roster employee(s), ${breakResult.updatedCount} break schedule employee(s), and ${balanceResult.updatedCount} balance row(s) synced. Protected identity fields were not overwritten.`
-      );
+  `${syncMode} completed: ${rosterResult.updatedCount} roster employee(s), ${breakResult.updatedCount} break schedule employee(s), ${balanceResult.updatedCount} balance row(s), and ${exceptionSyncResult.syncedCount} schedule exception row(s) synced. Protected identity fields were not overwritten.`
+);
 
       if (!silent) {
-        showToast(
-          "Workforce sheet synced",
-          `${rosterResult.updatedCount} roster employee(s), ${breakResult.updatedCount} break schedule employee(s), and ${balanceResult.updatedCount} balance row(s) synced. Blank breaks show as Not Available.`,
-          "success"
-        );
-      }
+  showToast(
+    "Workforce sheet synced",
+    `${rosterResult.updatedCount} roster employee(s), ${breakResult.updatedCount} break schedule employee(s), ${balanceResult.updatedCount} balance row(s), and ${exceptionSyncResult.syncedCount} schedule exception row(s) synced. Blank breaks show as Not Available.`,
+    "success"
+  );
+}
 if (finalSyncedEmployees?.length) {
   setEmployees(finalSyncedEmployees);
 }
@@ -4297,10 +4564,16 @@ if (finalSyncedEmployees?.length) {
 
   Load these rows before applying the Supabase authentication overlay.
 */
-const [workforceRows, breakRows, balanceRows] = await Promise.all([
+const [
+  workforceRows,
+  breakRows,
+  balanceRows,
+  exceptionRows,
+] = await Promise.all([
   fetchWorkforceSheetRows(),
   fetchBreaksSheetRows(),
   fetchBalanceSheetRows(),
+  fetchScheduleExceptionRows(),
 ]);
 
 const rosterResult = mergeWorkforceRowsIntoEmployees(
