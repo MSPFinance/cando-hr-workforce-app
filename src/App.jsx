@@ -4824,8 +4824,30 @@ const loadedSupabase = await loadSupabaseReferenceData(
   const canAccessAdmin = hasAdminAccess(currentUser);
   const isAuthenticated = Boolean(sessionUserEmail && currentUser);
   const managerRoles = ["Admin", "Manager", "TL", "Supervisor", "Q&T Manager", "Payroll", "Reporting", "HR", "Executive"];
-const userRole = currentUser?.role || currentUser?.access_level || "";
+const userRole =
+  currentUser?.access_level ||
+  currentUser?.role ||
+  "";
 const isAgentOnly = !managerRoles.includes(userRole);
+useEffect(() => {
+  if (!isAuthenticated || !currentUser) {
+    return;
+  }
+
+  const effectiveAccess =
+  currentUser?.access_level ||
+  currentUser?.role ||
+  "";
+
+  if (effectiveAccess === "Executive") {
+    setAdminMode(true);
+    setTab("dashboard");
+  }
+}, [
+  isAuthenticated,
+  currentUser?.access_level,
+  currentUser?.role,
+]);
   const [selectedEmployeeId, setSelectedEmployeeId] =
   useState("");
 const selectedEmployee = isAgentOnly
