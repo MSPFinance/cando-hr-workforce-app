@@ -535,6 +535,7 @@ const ROLE_ACCESS = {
   HR: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting", "rules"],
   Payroll: ["portal", "dashboard", "payroll", "reporting"],
   Admin: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting", "rules"],
+  Executive: ["portal", "dashboard", "reporting"],
 };
 
 function canAccess(role, area) {
@@ -4822,7 +4823,7 @@ const loadedSupabase = await loadSupabaseReferenceData(
   : null;
   const canAccessAdmin = hasAdminAccess(currentUser);
   const isAuthenticated = Boolean(sessionUserEmail && currentUser);
-  const managerRoles = ["Admin", "Manager", "TL", "Supervisor", "Q&T Manager", "Payroll", "Reporting", "HR"];
+  const managerRoles = ["Admin", "Manager", "TL", "Supervisor", "Q&T Manager", "Payroll", "Reporting", "HR", "Executive"];
 const userRole = currentUser?.role || currentUser?.access_level || "";
 const isAgentOnly = !managerRoles.includes(userRole);
   const [selectedEmployeeId, setSelectedEmployeeId] =
