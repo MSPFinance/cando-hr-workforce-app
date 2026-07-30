@@ -4301,7 +4301,17 @@ function HRWorkforceApp() {
   const [adminMode, setAdminMode] = useState(false);
   const [search, setSearch] = useState("");
   const [reportView, setReportView] = useState("LOB");
-  const [filters, setFilters] = useState({ lob: "All", department: "All", subDepartment: "All", employee: "All", country: "All", category: "All", startDate: "", endDate: "" });
+const [filters, setFilters] = useState({
+  lob: "All",
+  department: "All",
+  subDepartment: "All",
+  teamLeader: "All",
+  employee: "All",
+  country: "All",
+  category: "All",
+  startDate: "",
+  endDate: "",
+});
   const [agentStatus, setAgentStatus] = useState("Working");
   const [newTime, setNewTime] = useState({
   date: today,
@@ -4927,13 +4937,32 @@ const visibleActivity = isAgentOnly && currentUser?.id
   
   const filteredVisibleEmployees = visibleEmployees.filter((employee) => {
   if (!employee) return false;
-    return (
-      (filters.lob === "All" || employee.lob === filters.lob) &&
-      (filters.department === "All" || employee.department === filters.department) &&
-      (filters.subDepartment === "All" || employee.sub_department === filters.subDepartment) &&
-      (filters.employee === "All" || employee.full_name === filters.employee) &&
-      (filters.country === "All" || employee.country === filters.country)
-    );
+    const assignedLeader = String(
+  employee.team_leader ||
+    employee.supervisor ||
+    employee.manager ||
+    ""
+).trim();
+
+return (
+  (filters.lob === "All" ||
+    employee.lob === filters.lob) &&
+
+  (filters.department === "All" ||
+    employee.department === filters.department) &&
+
+  (filters.subDepartment === "All" ||
+    employee.sub_department === filters.subDepartment) &&
+
+  (filters.teamLeader === "All" ||
+    assignedLeader === filters.teamLeader) &&
+
+  (filters.employee === "All" ||
+    employee.full_name === filters.employee) &&
+
+  (filters.country === "All" ||
+    employee.country === filters.country)
+);
   });
 const scheduleRows =
   filters.employee !== "All"
@@ -6206,8 +6235,18 @@ const {
 */
 
   function resetFilters() {
-    setFilters({ lob: "All", department: "All", subDepartment: "All", employee: "All", country: "All", category: "All", startDate: "", endDate: "" });
-  }
+  setFilters({
+    lob: "All",
+    department: "All",
+    subDepartment: "All",
+    teamLeader: "All",
+    employee: "All",
+    country: "All",
+    category: "All",
+    startDate: "",
+    endDate: "",
+  });
+}
 
   /*
   Disabled temporarily.
@@ -6235,7 +6274,41 @@ const {
       .filter(Boolean)
   ),
 ];
-  const employeeOptions = ["All", ...visibleEmployees.map((e) => e.full_name)];
+const teamLeaderOptions = [
+  "All",
+  ...new Set(
+    visibleEmployees
+      .map(
+        (employee) =>
+          employee.team_leader ||
+          employee.supervisor ||
+          employee.manager ||
+          ""
+      )
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  ),
+];
+  const employeeOptions = [
+  "All",
+  ...visibleEmployees
+    .filter((employee) => {
+      if (filters.teamLeader === "All") {
+        return true;
+      }
+
+      const assignedLeader = String(
+        employee.team_leader ||
+          employee.supervisor ||
+          employee.manager ||
+          ""
+      ).trim();
+
+      return assignedLeader === filters.teamLeader;
+    })
+    .map((employee) => employee.full_name)
+    .filter(Boolean),
+];
   const countryOptions = ["All", ...new Set(visibleEmployees.map((e) => e.country).filter(Boolean))];
   const categoryOptions = ["All", ...timeCategories, "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change"];
 
@@ -6292,6 +6365,13 @@ const {
     timeLogEmployee?.full_name ||
     "";
 
+    const entryLeader = String(
+  timeLogEmployee?.team_leader ||
+    timeLogEmployee?.supervisor ||
+    timeLogEmployee?.manager ||
+    ""
+).trim();
+
   const entryCategory =
     timeLog.category ||
     timeLog.status ||
@@ -6319,6 +6399,10 @@ const {
     String(filters.subDepartment || "")
       .trim()
       .toLowerCase()
+) &&
+(
+  filters.teamLeader === "All" ||
+  entryLeader === filters.teamLeader
 ) &&
     (
       filters.employee === "All" ||
@@ -9639,6 +9723,24 @@ if (startupLoading) {
 </Field>
             <Field label="Department"><select value={filters.department} onChange={(e) => setFilters({ ...filters, department: e.target.value })}>{departmentOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Sub-Department"><select value={filters.subDepartment} onChange={(e) => setFilters({ ...filters, subDepartment: e.target.value })}>{subDepartmentOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
+          <Field label="Manager / TL">
+  <select
+    value={filters.teamLeader}
+    onChange={(event) =>
+      setFilters({
+        ...filters,
+        teamLeader: event.target.value,
+        employee: "All",
+      })
+    }
+  >
+    {teamLeaderOptions.map((leader) => (
+      <option key={leader} value={leader}>
+        {leader}
+      </option>
+    ))}
+  </select>
+</Field>
             <Field label="Employee"><select value={filters.employee} onChange={(e) => setFilters({ ...filters, employee: e.target.value })}>{employeeOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Country"><select value={filters.country} onChange={(e) => setFilters({ ...filters, country: e.target.value })}>{countryOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Type"><select value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })}>{categoryOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
