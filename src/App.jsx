@@ -177,8 +177,11 @@ const ROLE_ACCESS_PROFILES = {
   HR: { label: "HR", tasks: ["Employee Records", "Status Review", "Reporting"], tabs: ["agent", "dashboard", "employees", "reporting"] },
   Payroll: { label: "Payroll", tasks: ["Payroll Review", "Approved Time", "Country/Holiday Review"], tabs: ["agent", "dashboard", "payroll", "reporting"] },
   Admin: { label: "Admin", tasks: ["Full Admin Access", "Settings", "Rules", "Schedules", "Approvals", "Payroll"], tabs: ["agent", "dashboard", "employees", "schedule", "time", "requests", "manager", "payroll", "reporting", "rules"] },
-  Executive: { label: "Executive", tasks: ["Executive Dashboard", "Reporting", "Productivity"], tabs: ["agent", "dashboard", "reporting"] },
-  Reporting: { label: "Reporting", tasks: ["Reports", "Payroll Planning", "Schedule Visibility"], tabs: ["dashboard", "payroll", "reporting", "schedule"] },
+Executive: {
+  label: "Executive",
+  tasks: ["Live Floor Dashboard"],
+  tabs: ["dashboard"]
+},  Reporting: { label: "Reporting", tasks: ["Reports", "Payroll Planning", "Schedule Visibility"], tabs: ["dashboard", "payroll", "reporting", "schedule"] },
 };
 
 // Schedule fields are treated as the employee's fixed master schedule.
@@ -535,7 +538,7 @@ const ROLE_ACCESS = {
   HR: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting", "rules"],
   Payroll: ["portal", "dashboard", "payroll", "reporting"],
   Admin: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting", "rules"],
-  Executive: ["portal", "dashboard", "reporting"],
+  Executive: ["dashboard"],
 };
 
 function canAccess(role, area) {
@@ -9678,11 +9681,31 @@ if (startupLoading) {
           <div><strong>Magnemite</strong><span>Workforce Management Made Simple</span></div>
         </div>
         <nav>
-          {navItems.map(([key, Icon]) => (
-            <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>
-              <Icon size={18} /> {key === "agent" ? "My Portal" : key === "manager" ? "Approvals" : key}
-            </button>
-          ))}
+          {navItems
+  .filter(([key]) => {
+    const accessArea =
+      key === "agent"
+        ? "portal"
+        : key === "manager"
+          ? "approvals"
+          : key;
+
+    return canAccess(userRole, accessArea);
+  })
+  .map(([key, Icon]) => (
+    <button
+      key={key}
+      className={tab === key ? "active" : ""}
+      onClick={() => setTab(key)}
+    >
+      <Icon size={18} />
+      {key === "agent"
+        ? "My Portal"
+        : key === "manager"
+          ? "Approvals"
+          : key.charAt(0).toUpperCase() + key.slice(1)}
+    </button>
+  ))}
         </nav>
         {isAuthenticated && (
           <div className="sessionBox">
