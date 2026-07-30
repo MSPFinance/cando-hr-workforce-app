@@ -4433,10 +4433,34 @@ rosterResult = mergeWorkforceRowsIntoEmployees(employees, workforceRows, { impor
 breakResult = mergeBreakRowsIntoEmployees(rosterResult.employees, breakRows);
 balanceResult = mergeBalanceRowsIntoEmployees(breakResult.employees, balanceRows);
 
-const exceptionSyncResult =
-  await syncScheduleExceptionsToSupabase(
-    exceptionRows
+const exceptionResponse = await fetch("/api/sync-schedule-exceptions", {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json",
+    "x-sync-secret": import.meta.env.VITE_SCHEDULE_SYNC_SECRET,
+  },
+  body: JSON.stringify({
+  rows: exceptionRows,
+}),
+});
+
+const exceptionData = await exceptionResponse.json();
+
+if (!exceptionResponse.ok) {
+  throw new Error(
+    exceptionData?.error ||
+      exceptionData?.message ||
+      "Unable to sync schedule exceptions."
   );
+}
+
+const exceptionSyncResult = {
+  syncedCount:
+    exceptionData.syncedCount ??
+    exceptionData.count ??
+    exceptionData.data?.length ??
+    0,
+};
 
 console.log(
   "Schedule exception sync completed:",
