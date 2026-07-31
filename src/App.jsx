@@ -2745,6 +2745,17 @@ function employeeMonthlyAttendance(employee, timeEntries = [], requests = []) {
     approvedRequests: approvedRequests.slice(0, 6),
   };
 }
+function isActiveEmployee(employee) {
+  const status = String(
+    employee?.employment_status ||
+      employee?.status ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+
+  return status === "active";
+}
 function normalizeAccessRole(value) {
   const normalized = String(value || "")
     .trim()
@@ -4588,7 +4599,8 @@ console.log(
 
 await loadScheduleExceptions();
 
-finalSyncedEmployees = balanceResult.employees;
+finalSyncedEmployees =
+  balanceResult.employees.filter(isActiveEmployee);
 setEmployees(finalSyncedEmployees);
 if (false && supabase && finalSyncedEmployees.length) {
   const employeesForBreakSync =
@@ -4762,7 +4774,8 @@ const balanceResult = mergeBalanceRowsIntoEmployees(
   balanceRows
 );
 
-const googleSourceEmployees = balanceResult.employees;
+const googleSourceEmployees =
+  balanceResult.employees.filter(isActiveEmployee);
 
 setEmployees(googleSourceEmployees);
 
@@ -4933,7 +4946,11 @@ const loadedSupabase = await loadSupabaseReferenceData(
   hasAdminAccess(currentUser);
 
 const isAuthenticated =
-  Boolean(sessionUserEmail && currentUser);
+  Boolean(
+    sessionUserEmail &&
+      currentUser &&
+      isActiveEmployee(currentUser)
+  );
 
 const userRole = normalizeAccessRole(
   currentUser?.access_level ||
@@ -5008,9 +5025,16 @@ const filteredTimeLogEmployeeId =
   filteredTimeLogEmployee?.id ||
   "";
 
-  const visibleEmployees = isAgentOnly && currentUser
-  ? [currentUser]
-  : employees.filter(Boolean);
+  const visibleEmployees =
+  isAgentOnly && currentUser
+    ? isActiveEmployee(currentUser)
+      ? [currentUser]
+      : []
+    : employees.filter(
+        (employee) =>
+          Boolean(employee) &&
+          isActiveEmployee(employee)
+      );
  const visibleTime = isAgentOnly && currentUser?.id
   ? timeEntries.filter((t) => t.employee_id === currentUser.id)
   : timeEntries;
