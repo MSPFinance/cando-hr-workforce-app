@@ -2754,7 +2754,38 @@ function isActiveEmployee(employee) {
     .trim()
     .toLowerCase();
 
-  return status === "active";
+  const fullName = String(
+    employee?.full_name ||
+      employee?.name ||
+      ""
+  ).trim();
+
+  const email = String(
+    employee?.email || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const employeeId = String(
+    employee?.employee_id ||
+      employee?.id ||
+      ""
+  ).trim();
+
+  const isPlaceholderName =
+    !fullName ||
+    fullName.toLowerCase() ===
+      "roster employee pending name";
+
+  const hasValidIdentity =
+    Boolean(employeeId) &&
+    Boolean(email) &&
+    !isPlaceholderName;
+
+  return (
+    status === "active" &&
+    hasValidIdentity
+  );
 }
 function normalizeAccessRole(value) {
   const normalized = String(value || "")
@@ -4559,7 +4590,11 @@ const [attendanceDetailView, setAttendanceDetailView] =
 
       let finalSyncedEmployees = [];
 
-rosterResult = mergeWorkforceRowsIntoEmployees(employees, workforceRows, { importMissing: true });
+rosterResult = mergeWorkforceRowsIntoEmployees(
+  employees,
+  workforceRows,
+  { importMissing: false }
+);
 breakResult = mergeBreakRowsIntoEmployees(rosterResult.employees, breakRows);
 balanceResult = mergeBalanceRowsIntoEmployees(breakResult.employees, balanceRows);
 
@@ -6491,8 +6526,15 @@ const teamLeaderOptions = [
 
       return assignedLeader === filters.teamLeader;
     })
-    .map((employee) => employee.full_name)
-    .filter(Boolean),
+    .map((employee) =>
+  String(employee.full_name || "").trim()
+)
+.filter(
+  (name) =>
+    Boolean(name) &&
+    name.toLowerCase() !==
+      "roster employee pending name"
+),
 ];
   const countryOptions = ["All", ...new Set(visibleEmployees.map((e) => e.country).filter(Boolean))];
   const categoryOptions = ["All", ...timeCategories, "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change"];
