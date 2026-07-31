@@ -4838,13 +4838,16 @@ useEffect(() => {
   }
 
   const effectiveAccess =
-  currentUser?.access_level ||
-  currentUser?.role ||
-  "";
+    currentUser.access_level ||
+    currentUser.role ||
+    "";
 
-  if (effectiveAccess === "Executive") {
+  if (managerRoles.includes(effectiveAccess)) {
     setAdminMode(true);
-    setTab("dashboard");
+
+    if (effectiveAccess === "Executive") {
+      setTab("dashboard");
+    }
   }
 }, [
   isAuthenticated,
