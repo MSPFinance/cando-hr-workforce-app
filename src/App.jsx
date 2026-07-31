@@ -532,8 +532,29 @@ const ROLE_ACCESS = {
   Employee: ["portal"],
   Agent: ["portal"],
   Supervisor: ["portal", "dashboard", "schedule", "time", "requests", "approvals", "reporting"],
+  TL: [
+    "portal",
+    "dashboard",
+    "schedule",
+    "time",
+    "requests",
+    "approvals",
+    "reporting",
+  ],
   "Team Lead": ["portal", "dashboard", "schedule", "time", "requests", "approvals", "reporting"],
   Manager: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting", "rules"],
+  Approvals: [
+  "portal",
+  "dashboard",
+  "employees",
+  "schedule",
+  "time",
+  "requests",
+  "approvals",
+  "payroll",
+  "reporting",
+  "rules",
+],
   Reporting: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting"],
   HR: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting", "rules"],
   Payroll: ["portal", "dashboard", "payroll", "reporting"],
@@ -542,7 +563,12 @@ const ROLE_ACCESS = {
 };
 
 function canAccess(role, area) {
-  return (ROLE_ACCESS[role] || []).includes(area);
+  const normalizedRole =
+    normalizeAccessRole(role);
+
+  return (
+    ROLE_ACCESS[normalizedRole] || []
+  ).includes(area);
 }
 
 function canEditSchedules(role) {
@@ -2719,14 +2745,93 @@ function employeeMonthlyAttendance(employee, timeEntries = [], requests = []) {
     approvedRequests: approvedRequests.slice(0, 6),
   };
 }
+function normalizeAccessRole(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+
+  if (!normalized) {
+    return "Employee";
+  }
+
+  if (normalized === "executive") {
+    return "Executive";
+  }
+
+  if (normalized === "admin") {
+    return "Admin";
+  }
+
+  if (normalized === "hr") {
+    return "HR";
+  }
+
+  if (normalized === "payroll") {
+    return "Payroll";
+  }
+
+  if (normalized === "reporting") {
+    return "Reporting";
+  }
+
+  if (normalized === "approvals") {
+    return "Approvals";
+  }
+
+  if (
+    normalized === "tl" ||
+    normalized.includes("team lead") ||
+    normalized.includes("team leader") ||
+    normalized.includes("supervisor")
+  ) {
+    return "TL";
+  }
+
+  if (
+    normalized === "manager" ||
+    normalized.includes("manager")
+  ) {
+    return "Manager";
+  }
+
+  if (
+    normalized === "employee" ||
+    normalized === "agent"
+  ) {
+    return "Employee";
+  }
+
+  return "Employee";
+}
 
 function hasAdminAccess(employee) {
-  return ADMIN_ACCESS_LEVELS.includes(employee?.access_level || employee?.role || "");
+  const accessRole = normalizeAccessRole(
+    employee?.access_level ||
+    employee?.role
+  );
+
+  return [
+    "TL",
+    "Manager",
+    "Approvals",
+    "Reporting",
+    "HR",
+    "Payroll",
+    "Admin",
+    "Executive",
+  ].includes(accessRole);
 }
 
 function getAccessProfile(employee) {
-  const key = employee?.access_level || employee?.role || "Employee";
-  return ROLE_ACCESS_PROFILES[key] || ROLE_ACCESS_PROFILES.Employee;
+  const key = normalizeAccessRole(
+    employee?.access_level ||
+    employee?.role
+  );
+
+  return (
+    ROLE_ACCESS_PROFILES[key] ||
+    ROLE_ACCESS_PROFILES.Employee
+  );
 }
 
 function balanceDays(employee, type) {
@@ -4824,30 +4929,57 @@ const loadedSupabase = await loadSupabaseReferenceData(
         normalizeEmail(sessionUserEmail)
     ) || null
   : null;
-  const canAccessAdmin = hasAdminAccess(currentUser);
-  const isAuthenticated = Boolean(sessionUserEmail && currentUser);
-  const managerRoles = ["Admin", "Manager", "TL", "Supervisor", "Q&T Manager", "Payroll", "Reporting", "HR", "Executive"];
-const userRole =
+ const canAccessAdmin =
+  hasAdminAccess(currentUser);
+
+const isAuthenticated =
+  Boolean(sessionUserEmail && currentUser);
+
+const userRole = normalizeAccessRole(
   currentUser?.access_level ||
-  currentUser?.role ||
-  "";
-const isAgentOnly = !managerRoles.includes(userRole);
+  currentUser?.role
+);
+
+const managerRoles = [
+  "Admin",
+  "Manager",
+  "TL",
+  "Approvals",
+  "Payroll",
+  "Reporting",
+  "HR",
+  "Executive",
+];
+
+const isAgentOnly =
+  !managerRoles.includes(userRole);
 useEffect(() => {
   if (!isAuthenticated || !currentUser) {
     return;
   }
 
   const effectiveAccess =
-    currentUser.access_level ||
-    currentUser.role ||
-    "";
+    normalizeAccessRole(
+      currentUser.access_level ||
+      currentUser.role
+    );
 
-  if (managerRoles.includes(effectiveAccess)) {
-    setAdminMode(true);
+  const hasManagementAccess =
+    managerRoles.includes(effectiveAccess);
 
-    if (effectiveAccess === "Executive") {
-      setTab("dashboard");
-    }
+  setAdminMode(hasManagementAccess);
+
+  if (effectiveAccess === "Executive") {
+    setTab("dashboard");
+    return;
+  }
+
+  if (hasManagementAccess) {
+    setTab((currentTab) =>
+      currentTab === "agent"
+        ? "dashboard"
+        : currentTab
+    );
   }
 }, [
   isAuthenticated,
