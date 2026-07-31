@@ -159,13 +159,13 @@ const DEFAULT_LOGIN_PASSWORD = "Welcome2026!";
 const ADMIN_ACCESS_LEVELS = ["TL", "Team Lead", "Supervisor", "Manager", "Approvals", "Reporting", "HR", "Payroll", "Admin", "Executive"];
 const OT_REQUESTS_ENABLED = false;
 const EARLY_SHIFT_START_GRACE_MINUTES = 15;
-const REQUEST_TYPE_OPTIONS = ["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave"];
+const REQUEST_TYPE_OPTIONS = ["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Day off due to Swap"];
 const APPROVED_ATTENDANCE_ABSENCE_TYPES = [
   "PTO",
   "VTO",
   "Sick Leave",
   "Paid Leave",
-  "Unpaid Leave",
+  "Unpaid Leave", "Day off due to Swap"
 ];
 
 const ROLE_PROFILE_OPTIONS = ["Employee", "TL", "Manager", "Approvals", "Reporting", "HR", "Payroll", "Admin", "Executive"];
@@ -2726,7 +2726,26 @@ function showSickBalanceForCountry(country) {
 }
 
 function requestDaysValue(request) {
-  return safeNumber(request?.requested_days ?? request?.days ?? request?.hours ?? request?.requested_hours, 0);
+  const requestType = String(
+    request?.type ||
+      request?.request_type ||
+      request?.Request_Type ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+
+  if (requestType === "day off due to swap") {
+    return 0;
+  }
+
+  return safeNumber(
+    request?.requested_days ??
+      request?.days ??
+      request?.hours ??
+      request?.requested_hours,
+    0
+  );
 }
 
 function employeeMonthlyAttendance(employee, timeEntries = [], requests = []) {
@@ -6537,7 +6556,7 @@ const teamLeaderOptions = [
 ),
 ];
   const countryOptions = ["All", ...new Set(visibleEmployees.map((e) => e.country).filter(Boolean))];
-  const categoryOptions = ["All", ...timeCategories, "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change"];
+  const categoryOptions = ["All", ...timeCategories, "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change", "Day off due to Swap"];
 
   const normalizeDateForFilter = (value) => {
   const raw = String(value || "").trim();
@@ -10646,7 +10665,21 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
 </p>
 
               <Table
-                headers={["Select", "Employee", "Date", "LOB", "Category", "Start", "End", "Duration", "Approval", "Payable", "Notes", "Save"]}
+                headers={[
+  "Select",
+  "Employee",
+  "Date",
+  "LOB",
+  "Category",
+  "Start",
+  "End",
+  "Duration",
+  "Daily Hours",
+  "Approval",
+  "Payable",
+  "Notes",
+  "Save",
+]}
                 rows={displayedTimeLogs.map((t) => [
                  <input
   type="checkbox"
@@ -10698,7 +10731,59 @@ t.id
   }
 />,
                   getTimeLogDuration(t, employees),
-                  <select value={t.approved || "Pending"} onChange={(event) => editTimeEntryLocal(t.id, "approved", event.target.value)}>
+
+formatHours(
+  filteredTime
+    .filter(
+      (entry) =>
+        String(entry.employee_id || "") ===
+          String(t.employee_id || "") &&
+        normalizeDateForFilter(
+          entry.date ||
+            entry.clock_in ||
+            entry.category_start ||
+            entry.created_at
+        ) ===
+          normalizeDateForFilter(
+            t.date ||
+              t.clock_in ||
+              t.category_start ||
+              t.created_at
+          )
+    )
+    .reduce((total, entry) => {
+      const savedDuration = Number(
+        entry.duration_minutes
+      );
+
+      if (
+        Number.isFinite(savedDuration) &&
+        savedDuration > 0
+      ) {
+        return total + savedDuration;
+      }
+
+      return (
+        total +
+        minutesBetween(
+          formatLogTimeForInput(
+            entry.category_start ||
+              entry.clock_in,
+            entry,
+            employees
+          ),
+          formatLogTimeForInput(
+            entry.category_end ||
+              entry.clock_out,
+            entry,
+            employees
+          )
+        )
+      );
+    }, 0)
+),
+
+<select value={t.approved || "Pending"} onChange={(event) => editTimeEntryLocal(t.id, "approved", event.target.value)}>
                     {["Pending", "Pending Approval", "Approved", "Denied", "Auto Logged"].map((status) => <option key={status}>{status}</option>)}
                   </select>,
                   <input value={t.payable_status || "Regular"} onChange={(event) => editTimeEntryLocal(t.id, "payable_status", event.target.value)} />,
