@@ -4598,6 +4598,8 @@ function HRWorkforceApp() {
 ] = useState([]);
   const [timeEntries, setTimeEntries] = useState([]);
   const [requests, setRequests] = useState(requestsSeed);
+  const [calendarMonthOffset, setCalendarMonthOffset] = useState(0);
+  const [calendarDetailDate, setCalendarDetailDate] = useState(null);
   const [activityLog, setActivityLog] = useState([]);
   const [rules, setRules] = useState(rulesSeed);
   const [lobs, setLobs] = useState(lobSeed);
@@ -7097,12 +7099,43 @@ const displayedTimeLogs =
       return { ...e, totalMinutes, workingMinutes, breakMinutes, otMinutes, scheduledBreakLunch, lateMinutes, productivity, variance: breakMinutes - scheduledBreakLunch };
     });
   }, [filteredVisibleEmployees, filteredTime]);
+function requestIncludesCalendarDate(request, dateKey) {
+  const selectedDate = String(dateKey || "").slice(0, 10);
+  const startDate = String(request?.start_date || "").slice(0, 10);
+  const endDate = String(
+    request?.end_date ||
+    request?.start_date ||
+    ""
+  ).slice(0, 10);
 
+  if (!selectedDate || !startDate) return false;
+
+  return (
+    selectedDate >= startDate &&
+    selectedDate <= endDate
+  );
+}
   function getRequestCalendarDays() {
-    const baseDate = new Date(`${newRequest.start_date || today}T00:00:00`);
-    if (Number.isNaN(baseDate.getTime())) return [];
-    const year = baseDate.getFullYear();
-    const month = baseDate.getMonth();
+  const selectedBaseDate = new Date(
+    `${newRequest.start_date || today}T00:00:00`
+  );
+
+  if (Number.isNaN(selectedBaseDate.getTime())) {
+    return {
+      monthLabel: "",
+      days: [],
+      leadingBlanks: 0,
+    };
+  }
+
+  const baseDate = new Date(
+    selectedBaseDate.getFullYear(),
+    selectedBaseDate.getMonth() + calendarMonthOffset,
+    1
+  );
+
+  const year = baseDate.getFullYear();
+  const month = baseDate.getMonth();
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
     const days = [];
@@ -7133,10 +7166,34 @@ const displayedTimeLogs =
     const dayName = WEEK_DAYS[new Date(`${dateKey}T00:00:00`).getDay()].toLowerCase();
     const offDayAgents = scopedEmployees.filter((employee) => normalizeOffDays(employee.off_days).some((day) => day.toLowerCase() === dayName));
     const scheduledAgents = scopedEmployees.filter((employee) => !offDayAgents.some((off) => off.id === employee.id));
-    const approvedOnDate = requests.filter((request) => request.status === "Approved" && requestCoversDate(request, dateKey));
-    const ptoAgents = approvedOnDate.filter((request) => request.type === "PTO").length;
-    const vtoAgents = approvedOnDate.filter((request) => request.type === "VTO").length;
-    const sickAgents = approvedOnDate.filter((request) => request.type === "Sick Leave").length;
+    const approvedOnDate = requests.filter((request) => {
+  const isApproved =
+    String(request.status || "").toLowerCase() === "approved";
+
+  const isLeaveType = [
+    "PTO",
+    "VTO",
+    "Sick Leave",
+  ].includes(request.type);
+
+  return (
+    isApproved &&
+    isLeaveType &&
+    requestIncludesCalendarDate(request, dateKey)
+  );
+});
+
+const ptoAgents = approvedOnDate.filter(
+  (request) => request.type === "PTO"
+).length;
+
+const vtoAgents = approvedOnDate.filter(
+  (request) => request.type === "VTO"
+).length;
+
+const sickAgents = approvedOnDate.filter(
+  (request) => request.type === "Sick Leave"
+).length;
 
     const relatedRule = rules.find((rule) => {
       const dateAllowed = (!rule.start_date || dateKey >= formatDateOnly(rule.start_date)) && (!rule.end_date || dateKey <= formatDateOnly(rule.end_date));
@@ -10282,8 +10339,39 @@ const mustCreatePersonalPassword = Boolean(
   }
 }
 
-  const requestCalendar = useMemo(() => getRequestCalendarDays(), [newRequest.start_date, newRequest.type, filters, filteredVisibleEmployees, requests, rules]);
+  const requestCalendar = useMemo(
+  () => getRequestCalendarDays(),
+  [
+    newRequest.start_date,
+    newRequest.type,
+    calendarMonthOffset,
+    filters,
+    filteredVisibleEmployees,
+    requests,
+    rules,
+  ]
+);
+const calendarDateApprovedRequests = calendarDetailDate
+  ? requests.filter((request) => {
+      const isApproved =
+        String(request.status || "").toLowerCase() === "approved";
 
+      const isLeaveType = [
+        "PTO",
+        "VTO",
+        "Sick Leave",
+      ].includes(request.type);
+
+      return (
+        isApproved &&
+        isLeaveType &&
+        requestIncludesCalendarDate(
+          request,
+          calendarDetailDate
+        )
+      );
+    })
+  : [];
   const headerRequestSummary = requestStatusSummary(filteredRequests);
   const scheduledTodayCount = filteredVisibleEmployees.filter((employee) => !isTodayOffDay(employee) && employee.employment_status === "Active").length;
   const activeEmployeeCount = filteredVisibleEmployees.filter((employee) => employee.employment_status === "Active").length;
@@ -11601,8 +11689,161 @@ formatHours(
 </div>            </div>
             <Card title="Leave planning calendar and staffing capacity">
               <p className="helperText">Select a date to preview rule capacity by the current filters. Green dates are available by staffing rules; red dates may exceed PTO/VTO/Sick limits or minimum staffing.</p>
-              <RequestCapacityCalendar calendar={requestCalendar} onSelectDate={(dateKey) => setNewRequest({ ...newRequest, start_date: dateKey, end_date: dateKey })} selectedDate={newRequest.start_date} />
+              <div
+  style={{
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "12px",
+    margin: "14px 0",
+  }}
+>
+  <button
+    type="button"
+    className="btn"
+    onClick={() =>
+      setCalendarMonthOffset(
+        (current) => current - 1
+      )
+    }
+  >
+    ← Previous Month
+  </button>
+
+  <strong
+    style={{
+      fontSize: "16px",
+      textAlign: "center",
+    }}
+  >
+    {requestCalendar?.monthLabel}
+  </strong>
+
+  <button
+    type="button"
+    className="btn"
+    onClick={() =>
+      setCalendarMonthOffset(
+        (current) => current + 1
+      )
+    }
+  >
+    Next Month →
+  </button>
+</div>
+              <RequestCapacityCalendar calendar={requestCalendar} onSelectDate={(dateKey) => {
+  setCalendarDetailDate(dateKey);
+
+  setNewRequest({
+    ...newRequest,
+    start_date: dateKey,
+    end_date: dateKey,
+  });
+}} selectedDate={newRequest.start_date} />
             </Card>
+            {calendarDetailDate && (
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      background: "rgba(0, 0, 0, 0.45)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 9999,
+      padding: "20px",
+    }}
+    onClick={() => setCalendarDetailDate(null)}
+  >
+    <div
+      style={{
+        width: "100%",
+        maxWidth: "560px",
+        maxHeight: "80vh",
+        overflowY: "auto",
+        background: "white",
+        borderRadius: "16px",
+        padding: "24px",
+        boxShadow: "0 20px 50px rgba(0,0,0,0.25)",
+      }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: "16px",
+          marginBottom: "16px",
+        }}
+      >
+        <div>
+          <h3 style={{ margin: 0 }}>
+            Approved Time Off
+          </h3>
+
+          <p
+            className="muted"
+            style={{ margin: "4px 0 0" }}
+          >
+            {calendarDetailDate}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setCalendarDetailDate(null)}
+        >
+          Close
+        </button>
+      </div>
+
+      {calendarDateApprovedRequests.length === 0 ? (
+        <p className="muted">
+          No approved PTO, VTO, or Sick Leave for this date.
+        </p>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gap: "10px",
+          }}
+        >
+          {calendarDateApprovedRequests.map((request) => (
+            <div
+              key={request.id}
+              style={{
+                border: "1px solid #dfe8e4",
+                borderRadius: "12px",
+                padding: "14px",
+              }}
+            >
+              <strong>
+                {request.employee_name || "Employee"}
+              </strong>
+
+              <div style={{ marginTop: "5px" }}>
+                {request.type}
+              </div>
+
+              <div
+                className="muted"
+                style={{ marginTop: "4px" }}
+              >
+                {formatDateOnly(request.start_date)}
+                {" → "}
+                {formatDateOnly(
+                  request.end_date || request.start_date
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  </div>
+)}
           </section>
         )}
 
