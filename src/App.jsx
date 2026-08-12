@@ -2741,15 +2741,63 @@ function requestDaysValue(request) {
     .trim()
     .toLowerCase();
 
-  if (requestType === "day off due to swap") {
+  // These request types do not consume PTO days.
+  if (
+    requestType === "day off due to swap" ||
+    requestType === "schedule override" ||
+    requestType === "schedule change"
+  ) {
     return 0;
+  }
+
+  // PTO/VTO/Sick/Paid/Unpaid leave are managed in full days.
+  const fullDayLeaveTypes = [
+    "pto",
+    "vto",
+    "sick leave",
+    "paid leave",
+    "unpaid leave",
+  ];
+
+  if (fullDayLeaveTypes.includes(requestType)) {
+    const startDate = formatDateOnly(
+      request?.start_date ||
+        request?.Start_Date ||
+        ""
+    );
+
+    const endDate = formatDateOnly(
+      request?.end_date ||
+        request?.End_Date ||
+        request?.start_date ||
+        request?.Start_Date ||
+        ""
+    );
+
+    if (startDate && endDate) {
+      return requestDaysInclusive(
+        startDate,
+        endDate
+      );
+    }
+
+    return Math.max(
+      0,
+      Math.round(
+        safeNumber(
+          request?.requested_days ??
+            request?.days ??
+            0,
+          0
+        )
+      )
+    );
   }
 
   return safeNumber(
     request?.requested_days ??
       request?.days ??
-      request?.hours ??
-      request?.requested_hours,
+      0,
     0
   );
 }
@@ -9166,6 +9214,199 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
     });
   }
 
+  async function cancelApprovedRequest(request) {
+  if (!request) return;
+
+  const requestAppId = String(
+    request.app_request_id ||
+    request.id ||
+    ""
+  );
+
+  const employee =
+    employees.find(
+      (e) =>
+        String(e.id || e.employee_id || "") ===
+        String(request.employee_id || "")
+    ) ||
+    employees.find(
+      (e) =>
+        normalizeNameKey(e.full_name) ===
+        normalizeNameKey(request.employee_name)
+    );
+
+  if (!employee) {
+    showToast(
+      "Unable to cancel",
+      "Employee profile could not be matched.",
+      "danger"
+    );
+    return;
+  }
+
+  const requestDays = requestDaysValue(request);
+
+  if (!requestDays || requestDays <= 0) {
+    showToast(
+      "Unable to cancel",
+      "The approved request does not contain a valid day amount.",
+      "danger"
+    );
+    return;
+  }
+
+  if (request.type === "PTO") {
+    const currentTaken = safeNumber(
+      employee.vacation_taken_days ??
+        employee.vacation_taken ??
+        0
+    );
+
+    const currentAvailable = safeNumber(
+      employee.pto_balance_days ??
+        employee.available_days ??
+        0
+    );
+
+    const restoredTaken = Math.max(
+      0,
+      currentTaken - requestDays
+    );
+
+    const restoredAvailable =
+      currentAvailable + requestDays;
+
+    const balanceUpdatePayload = {
+  vacation_taken: restoredTaken,
+  available_days: restoredAvailable,
+};
+
+    const { error: balanceUpdateError } =
+      await supabase
+        .from("employee_balances")
+        .update(balanceUpdatePayload)
+        .eq(
+          "employee_id",
+          String(request.employee_id)
+        );
+
+    if (balanceUpdateError) {
+      throw new Error(
+        `Balance restoration failed: ${balanceUpdateError.message}`
+      );
+    }
+  }
+
+  const { error: requestUpdateError } =
+    await supabase
+      .from("requests")
+      .update({
+        status: "Cancelled",
+      })
+      .eq("app_request_id", requestAppId);
+
+  if (requestUpdateError) {
+    throw new Error(
+      `Request cancellation failed: ${requestUpdateError.message}`
+    );
+  }
+if (request.type === "PTO") {
+  const currentTaken = safeNumber(
+    employee.vacation_taken_days ??
+      employee.vacation_taken ??
+      0
+  );
+
+  const currentAvailable = safeNumber(
+    employee.pto_balance_days ??
+      employee.available_days ??
+      0
+  );
+
+  const restoredTaken = Math.max(
+    0,
+    currentTaken - requestDays
+  );
+
+  const restoredAvailable =
+    currentAvailable + requestDays;
+
+  const balanceUpdatePayload = {
+  vacation_taken: restoredTaken,
+  available_days: restoredAvailable,
+};
+
+  const { error: balanceUpdateError } =
+    await supabase
+      .from("employee_balances")
+      .update(balanceUpdatePayload)
+      .eq(
+        "employee_id",
+        String(request.employee_id)
+      );
+
+  if (balanceUpdateError) {
+    throw new Error(
+      `Balance restoration failed: ${balanceUpdateError.message}`
+    );
+  }
+}
+  setRequests((current) =>
+    current.map((item) =>
+      String(item.id) === String(request.id)
+        ? {
+            ...item,
+            status: "Cancelled",
+          }
+        : item
+    )
+  );
+
+  setEmployees((current) =>
+    current.map((item) => {
+      const sameEmployee =
+        String(item.id || item.employee_id || "") ===
+        String(request.employee_id || "");
+
+      if (!sameEmployee) return item;
+
+      if (request.type !== "PTO") return item;
+
+      const restoredTaken = Math.max(
+        0,
+        safeNumber(
+          item.vacation_taken_days ??
+            item.vacation_taken ??
+            0
+        ) - requestDays
+      );
+
+      const restoredAvailable =
+        safeNumber(
+          item.pto_balance_days ??
+            item.available_days ??
+            0
+        ) + requestDays;
+
+      return {
+        ...item,
+        vacation_taken_days: restoredTaken,
+        vacation_taken: restoredTaken,
+        available_days: restoredAvailable,
+        current_available_days: restoredAvailable,
+        pto_balance_days: restoredAvailable,
+        pto_balance: restoredAvailable * 8,
+      };
+    })
+  );
+
+  showToast(
+    "Request cancelled",
+    `${request.employee_name}'s ${request.type} request was cancelled and the balance was restored.`,
+    "success"
+  );
+}
+
   async function setTimeStatus(id, approved) {
     if (isAgentOnly) return;
 
@@ -11666,23 +11907,36 @@ formatHours(
     <Card title="Request history">
       <Table
         headers={[
-          "Employee",
-          "Type",
-          "Dates",
-          "Days",
-          "Current Balance",
-          "After Approval",
-          "Status"
-        ]}
-        rows={filteredRequests.map((r) => [
-          r.employee_name,
-          r.type,
-          `${r.start_date} to ${r.end_date}`,
-          `${requestDaysValue(r).toFixed(1)} day(s)`,
-          r.current_balance ?? "N/A",
-          r.projected_balance ?? "N/A",
-          <Badge>{r.status}</Badge>
-        ])}
+  "Employee",
+  "Type",
+  "Dates",
+  "Days",
+  "Current Balance",
+  "After Approval",
+  "Status",
+  "Action"
+]}
+rows={filteredRequests.map((r) => [
+  r.employee_name,
+  r.type,
+  `${r.start_date} to ${r.end_date}`,
+  `${requestDaysValue(r)} day(s)`,
+  r.current_balance ?? "N/A",
+  r.projected_balance ?? "N/A",
+  <Badge>{r.status}</Badge>,
+  String(r.status || "").toLowerCase() === "approved" &&
+  ["PTO", "VTO", "Sick Leave"].includes(r.type) ? (
+    <button
+      type="button"
+      className="btn"
+      onClick={() => cancelApprovedRequest(r)}
+    >
+      Cancel
+    </button>
+  ) : (
+    "—"
+  )
+])}
       />
     </Card>
   </details>
@@ -11837,6 +12091,17 @@ formatHours(
                   request.end_date || request.start_date
                 )}
               </div>
+              <button
+  type="button"
+  className="btn"
+  style={{
+    marginTop: "12px",
+    width: "100%",
+  }}
+  onClick={() => cancelApprovedRequest(request)}
+>
+  Cancel Approved Request
+</button>
             </div>
           ))}
         </div>
