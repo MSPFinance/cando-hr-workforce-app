@@ -7701,16 +7701,29 @@ setTimeEntries((current) => [
   const autoActivities = [];
 
   for (const openLog of openLogs) {
-    const employee =
-      employees.find(
-        (item) =>
-          String(
-            item.id ||
-              item.employee_id ||
-              ""
-          ) ===
-          String(openLog.employee_id || "")
-      );
+    const openLogEmployeeId =
+  String(openLog.employee_id || "")
+    .trim()
+    .toLowerCase();
+
+const employee =
+  employees.find((item) => {
+    const employeeIds = [
+      item.id,
+      item.employee_id,
+      item.supabase_employee_id,
+    ]
+      .map((value) =>
+        String(value || "")
+          .trim()
+          .toLowerCase()
+      )
+      .filter(Boolean);
+
+    return employeeIds.includes(
+      openLogEmployeeId
+    );
+  });
 
     if (!employee) {
       console.warn(
