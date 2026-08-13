@@ -8144,22 +8144,65 @@ setTimeEntries((current) => [
     .trim()
     .toLowerCase();
 
+  const openLogEmployeeEmail = String(
+    openLog.employee_email || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const openLogEmployeeName = String(
+    openLog.employee_name || ""
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
   const employee =
     employees.find((item) => {
-    const employeeIds = [
-      item.id,
-      item.employee_id,
-      item.supabase_employee_id,
-    ]
-      .map((value) =>
-        String(value || "")
-          .trim()
-          .toLowerCase()
-      )
-      .filter(Boolean);
+      const employeeIds = [
+        item.id,
+        item.employee_id,
+        item.supabase_employee_id,
+      ]
+        .map((value) =>
+          String(value || "")
+            .trim()
+            .toLowerCase()
+        )
+        .filter(Boolean);
 
-    return employeeIds.includes(openLogEmployeeId);
-  });
+      const employeeEmail = String(
+        item.email || ""
+      )
+        .trim()
+        .toLowerCase();
+
+      const employeeName = String(
+        item.full_name || ""
+      )
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ");
+
+      return (
+        (
+          openLogEmployeeId &&
+          employeeIds.includes(
+            openLogEmployeeId
+          )
+        ) ||
+        (
+          openLogEmployeeEmail &&
+          employeeEmail ===
+            openLogEmployeeEmail
+        ) ||
+        (
+          openLogEmployeeName &&
+          employeeName ===
+            openLogEmployeeName
+        )
+      );
+    });
 
     if (!employee) {
   console.warn(
@@ -12185,10 +12228,226 @@ rows={filteredRequests.map((r) => [
               <p className="helperText">Use this queue for requests submitted by employees, including PTO, VTO, Sick Leave, Paid Leave, Unpaid Leave, Schedule Change, and OT requests submitted as a formal request. Approval updates the Requests tab, creates an Approvals audit record, and deducts balances when applicable.</p>
               {requests.filter((r) => ["Pending", "Pending Manager Approval"].includes(r.status)).length ? requests.filter((r) => ["Pending", "Pending Manager Approval"].includes(r.status)).map((r) => <Approval key={r.id} title={r.employee_name} detail={`${r.type} · ${formatDateOnly(r.start_date)} to ${formatDateOnly(r.end_date)} · ${requestDaysValue(r).toFixed(1)} day(s) · Current: ${r.current_balance ?? "N/A"} day(s) · After: ${r.projected_balance ?? "N/A"} day(s)`} approve={() => setRequestStatus(r.id, "Approved")} deny={() => setRequestStatus(r.id, "Denied")} />) : <p className="muted">No pending employee requests at this time.</p>}
             </Card>
-            <Card title="Time Log / Overtime Exception Data Backed Up">
-              <p className="helperText">The previous time log and overtime exception approval rule has been removed from this approval view. Time log and overtime records are still retained in Time Logs, payroll review, reporting, and archive/export data for audit purposes.</p>
-              <Table headers={["Employee", "Category", "Date", "Status", "Backup"]} rows={timeEntries.filter((t) => t.approved === "Pending").slice(0, 8).map((t) => [t.employee_name, t.category, formatDateOnly(t.date), t.approved, "Retained"])} />
-            </Card>
+
+<div className="manager-side-column">
+
+  <div>
+    <Card title="Leave planning calendar">
+  <p className="helperText">
+    Review staffing capacity while processing time-off requests.
+  </p>
+
+  <div
+    style={{
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: "8px",
+      margin: "10px 0",
+    }}
+  >
+    <button
+      type="button"
+      className="btn"
+      onClick={() =>
+        setCalendarMonthOffset((current) => current - 1)
+      }
+    >
+      ← Previous
+    </button>
+
+    <strong style={{ fontSize: "14px", textAlign: "center" }}>
+      {requestCalendar?.monthLabel}
+    </strong>
+
+    <button
+      type="button"
+      className="btn"
+      onClick={() =>
+        setCalendarMonthOffset((current) => current + 1)
+      }
+    >
+      Next →
+    </button>
+  </div>
+
+  <RequestCapacityCalendar
+  calendar={requestCalendar}
+  onSelectDate={(dateKey) => {
+    setCalendarDetailDate(dateKey);
+  }}
+  selectedDate={calendarDetailDate}
+/>
+</Card>
+
+{calendarDetailDate && (
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      background: "rgba(0, 0, 0, 0.45)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 9999,
+      padding: "20px",
+    }}
+    onClick={() => setCalendarDetailDate(null)}
+  >
+    <div
+      style={{
+        width: "100%",
+        maxWidth: "560px",
+        maxHeight: "80vh",
+        overflowY: "auto",
+        background: "white",
+        borderRadius: "16px",
+        padding: "24px",
+        boxShadow: "0 20px 50px rgba(0,0,0,0.25)",
+      }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: "16px",
+          marginBottom: "16px",
+        }}
+      >
+        <div>
+          <h3 style={{ margin: 0 }}>
+            Approved Time Off
+          </h3>
+
+          <p
+            className="muted"
+            style={{ margin: "4px 0 0" }}
+          >
+            {calendarDetailDate}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="btn"
+          onClick={() =>
+            setCalendarDetailDate(null)
+          }
+        >
+          Close
+        </button>
+      </div>
+
+      {calendarDateApprovedRequests.length === 0 ? (
+        <p className="muted">
+          No approved PTO, VTO, or Sick Leave for this date.
+        </p>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gap: "10px",
+          }}
+        >
+          {calendarDateApprovedRequests.map(
+            (request) => (
+              <div
+                key={request.id}
+                style={{
+                  border: "1px solid #dfe8e4",
+                  borderRadius: "12px",
+                  padding: "14px",
+                }}
+              >
+                <strong>
+                  {request.employee_name ||
+                    "Employee"}
+                </strong>
+
+                <div style={{ marginTop: "5px" }}>
+                  {request.type}
+                </div>
+
+                <div
+                  className="muted"
+                  style={{ marginTop: "4px" }}
+                >
+                  {formatDateOnly(
+                    request.start_date
+                  )}
+                  {" → "}
+                  {formatDateOnly(
+                    request.end_date ||
+                      request.start_date
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  className="btn"
+                  style={{
+                    marginTop: "12px",
+                    width: "100%",
+                  }}
+                  onClick={() =>
+                    cancelApprovedRequest(
+                      request
+                    )
+                  }
+                >
+                  Cancel Approved Request
+                </button>
+              </div>
+            )
+          )}
+        </div>
+      )}
+    </div>
+  </div>
+)}
+
+  <details style={{ marginTop: "12px" }}>
+    <summary
+      style={{
+        cursor: "pointer",
+        fontWeight: "700",
+        padding: "10px 0",
+      }}
+    >
+      Time Log / Overtime Exception Data
+    </summary>
+
+    <Card title="Time Log / Overtime Exception Data Backed Up">
+      <p className="helperText">
+        Time log and overtime records remain available for audit purposes.
+      </p>
+
+      <Table
+        headers={[
+          "Employee",
+          "Category",
+          "Date",
+          "Status",
+          "Backup",
+        ]}
+        rows={timeEntries
+          .filter((t) => t.approved === "Pending")
+          .slice(0, 8)
+          .map((t) => [
+            t.employee_name,
+            t.category,
+            formatDateOnly(t.date),
+            t.approved,
+            "Retained",
+          ])}
+      />
+    </Card>
+  </details>
+</div>
+
+</div>
           </section>
         )}
 
@@ -12465,7 +12724,7 @@ rows={filteredRequests.map((r) => [
                 </div>
               ))}
             </section>
-            <section className="grid two">
+            <section className="manager-approvals-layout">
               <Card title="Agent-level adherence detail">
                 <Table
                   headers={["Employee", "LOB", "Department", "Sub-Department", "Productivity", "Late", "Break Used", "Scheduled Break", "Variance", "OT"]}
