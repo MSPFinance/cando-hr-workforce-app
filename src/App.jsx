@@ -11623,7 +11623,15 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
   {editableTimeLogs.length} matching time logs.
   Use the filters above to locate older records.
 </p>
-
+<div
+  style={{
+    width: "100%",
+    overflowX: "auto",
+    overflowY: "hidden",
+    paddingBottom: "10px",
+  }}
+>
+  <div style={{ minWidth: "1250px" }}>
               <Table
                 headers={[
   "Select",
@@ -11657,10 +11665,27 @@ t.id
   }
 />,
                   <strong>{t.employee_name}</strong>,
-                  <input type="date" value={t.date || today} onChange={(event) => editTimeEntryLocal(t.id, "date", event.target.value)} />,
-                  t.lob,
-                  <select value={t.category} onChange={(event) => editTimeEntryLocal(t.id, "category", event.target.value)}><TimeCategoryOptions /></select>,
                   <input
+  type="date"
+    value={t.date || today}
+  onChange={(event) =>
+    editTimeEntryLocal(t.id, "date", event.target.value)
+  }
+/>,
+                  <select
+  value={t.category || t.status || "Working"}
+  onChange={(event) =>
+    editTimeEntryLocal(
+      t.id || t.app_log_id,
+      "category",
+      event.target.value
+    )
+  }
+>
+  <TimeCategoryOptions />
+</select>,
+
+<input
   type="time"
   value={formatLogTimeForInput(
     t.category_start || t.clock_in,
@@ -11677,7 +11702,7 @@ t.id
 />,
 <input
   type="time"
-  value={formatLogTimeForInput(
+    value={formatLogTimeForInput(
     t.category_end || t.clock_out,
     t,
     employees
@@ -11750,7 +11775,9 @@ formatHours(
                   <input value={t.notes || ""} onChange={(event) => editTimeEntryLocal(t.id, "notes", event.target.value)} placeholder="Correction notes" />,
                   <button className="primary" onClick={() => saveEditedTimeEntry(t.id)}>Save</button>,
                 ])}
-              />
+                            />
+  </div>
+</div>
             </Card>
           </section>
         )}
