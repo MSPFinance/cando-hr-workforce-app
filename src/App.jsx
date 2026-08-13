@@ -939,19 +939,51 @@ function formatDateOnly(value) {
   return date.toISOString().slice(0, 10);
 }
 
-function requestDaysInclusive(startDate, endDate) {
+function requestDaysInclusive(startDate, endDate, employee = null) {
   if (!startDate || !endDate) return 0;
+
   const start = new Date(`${startDate}T00:00:00`);
   const end = new Date(`${endDate}T00:00:00`);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
-  return Math.max(1, Math.round((end - start) / 86400000) + 1);
+
+  if (
+    Number.isNaN(start.getTime()) ||
+    Number.isNaN(end.getTime())
+  ) {
+    return 0;
+  }
+
+  let requestedDays = 0;
+
+  const employeeOffDays = employee
+    ? normalizeOffDays(employee.off_days).map((day) =>
+        normalizeDayName(day)
+      )
+    : [];
+
+  const current = new Date(start);
+
+  while (current <= end) {
+    const dayName = WEEK_DAYS[current.getDay()];
+
+    const isOffDay =
+      employeeOffDays.includes(dayName);
+
+    if (!isOffDay) {
+      requestedDays += 1;
+    }
+
+    current.setDate(current.getDate() + 1);
+  }
+
+  return requestedDays;
 }
 
-function calculateRequestHours(request) {
-  // PTO/VTO/Sick approvals are tracked as full days.
-  // The existing Hours_Requested field is retained for Google Sheets compatibility,
-  // but the value now represents requested days in the UI and approval workflow.
-  return requestDaysInclusive(request.start_date, request.end_date);
+function calculateRequestHours(request, employee = null) {
+  return requestDaysInclusive(
+    request.start_date,
+    request.end_date,
+    employee
+  );
 }
 
 function getBalance(employee, type) {
@@ -2731,7 +2763,7 @@ function showSickBalanceForCountry(country) {
   return String(country || "").toLowerCase() === "canada";
 }
 
-function requestDaysValue(request) {
+function requestDaysValue(request, employee = null) {
   const requestType = String(
     request?.type ||
       request?.request_type ||
@@ -2741,7 +2773,7 @@ function requestDaysValue(request) {
     .trim()
     .toLowerCase();
 
-  // These request types do not consume PTO days.
+  // These request types do not consume leave balances.
   if (
     requestType === "day off due to swap" ||
     requestType === "schedule override" ||
@@ -2750,7 +2782,6 @@ function requestDaysValue(request) {
     return 0;
   }
 
-  // PTO/VTO/Sick/Paid/Unpaid leave are managed in full days.
   const fullDayLeaveTypes = [
     "pto",
     "vto",
@@ -2760,6 +2791,32 @@ function requestDaysValue(request) {
   ];
 
   if (fullDayLeaveTypes.includes(requestType)) {
+    /*
+      IMPORTANT:
+      Once a request has been submitted, requested_days
+      is the saved source of truth.
+
+      This prevents a previously correct 2-day request
+      from being recalculated as 3 calendar days when
+      a weekend/off-day falls inside the date range.
+    */
+    const storedRequestedDays = safeNumber(
+      request?.requested_days ??
+        request?.days,
+      -1
+    );
+
+    if (storedRequestedDays >= 0) {
+      return storedRequestedDays;
+    }
+
+    /*
+      For a new/legacy request that does not yet contain
+      requested_days, calculate from the date range.
+
+      When the employee is available, their off-days
+      are excluded.
+    */
     const startDate = formatDateOnly(
       request?.start_date ||
         request?.Start_Date ||
@@ -2777,21 +2834,12 @@ function requestDaysValue(request) {
     if (startDate && endDate) {
       return requestDaysInclusive(
         startDate,
-        endDate
+        endDate,
+        employee
       );
     }
 
-    return Math.max(
-      0,
-      Math.round(
-        safeNumber(
-          request?.requested_days ??
-            request?.days ??
-            0,
-          0
-        )
-      )
-    );
+    return 0;
   }
 
   return safeNumber(
@@ -7056,7 +7104,10 @@ const displayedTimeLogs =
   );
 
   const requestPreview = useMemo(() => {
-    const requestedDays = calculateRequestHours(newRequest);
+    const requestedDays = calculateRequestHours(
+  newRequest,
+  selectedEmployee
+);
     const currentBalance = getBalance(selectedEmployee, newRequest.type);
     return {
       requestedHours: requestedDays,
@@ -8087,16 +8138,28 @@ setTimeEntries((current) => [
   const autoActivities = [];
 
   for (const openLog of openLogs) {
-    const employee =
-      employees.find(
-        (item) =>
-          String(
-            item.id ||
-              item.employee_id ||
-              ""
-          ) ===
-          String(openLog.employee_id || "")
-      );
+  const openLogEmployeeId = String(
+    openLog.employee_id || ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const employee =
+    employees.find((item) => {
+    const employeeIds = [
+      item.id,
+      item.employee_id,
+      item.supabase_employee_id,
+    ]
+      .map((value) =>
+        String(value || "")
+          .trim()
+          .toLowerCase()
+      )
+      .filter(Boolean);
+
+    return employeeIds.includes(openLogEmployeeId);
+  });
 
     if (!employee) {
       console.warn(
