@@ -8162,13 +8162,17 @@ setTimeEntries((current) => [
   });
 
     if (!employee) {
-      console.warn(
-        "Forgotten shift skipped because employee was not found:",
-        openLog.employee_id
-      );
-
-      continue;
+  console.warn(
+    "Forgotten shift skipped because employee was not found:",
+    {
+      employee_id: openLog.employee_id,
+      employee_name: openLog.employee_name || "",
+      employee_email: openLog.employee_email || "",
     }
+  );
+
+  continue;
+}
 
     const employeeTimeZone =
       getEmployeeTimeZone(employee);
