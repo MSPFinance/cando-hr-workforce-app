@@ -120,6 +120,8 @@ const WORKFORCE_SYNC_ALLOWED_FIELDS = [
   "break_minutes",
   "lunch_minutes",
   "breaks_by_day",
+  "vacation_entitlement_days",
+"vacation_taken_days",
   "pto_balance",
   "sick_balance",
   "vto_balance",
@@ -937,19 +939,51 @@ function formatDateOnly(value) {
   return date.toISOString().slice(0, 10);
 }
 
-function requestDaysInclusive(startDate, endDate) {
+function requestDaysInclusive(startDate, endDate, employee = null) {
   if (!startDate || !endDate) return 0;
+
   const start = new Date(`${startDate}T00:00:00`);
   const end = new Date(`${endDate}T00:00:00`);
-  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
-  return Math.max(1, Math.round((end - start) / 86400000) + 1);
+
+  if (
+    Number.isNaN(start.getTime()) ||
+    Number.isNaN(end.getTime())
+  ) {
+    return 0;
+  }
+
+  let requestedDays = 0;
+
+  const employeeOffDays = employee
+    ? normalizeOffDays(employee.off_days).map((day) =>
+        normalizeDayName(day)
+      )
+    : [];
+
+  const current = new Date(start);
+
+  while (current <= end) {
+    const dayName = WEEK_DAYS[current.getDay()];
+
+    const isOffDay =
+      employeeOffDays.includes(dayName);
+
+    if (!isOffDay) {
+      requestedDays += 1;
+    }
+
+    current.setDate(current.getDate() + 1);
+  }
+
+  return requestedDays;
 }
 
-function calculateRequestHours(request) {
-  // PTO/VTO/Sick approvals are tracked as full days.
-  // The existing Hours_Requested field is retained for Google Sheets compatibility,
-  // but the value now represents requested days in the UI and approval workflow.
-  return requestDaysInclusive(request.start_date, request.end_date);
+function calculateRequestHours(request, employee = null) {
+  return requestDaysInclusive(
+    request.start_date,
+    request.end_date,
+    employee
+  );
 }
 
 function getBalance(employee, type) {
@@ -1572,25 +1606,29 @@ function mapBalanceSyncRow(row) {
     const numericValue = Number(String(value).replace(/[^0-9.-]/g, ""));
     if (Number.isFinite(numericValue)) payload[field] = numericValue;
   };
+setNumber("vacation_entitlement_days", [
+  "vacation_entitlement_days",
+  "Vacation_Entitlement_Days",
+  "Vacation Entitlement Days"
+]);
 
+setNumber("vacation_taken_days", [
+  "vacation_taken_days",
+  "Vacation_Taken_Days",
+  "Vacation Taken Days"
+]);
   setNumber("pto_balance_days", [
-  "Current_Available_Days",
-  "Current Available Days",
-  "current_available_days",
-
-  "Vacations",
-  "vacations",
-
-  "Available_Days",
-  "Available Days",
-  "available_days",
-
+  "pto_balance_days",
   "PTO_Balance_Days",
   "PTO Balance Days",
-  "PTO Days",
 
-  "Vacation Balance",
-  "Vacation_Balance",
+  "available_days",
+  "Available_Days",
+  "Available Days",
+
+  "current_available_days",
+  "Current_Available_Days",
+  "Current Available Days"
 ]);
   setNumber("sick_balance_days", ["Sick_Balance_Days", "Sick Balance Days", "Sick Days"]);
   setNumber("vto_balance_days", ["VTO_Balance_Days", "VTO Balance Days", "VTO Days"]);
@@ -2725,7 +2763,7 @@ function showSickBalanceForCountry(country) {
   return String(country || "").toLowerCase() === "canada";
 }
 
-function requestDaysValue(request) {
+function requestDaysValue(request, employee = null) {
   const requestType = String(
     request?.type ||
       request?.request_type ||
@@ -2735,15 +2773,79 @@ function requestDaysValue(request) {
     .trim()
     .toLowerCase();
 
-  if (requestType === "day off due to swap") {
+  // These request types do not consume leave balances.
+  if (
+    requestType === "day off due to swap" ||
+    requestType === "schedule override" ||
+    requestType === "schedule change"
+  ) {
+    return 0;
+  }
+
+  const fullDayLeaveTypes = [
+    "pto",
+    "vto",
+    "sick leave",
+    "paid leave",
+    "unpaid leave",
+  ];
+
+  if (fullDayLeaveTypes.includes(requestType)) {
+    /*
+      IMPORTANT:
+      Once a request has been submitted, requested_days
+      is the saved source of truth.
+
+      This prevents a previously correct 2-day request
+      from being recalculated as 3 calendar days when
+      a weekend/off-day falls inside the date range.
+    */
+    const storedRequestedDays = safeNumber(
+      request?.requested_days ??
+        request?.days,
+      -1
+    );
+
+    if (storedRequestedDays >= 0) {
+      return storedRequestedDays;
+    }
+
+    /*
+      For a new/legacy request that does not yet contain
+      requested_days, calculate from the date range.
+
+      When the employee is available, their off-days
+      are excluded.
+    */
+    const startDate = formatDateOnly(
+      request?.start_date ||
+        request?.Start_Date ||
+        ""
+    );
+
+    const endDate = formatDateOnly(
+      request?.end_date ||
+        request?.End_Date ||
+        request?.start_date ||
+        request?.Start_Date ||
+        ""
+    );
+
+    if (startDate && endDate) {
+      return requestDaysInclusive(
+        startDate,
+        endDate,
+        employee
+      );
+    }
+
     return 0;
   }
 
   return safeNumber(
     request?.requested_days ??
       request?.days ??
-      request?.hours ??
-      request?.requested_hours,
+      0,
     0
   );
 }
@@ -3532,7 +3634,25 @@ function mapSupabaseEmployee(row = {}, balance = {}, schedule = {}, base = {}) {
     pto_balance: safeNumber(firstKnownValue(balance, ["available_hours_reference", "available_hours", "pto_balance", "pto_hours", "vacation_hours"], firstKnownValue(row, ["pto_balance"], 0)), 0),
     sick_balance: safeNumber(firstKnownValue(balance, ["sick_balance", "sick_hours"], firstKnownValue(row, ["sick_balance"], 0)), 0),
     vto_balance: safeNumber(firstKnownValue(balance, ["approved_vto_hours", "vto_balance", "vto_hours"], firstKnownValue(row, ["vto_balance"], 0)), 0),
-    pto_balance_days: safeNumber(firstKnownValue(balance, ["available_days", "vacation_balance_days", "vacation_days", "available_days_reference", "pto_balance_days", "pto_days", "available_pto_days", "available_pto", "vacation_balance", "pto_available_days", "vacation_available_days"], firstKnownValue(row, ["pto_balance_days", "pto_days", "vacation_days"], 0)), 0),
+pto_balance_days: safeNumber(
+  firstKnownValue(
+    balance,
+    [
+      "pto_balance_days",
+      "available_days",
+      "current_available_days",
+      "vacation_balance_days",
+      "available_days_reference",
+      "vacation_days",
+    ],
+    firstKnownValue(
+      row,
+      ["pto_balance_days", "available_days"],
+      0
+    )
+  ),
+  0
+),
     sick_balance_days: safeNumber(firstKnownValue(balance, ["approved_sick_days", "sick_balance_days", "sick_days", "available_sick_days", "sick_available_days"], firstKnownValue(row, ["sick_balance_days", "sick_days"], 0)), 0),
     vto_balance_days: safeNumber(firstKnownValue(balance, ["vto_balance_days", "vto_days"], firstKnownValue(row, ["vto_balance_days", "vto_days"], 0)), 0),
     tenure_days: safeNumber(firstKnownValue(balance, ["days_active", "tenure_days"], firstKnownValue(row, ["days_active", "tenure_days"], 0)), 0),
@@ -3595,9 +3715,34 @@ async function loadSupabaseReferenceData(
   if (!supabase) return false;
 
   try {
-    const { data: supabaseEmployees, error } = await supabase
-      .from("employees")
-      .select("*");
+    const [
+  employeeResult,
+  balanceResult,
+] = await Promise.all([
+  supabase
+    .from("employees")
+    .select("*"),
+
+  supabase
+    .from("employee_balances")
+    .select("*"),
+]);
+
+const supabaseEmployees =
+  employeeResult.data || [];
+
+const supabaseBalances =
+  balanceResult.data || [];
+
+const error =
+  employeeResult.error;
+
+if (balanceResult.error) {
+  console.warn(
+    "Supabase employee balance load failed:",
+    balanceResult.error.message
+  );
+}
 
     if (error) {
       console.warn(
@@ -3615,6 +3760,8 @@ async function loadSupabaseReferenceData(
     }
 
     const profileIndex = buildIndex(supabaseEmployees);
+    const balanceIndex =
+  buildIndex(supabaseBalances);
 
     const mergedEmployees = baseEmployees.map((base) => {
       const keys = [
@@ -3626,6 +3773,29 @@ async function loadSupabaseReferenceData(
       ].filter(Boolean);
 
       let supabaseProfile = null;
+
+      const balanceKeys = [
+  normalizeEmail(base.email),
+  String(
+    base.id ||
+    base.employee_id ||
+    ""
+  )
+    .trim()
+    .toLowerCase(),
+  normalizeNameKey(base.full_name),
+].filter(Boolean);
+
+let supabaseBalance = null;
+
+for (const key of balanceKeys) {
+  const match = balanceIndex.get(key);
+
+  if (match) {
+    supabaseBalance = match;
+    break;
+  }
+}
 
       for (const key of keys) {
         const match = profileIndex.get(key);
@@ -3640,6 +3810,70 @@ async function loadSupabaseReferenceData(
 
       return {
   ...base,
+pto_balance_days: safeNumber(
+  firstKnownValue(
+    supabaseBalance || {},
+    [
+      "available_days",
+      "current_available_days",
+      "pto_balance_days",
+      "vacation_balance_days",
+    ],
+    base.pto_balance_days || 0
+  ),
+  0
+),
+
+available_days: safeNumber(
+  firstKnownValue(
+    supabaseBalance || {},
+    [
+      "available_days",
+      "current_available_days",
+      "pto_balance_days",
+    ],
+    base.available_days || 0
+  ),
+  0
+),
+
+vacation_entitlement_days: safeNumber(
+  firstKnownValue(
+    supabaseBalance || {},
+    [
+      "vacation_days",
+      "vacation_entitlement_days",
+    ],
+    base.vacation_entitlement_days || 0
+  ),
+  0
+),
+
+vacation_taken_days: safeNumber(
+  firstKnownValue(
+    supabaseBalance || {},
+    [
+      "vacation_taken",
+      "vacation_taken_days",
+    ],
+    base.vacation_taken_days || 0
+  ),
+  0
+),
+
+pto_balance:
+  safeNumber(
+    firstKnownValue(
+      supabaseBalance || {},
+      [
+        "available_days",
+        "current_available_days",
+        "pto_balance_days",
+      ],
+      base.pto_balance_days || 0
+    ),
+    0
+  ) * 8,
 
   supabase_employee_id:
   supabaseProfile.employee_id ||
@@ -4460,6 +4694,8 @@ function HRWorkforceApp() {
 ] = useState([]);
   const [timeEntries, setTimeEntries] = useState([]);
   const [requests, setRequests] = useState(requestsSeed);
+  const [calendarMonthOffset, setCalendarMonthOffset] = useState(0);
+  const [calendarDetailDate, setCalendarDetailDate] = useState(null);
   const [activityLog, setActivityLog] = useState([]);
   const [rules, setRules] = useState(rulesSeed);
   const [lobs, setLobs] = useState(lobSeed);
@@ -4654,7 +4890,8 @@ console.log(
 await loadScheduleExceptions();
 
 finalSyncedEmployees =
-  balanceResult.employees.filter(isActiveEmployee);
+  balanceResult.employees;
+
 setEmployees(finalSyncedEmployees);
 if (false && supabase && finalSyncedEmployees.length) {
   const employeesForBreakSync =
@@ -4829,7 +5066,8 @@ const balanceResult = mergeBalanceRowsIntoEmployees(
 );
 
 const googleSourceEmployees =
-  balanceResult.employees.filter(isActiveEmployee);
+  (balanceResult.employees || rosterResult.employees || [])
+    .filter(isActiveEmployee);
 
 setEmployees(googleSourceEmployees);
 
@@ -5059,6 +5297,10 @@ useEffect(() => {
 ]);
   const [selectedEmployeeId, setSelectedEmployeeId] =
   useState("");
+  const [
+  selectedBalanceEmployeeIds,
+  setSelectedBalanceEmployeeIds
+] = useState([]);
 const selectedEmployee = isAgentOnly
   ? currentUser
   : employees.find(
@@ -5066,6 +5308,43 @@ const selectedEmployee = isAgentOnly
         String(employee.id || employee.employee_id || "") ===
         String(selectedEmployeeId || "")
     ) || currentUser || null;
+    const filteredLeaveEmployee =
+  filters.employee !== "All"
+    ? employees.find(
+        (employee) =>
+          String(employee.full_name || "").trim() ===
+          String(filters.employee || "").trim()
+      ) || null
+    : null;
+
+const selectedLeaveEmployee =
+  filters.employee !== "All"
+    ? filteredLeaveEmployee
+    : null;
+
+const selectedVacationEntitlement =
+  Number(
+    selectedLeaveEmployee?.vacation_entitlement_days || 0
+  );
+
+const selectedVacationTaken =
+  Number(
+    selectedLeaveEmployee?.vacation_taken_days || 0
+  );
+
+const selectedAvailableDays =
+  Number(
+    selectedLeaveEmployee?.pto_balance_days ??
+    selectedLeaveEmployee?.available_days ??
+    0
+  );
+
+const selectedPtoBalance =
+  Number(
+    selectedLeaveEmployee?.pto_balance_days ??
+    selectedLeaveEmployee?.available_days ??
+    0
+  );
 const filteredTimeLogEmployee =
   filters.employee !== "All"
     ? employees.find(
@@ -6500,61 +6779,161 @@ const {
   const subDepartmentOptions = [
   "All",
   ...new Set(
-    [
-      ...subDepartments,
-      ...visibleEmployees.map(
-        (employee) => employee.sub_department
-      ),
-      ...visibleTime.map(
-        (timeLog) => timeLog.sub_department
-      ),
-    ]
-      .map((value) => String(value || "").trim())
+    visibleEmployees
+      .filter((employee) => {
+        if (filters.department === "All") {
+          return true;
+        }
+
+        return (
+          String(employee.department || "").trim() ===
+          filters.department
+        );
+      })
+      .map((employee) =>
+        String(
+          employee.sub_department ||
+          employee.subDepartment ||
+          ""
+        ).trim()
+      )
       .filter(Boolean)
   ),
-];
+].sort((a, b) => {
+  if (a === "All") return -1;
+  if (b === "All") return 1;
+  return a.localeCompare(b);
+});
 const teamLeaderOptions = [
   "All",
   ...new Set(
     visibleEmployees
-      .map(
-        (employee) =>
+      .filter((employee) => {
+        const employeeDepartment = String(
+          employee.department || ""
+        ).trim();
+
+        const employeeSubDepartment = String(
+          employee.sub_department ||
+          employee.subDepartment ||
+          ""
+        ).trim();
+
+        const matchesDepartment =
+          filters.department === "All" ||
+          employeeDepartment === filters.department;
+
+        const matchesSubDepartment =
+          filters.subDepartment === "All" ||
+          employeeSubDepartment === filters.subDepartment;
+
+        return matchesDepartment && matchesSubDepartment;
+      })
+      .map((employee) =>
+        String(
           employee.team_leader ||
           employee.supervisor ||
           employee.manager ||
           ""
+        ).trim()
       )
-      .map((value) => String(value || "").trim())
       .filter(Boolean)
   ),
-];
-  const employeeOptions = [
+].sort((a, b) => {
+  if (a === "All") return -1;
+  if (b === "All") return 1;
+  return a.localeCompare(b);
+});
+  const balanceFilteredEmployees = visibleEmployees.filter((employee) => {
+  const employeeLob = String(employee.lob || "").trim();
+
+  const employeeDepartment = String(
+    employee.department || ""
+  ).trim();
+
+  const employeeSubDepartment = String(
+    employee.sub_department ||
+    employee.subDepartment ||
+    ""
+  ).trim();
+
+  const employeeLeader = String(
+    employee.team_leader ||
+    employee.supervisor ||
+    employee.manager ||
+    ""
+  ).trim();
+
+  const employeeCountry = String(
+    employee.country || ""
+  ).trim();
+
+  const matchesLob =
+    filters.lob === "All" ||
+    employeeLob === filters.lob;
+
+  const matchesDepartment =
+    filters.department === "All" ||
+    employeeDepartment === filters.department;
+
+  const matchesSubDepartment =
+    filters.subDepartment === "All" ||
+    employeeSubDepartment === filters.subDepartment;
+
+  const matchesTeamLeader =
+    filters.teamLeader === "All" ||
+    employeeLeader === filters.teamLeader;
+
+  const matchesCountry =
+    filters.country === "All" ||
+    employeeCountry === filters.country;
+
+  const matchesEmployee =
+  filters.employee === "All" ||
+  String(
+    employee.full_name || ""
+  ).trim() ===
+    String(
+      filters.employee || ""
+    ).trim();
+
+return (
+  matchesLob &&
+  matchesDepartment &&
+  matchesSubDepartment &&
+  matchesTeamLeader &&
+  matchesEmployee &&
+  matchesCountry
+);
+});
+
+const employeeOptions = [
   "All",
-  ...visibleEmployees
-    .filter((employee) => {
-      if (filters.teamLeader === "All") {
-        return true;
-      }
-
-      const assignedLeader = String(
-        employee.team_leader ||
-          employee.supervisor ||
-          employee.manager ||
-          ""
-      ).trim();
-
-      return assignedLeader === filters.teamLeader;
-    })
+  ...balanceFilteredEmployees
     .map((employee) =>
-  String(employee.full_name || "").trim()
-)
-.filter(
-  (name) =>
-    Boolean(name) &&
-    name.toLowerCase() !==
-      "roster employee pending name"
-),
+      String(employee.full_name || employee.name || "").trim()
+    )
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b)),
 ];
+
+const getBalanceEmployeeId = (employee) =>
+  String(
+    employee?.id ||
+    employee?.employee_id ||
+    employee?.supabase_id ||
+    ""
+  );
+
+const displayedBalanceEmployees =
+  selectedBalanceEmployeeIds.length > 0
+    ? balanceFilteredEmployees.filter((employee) =>
+        selectedBalanceEmployeeIds.includes(
+          getBalanceEmployeeId(employee)
+        )
+      )
+    : balanceFilteredEmployees;
+
   const countryOptions = ["All", ...new Set(visibleEmployees.map((e) => e.country).filter(Boolean))];
   const categoryOptions = ["All", ...timeCategories, "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change", "Day off due to Swap"];
 
@@ -6725,7 +7104,10 @@ const displayedTimeLogs =
   );
 
   const requestPreview = useMemo(() => {
-    const requestedDays = calculateRequestHours(newRequest);
+    const requestedDays = calculateRequestHours(
+  newRequest,
+  selectedEmployee
+);
     const currentBalance = getBalance(selectedEmployee, newRequest.type);
     return {
       requestedHours: requestedDays,
@@ -6816,12 +7198,43 @@ const displayedTimeLogs =
       return { ...e, totalMinutes, workingMinutes, breakMinutes, otMinutes, scheduledBreakLunch, lateMinutes, productivity, variance: breakMinutes - scheduledBreakLunch };
     });
   }, [filteredVisibleEmployees, filteredTime]);
+function requestIncludesCalendarDate(request, dateKey) {
+  const selectedDate = String(dateKey || "").slice(0, 10);
+  const startDate = String(request?.start_date || "").slice(0, 10);
+  const endDate = String(
+    request?.end_date ||
+    request?.start_date ||
+    ""
+  ).slice(0, 10);
 
+  if (!selectedDate || !startDate) return false;
+
+  return (
+    selectedDate >= startDate &&
+    selectedDate <= endDate
+  );
+}
   function getRequestCalendarDays() {
-    const baseDate = new Date(`${newRequest.start_date || today}T00:00:00`);
-    if (Number.isNaN(baseDate.getTime())) return [];
-    const year = baseDate.getFullYear();
-    const month = baseDate.getMonth();
+  const selectedBaseDate = new Date(
+    `${newRequest.start_date || today}T00:00:00`
+  );
+
+  if (Number.isNaN(selectedBaseDate.getTime())) {
+    return {
+      monthLabel: "",
+      days: [],
+      leadingBlanks: 0,
+    };
+  }
+
+  const baseDate = new Date(
+    selectedBaseDate.getFullYear(),
+    selectedBaseDate.getMonth() + calendarMonthOffset,
+    1
+  );
+
+  const year = baseDate.getFullYear();
+  const month = baseDate.getMonth();
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
     const days = [];
@@ -6852,10 +7265,34 @@ const displayedTimeLogs =
     const dayName = WEEK_DAYS[new Date(`${dateKey}T00:00:00`).getDay()].toLowerCase();
     const offDayAgents = scopedEmployees.filter((employee) => normalizeOffDays(employee.off_days).some((day) => day.toLowerCase() === dayName));
     const scheduledAgents = scopedEmployees.filter((employee) => !offDayAgents.some((off) => off.id === employee.id));
-    const approvedOnDate = requests.filter((request) => request.status === "Approved" && requestCoversDate(request, dateKey));
-    const ptoAgents = approvedOnDate.filter((request) => request.type === "PTO").length;
-    const vtoAgents = approvedOnDate.filter((request) => request.type === "VTO").length;
-    const sickAgents = approvedOnDate.filter((request) => request.type === "Sick Leave").length;
+    const approvedOnDate = requests.filter((request) => {
+  const isApproved =
+    String(request.status || "").toLowerCase() === "approved";
+
+  const isLeaveType = [
+    "PTO",
+    "VTO",
+    "Sick Leave",
+  ].includes(request.type);
+
+  return (
+    isApproved &&
+    isLeaveType &&
+    requestIncludesCalendarDate(request, dateKey)
+  );
+});
+
+const ptoAgents = approvedOnDate.filter(
+  (request) => request.type === "PTO"
+).length;
+
+const vtoAgents = approvedOnDate.filter(
+  (request) => request.type === "VTO"
+).length;
+
+const sickAgents = approvedOnDate.filter(
+  (request) => request.type === "Sick Leave"
+).length;
 
     const relatedRule = rules.find((rule) => {
       const dateAllowed = (!rule.start_date || dateKey >= formatDateOnly(rule.start_date)) && (!rule.end_date || dateKey <= formatDateOnly(rule.end_date));
@@ -7701,38 +8138,84 @@ setTimeEntries((current) => [
   const autoActivities = [];
 
   for (const openLog of openLogs) {
-    const openLogEmployeeId =
-  String(openLog.employee_id || "")
+  const openLogEmployeeId = String(
+    openLog.employee_id || ""
+  )
     .trim()
     .toLowerCase();
 
-const employee =
-  employees.find((item) => {
-    const employeeIds = [
-      item.id,
-      item.employee_id,
-      item.supabase_employee_id,
-    ]
-      .map((value) =>
-        String(value || "")
-          .trim()
-          .toLowerCase()
-      )
-      .filter(Boolean);
+  const openLogEmployeeEmail = String(
+    openLog.employee_email || ""
+  )
+    .trim()
+    .toLowerCase();
 
-    return employeeIds.includes(
-      openLogEmployeeId
-    );
-  });
+  const openLogEmployeeName = String(
+    openLog.employee_name || ""
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+
+  const employee =
+    employees.find((item) => {
+      const employeeIds = [
+        item.id,
+        item.employee_id,
+        item.supabase_employee_id,
+      ]
+        .map((value) =>
+          String(value || "")
+            .trim()
+            .toLowerCase()
+        )
+        .filter(Boolean);
+
+      const employeeEmail = String(
+        item.email || ""
+      )
+        .trim()
+        .toLowerCase();
+
+      const employeeName = String(
+        item.full_name || ""
+      )
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ");
+
+      return (
+        (
+          openLogEmployeeId &&
+          employeeIds.includes(
+            openLogEmployeeId
+          )
+        ) ||
+        (
+          openLogEmployeeEmail &&
+          employeeEmail ===
+            openLogEmployeeEmail
+        ) ||
+        (
+          openLogEmployeeName &&
+          employeeName ===
+            openLogEmployeeName
+        )
+      );
+    });
 
     if (!employee) {
-      console.warn(
-        "Forgotten shift skipped because employee was not found:",
-        openLog.employee_id
-      );
-
-      continue;
+  console.warn(
+    "Forgotten shift skipped because employee was not found:",
+    {
+      employee_id: openLog.employee_id,
+      employee_name: openLog.employee_name || "",
+      employee_email: openLog.employee_email || "",
     }
+  );
+
+  continue;
+}
 
     const employeeTimeZone =
       getEmployeeTimeZone(employee);
@@ -8456,8 +8939,61 @@ const employee =
   }
 
   function getApprovalRiskMessage(request) {
-    const employee = employees.find((e) => e.id === request.employee_id);
-    if (!employee) return "Employee profile was not found. Please confirm before approving.";
+    const requestEmployeeId = String(
+  request?.employee_id ||
+  request?.Employee_ID ||
+  ""
+).trim();
+
+const requestEmployeeEmail = normalizeEmail(
+  request?.employee_email ||
+  request?.email ||
+  ""
+);
+
+const requestEmployeeName = normalizeNameKey(
+  request?.employee_name ||
+  request?.Employee_Name ||
+  ""
+);
+
+const employee =
+  employees.find((e) => {
+    const employeeIds = [
+      e?.id,
+      e?.employee_id,
+      e?.supabase_employee_id,
+      e?.Employee_ID,
+    ]
+      .map((value) =>
+        String(value || "").trim()
+      )
+      .filter(Boolean);
+
+    return (
+      (
+        requestEmployeeId &&
+        employeeIds.includes(
+          requestEmployeeId
+        )
+      ) ||
+      (
+        requestEmployeeEmail &&
+        normalizeEmail(e?.email) ===
+          requestEmployeeEmail
+      ) ||
+      (
+        requestEmployeeName &&
+        normalizeNameKey(
+          e?.full_name
+        ) === requestEmployeeName
+      )
+    );
+  }) || null;
+
+if (!employee) {
+  return `Employee profile could not be matched for ${request?.employee_name || "this request"}. Manager override is required before approving.`;
+}
 
     const balance = getBalance(employee, request.type);
 
@@ -8521,23 +9057,162 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
       let updatedEmployee = employees.find((e) => e.id === latestRequest.employee_id);
 
       if (status === "Approved") {
-        const field = balanceField(latestRequest.type);
-        if (field) {
-          updatedEmployees = employees.map((e) => {
-            if (e.id !== latestRequest.employee_id) return e;
-            const newBalance = Math.max(0, safeNumber(e[field], 0) - safeNumber(latestRequest.hours, 0));
-            return { ...e, [field]: newBalance };
-          });
-          updatedEmployee = updatedEmployees.find((e) => e.id === latestRequest.employee_id);
+  const requestedDays = requestDaysValue(latestRequest);
 
-          if (supabase && updatedEmployee) {
-            await supabase.from("employees").update({ [field]: updatedEmployee[field] }).eq("email", updatedEmployee.email);
-          }
+  updatedEmployees = employees.map((employee) => {
+    if (
+      String(employee.id || employee.employee_id || "") !==
+      String(latestRequest.employee_id || "")
+    ) {
+      return employee;
+    }
 
-          if (updatedEmployee) {
-            await googleUpdateRow("employees", "Employee_ID", latestRequest.employee_id, mapEmployeeToSheet(updatedEmployee));
+    /*
+      PTO uses entitlement, taken, and available days.
+    */
+    if (latestRequest.type === "PTO") {
+  const currentAvailable = safeNumber(
+    employee.pto_balance_days ??
+    employee.available_days ??
+    employee.current_available_days,
+    0
+  );
+
+  const currentTaken = safeNumber(
+    employee.vacation_taken_days ??
+    employee.vacation_taken,
+    0
+  );
+
+  const nextTaken = currentTaken + requestedDays;
+
+  const nextAvailable = Math.max(
+    0,
+    currentAvailable - requestedDays
+  );
+
+  return {
+    ...employee,
+    vacation_taken_days: nextTaken,
+    vacation_taken: nextTaken,
+    available_days: nextAvailable,
+    current_available_days: nextAvailable,
+    pto_balance_days: nextAvailable,
+    pto_balance: nextAvailable * 8,
+  };
+}
+
+    /*
+      Sick Leave and VTO continue deducting
+      their corresponding day balances.
+    */
+    const field =
+      balanceFieldDays(latestRequest.type);
+
+    if (!field) {
+      return employee;
+    }
+
+    const nextBalance = Math.max(
+      0,
+      safeNumber(employee[field], 0) -
+        requestedDays
+    );
+
+    const hoursField =
+      latestRequest.type === "Sick Leave"
+        ? "sick_balance"
+        : latestRequest.type === "VTO"
+        ? "vto_balance"
+        : null;
+
+    return {
+      ...employee,
+      [field]: nextBalance,
+      ...(hoursField
+        ? {
+            [hoursField]:
+              nextBalance * 8,
           }
-        }
+        : {}),
+    };
+  });
+
+  updatedEmployee =
+    updatedEmployees.find(
+      (employee) =>
+        String(
+          employee.id ||
+            employee.employee_id ||
+            ""
+        ) ===
+        String(
+          latestRequest.employee_id ||
+            ""
+        )
+    ) || updatedEmployee;
+
+    const balanceUpdatePayload = {};
+
+  if (latestRequest.type === "PTO") {
+  const nextTaken = Number(
+    updatedEmployee.vacation_taken_days ??
+    updatedEmployee.vacation_taken ??
+    0
+  );
+
+  const nextAvailable = Number(
+    updatedEmployee.pto_balance_days ??
+    updatedEmployee.available_days ??
+    0
+  );
+
+  balanceUpdatePayload.vacation_taken = nextTaken;
+  balanceUpdatePayload.available_days = nextAvailable;
+  balanceUpdatePayload.current_available_days = nextAvailable;
+  balanceUpdatePayload.pto_balance_days = nextAvailable;
+}
+
+  if (latestRequest.type === "Sick Leave") {
+    balanceUpdatePayload.sick_balance_days = Number(
+      updatedEmployee.sick_balance_days ??
+      updatedEmployee.sick_balance ??
+      0
+    );
+  }
+
+  if (latestRequest.type === "VTO") {
+    balanceUpdatePayload.vto_balance_days = Number(
+      updatedEmployee.vto_balance_days ??
+      updatedEmployee.vto_balance ??
+      0
+    );
+  }
+
+  if (
+  supabase &&
+  Object.keys(balanceUpdatePayload).length
+) {
+    const { error: balanceUpdateError } = await supabase
+      .from("employee_balances")
+      .update(balanceUpdatePayload)
+      .eq("employee_id", String(latestRequest.employee_id));
+
+    if (balanceUpdateError) {
+      throw new Error(
+        `Balance update failed: ${balanceUpdateError.message}`
+      );
+    }
+  }
+
+  if (updatedEmployee) {
+    await googleUpdateRow(
+      "employees",
+      "Employee_ID",
+      latestRequest.employee_id,
+      mapEmployeeToSheet(updatedEmployee)
+    );
+  }
 
         if (latestRequest.type === "Schedule Override" && updatedEmployee) {
           updatedEmployees = updatedEmployees.map((employee) =>
@@ -8648,6 +9323,199 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
       setRequests((current) => current.map((r) => (r.id === id ? updatedRequest : r)));
     });
   }
+
+  async function cancelApprovedRequest(request) {
+  if (!request) return;
+
+  const requestAppId = String(
+    request.app_request_id ||
+    request.id ||
+    ""
+  );
+
+  const employee =
+    employees.find(
+      (e) =>
+        String(e.id || e.employee_id || "") ===
+        String(request.employee_id || "")
+    ) ||
+    employees.find(
+      (e) =>
+        normalizeNameKey(e.full_name) ===
+        normalizeNameKey(request.employee_name)
+    );
+
+  if (!employee) {
+    showToast(
+      "Unable to cancel",
+      "Employee profile could not be matched.",
+      "danger"
+    );
+    return;
+  }
+
+  const requestDays = requestDaysValue(request);
+
+  if (!requestDays || requestDays <= 0) {
+    showToast(
+      "Unable to cancel",
+      "The approved request does not contain a valid day amount.",
+      "danger"
+    );
+    return;
+  }
+
+  if (request.type === "PTO") {
+    const currentTaken = safeNumber(
+      employee.vacation_taken_days ??
+        employee.vacation_taken ??
+        0
+    );
+
+    const currentAvailable = safeNumber(
+      employee.pto_balance_days ??
+        employee.available_days ??
+        0
+    );
+
+    const restoredTaken = Math.max(
+      0,
+      currentTaken - requestDays
+    );
+
+    const restoredAvailable =
+      currentAvailable + requestDays;
+
+    const balanceUpdatePayload = {
+  vacation_taken: restoredTaken,
+  available_days: restoredAvailable,
+};
+
+    const { error: balanceUpdateError } =
+      await supabase
+        .from("employee_balances")
+        .update(balanceUpdatePayload)
+        .eq(
+          "employee_id",
+          String(request.employee_id)
+        );
+
+    if (balanceUpdateError) {
+      throw new Error(
+        `Balance restoration failed: ${balanceUpdateError.message}`
+      );
+    }
+  }
+
+  const { error: requestUpdateError } =
+    await supabase
+      .from("requests")
+      .update({
+        status: "Cancelled",
+      })
+      .eq("app_request_id", requestAppId);
+
+  if (requestUpdateError) {
+    throw new Error(
+      `Request cancellation failed: ${requestUpdateError.message}`
+    );
+  }
+if (request.type === "PTO") {
+  const currentTaken = safeNumber(
+    employee.vacation_taken_days ??
+      employee.vacation_taken ??
+      0
+  );
+
+  const currentAvailable = safeNumber(
+    employee.pto_balance_days ??
+      employee.available_days ??
+      0
+  );
+
+  const restoredTaken = Math.max(
+    0,
+    currentTaken - requestDays
+  );
+
+  const restoredAvailable =
+    currentAvailable + requestDays;
+
+  const balanceUpdatePayload = {
+  vacation_taken: restoredTaken,
+  available_days: restoredAvailable,
+};
+
+  const { error: balanceUpdateError } =
+    await supabase
+      .from("employee_balances")
+      .update(balanceUpdatePayload)
+      .eq(
+        "employee_id",
+        String(request.employee_id)
+      );
+
+  if (balanceUpdateError) {
+    throw new Error(
+      `Balance restoration failed: ${balanceUpdateError.message}`
+    );
+  }
+}
+  setRequests((current) =>
+    current.map((item) =>
+      String(item.id) === String(request.id)
+        ? {
+            ...item,
+            status: "Cancelled",
+          }
+        : item
+    )
+  );
+
+  setEmployees((current) =>
+    current.map((item) => {
+      const sameEmployee =
+        String(item.id || item.employee_id || "") ===
+        String(request.employee_id || "");
+
+      if (!sameEmployee) return item;
+
+      if (request.type !== "PTO") return item;
+
+      const restoredTaken = Math.max(
+        0,
+        safeNumber(
+          item.vacation_taken_days ??
+            item.vacation_taken ??
+            0
+        ) - requestDays
+      );
+
+      const restoredAvailable =
+        safeNumber(
+          item.pto_balance_days ??
+            item.available_days ??
+            0
+        ) + requestDays;
+
+      return {
+        ...item,
+        vacation_taken_days: restoredTaken,
+        vacation_taken: restoredTaken,
+        available_days: restoredAvailable,
+        current_available_days: restoredAvailable,
+        pto_balance_days: restoredAvailable,
+        pto_balance: restoredAvailable * 8,
+      };
+    })
+  );
+
+  showToast(
+    "Request cancelled",
+    `${request.employee_name}'s ${request.type} request was cancelled and the balance was restored.`,
+    "success"
+  );
+}
 
   async function setTimeStatus(id, approved) {
     if (isAgentOnly) return;
@@ -9822,8 +10690,39 @@ const mustCreatePersonalPassword = Boolean(
   }
 }
 
-  const requestCalendar = useMemo(() => getRequestCalendarDays(), [newRequest.start_date, newRequest.type, filters, filteredVisibleEmployees, requests, rules]);
+  const requestCalendar = useMemo(
+  () => getRequestCalendarDays(),
+  [
+    newRequest.start_date,
+    newRequest.type,
+    calendarMonthOffset,
+    filters,
+    filteredVisibleEmployees,
+    requests,
+    rules,
+  ]
+);
+const calendarDateApprovedRequests = calendarDetailDate
+  ? requests.filter((request) => {
+      const isApproved =
+        String(request.status || "").toLowerCase() === "approved";
 
+      const isLeaveType = [
+        "PTO",
+        "VTO",
+        "Sick Leave",
+      ].includes(request.type);
+
+      return (
+        isApproved &&
+        isLeaveType &&
+        requestIncludesCalendarDate(
+          request,
+          calendarDetailDate
+        )
+      );
+    })
+  : [];
   const headerRequestSummary = requestStatusSummary(filteredRequests);
   const scheduledTodayCount = filteredVisibleEmployees.filter((employee) => !isTodayOffDay(employee) && employee.employment_status === "Active").length;
   const activeEmployeeCount = filteredVisibleEmployees.filter((employee) => employee.employment_status === "Active").length;
@@ -10000,9 +10899,54 @@ if (startupLoading) {
     ))}
   </select>
 </Field>
-            <Field label="Department"><select value={filters.department} onChange={(e) => setFilters({ ...filters, department: e.target.value })}>{departmentOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
-            <Field label="Sub-Department"><select value={filters.subDepartment} onChange={(e) => setFilters({ ...filters, subDepartment: e.target.value })}>{subDepartmentOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
-          <Field label="Manager / TL">
+            <Field label="Department">
+  <select
+    value={filters.department}
+    onChange={(event) =>
+      setFilters({
+        ...filters,
+        department: event.target.value,
+        subDepartment: "All",
+        teamLeader: "All",
+        employee: "All",
+      })
+    }
+  >
+    {departmentOptions.map((department) => (
+      <option
+        key={department}
+        value={department}
+      >
+        {department}
+      </option>
+    ))}
+  </select>
+</Field>
+
+<Field label="Sub-Department">
+  <select
+    value={filters.subDepartment}
+    onChange={(event) =>
+      setFilters({
+        ...filters,
+        subDepartment: event.target.value,
+        teamLeader: "All",
+        employee: "All",
+      })
+    }
+  >
+    {subDepartmentOptions.map((subDepartment) => (
+      <option
+        key={subDepartment}
+        value={subDepartment}
+      >
+        {subDepartment}
+      </option>
+    ))}
+  </select>
+</Field>
+
+<Field label="Manager / TL">
   <select
     value={filters.teamLeader}
     onChange={(event) =>
@@ -10014,7 +10958,10 @@ if (startupLoading) {
     }
   >
     {teamLeaderOptions.map((leader) => (
-      <option key={leader} value={leader}>
+      <option
+        key={leader}
+        value={leader}
+      >
         {leader}
       </option>
     ))}
@@ -10676,7 +11623,15 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
   {editableTimeLogs.length} matching time logs.
   Use the filters above to locate older records.
 </p>
-
+<div
+  style={{
+    width: "100%",
+    overflowX: "auto",
+    overflowY: "hidden",
+    paddingBottom: "10px",
+  }}
+>
+  <div style={{ minWidth: "1250px" }}>
               <Table
                 headers={[
   "Select",
@@ -10710,10 +11665,27 @@ t.id
   }
 />,
                   <strong>{t.employee_name}</strong>,
-                  <input type="date" value={t.date || today} onChange={(event) => editTimeEntryLocal(t.id, "date", event.target.value)} />,
-                  t.lob,
-                  <select value={t.category} onChange={(event) => editTimeEntryLocal(t.id, "category", event.target.value)}><TimeCategoryOptions /></select>,
                   <input
+  type="date"
+    value={t.date || today}
+  onChange={(event) =>
+    editTimeEntryLocal(t.id, "date", event.target.value)
+  }
+/>,
+                  <select
+  value={t.category || t.status || "Working"}
+  onChange={(event) =>
+    editTimeEntryLocal(
+      t.id || t.app_log_id,
+      "category",
+      event.target.value
+    )
+  }
+>
+  <TimeCategoryOptions />
+</select>,
+
+<input
   type="time"
   value={formatLogTimeForInput(
     t.category_start || t.clock_in,
@@ -10730,7 +11702,7 @@ t.id
 />,
 <input
   type="time"
-  value={formatLogTimeForInput(
+    value={formatLogTimeForInput(
     t.category_end || t.clock_out,
     t,
     employees
@@ -10803,7 +11775,9 @@ formatHours(
                   <input value={t.notes || ""} onChange={(event) => editTimeEntryLocal(t.id, "notes", event.target.value)} placeholder="Correction notes" />,
                   <button className="primary" onClick={() => saveEditedTimeEntry(t.id)}>Save</button>,
                 ])}
-              />
+                            />
+  </div>
+</div>
             </Card>
           </section>
         )}
@@ -10812,12 +11786,466 @@ formatHours(
           <section className="requestsPage">
             <div className="grid split reverse">
               <Card title="Submit PTO / VTO / leave"><p className="helperText">PTO, VTO, and sick requests are approved in full days. Select the start and end dates and the app calculates the number of requested days automatically.</p><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{filteredVisibleEmployees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{REQUEST_TYPE_OPTIONS.map((x) => <option key={x}>{x}</option>)}</select><input type="date" value={newRequest.start_date} onChange={(e) => setNewRequest({ ...newRequest, start_date: e.target.value, end_date: e.target.value })} /><input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} /><input type="number" min="0" step="0.25" title="Requests are now approved in full days." value={newRequest.start_date !== newRequest.end_date ? calculateRequestHours(newRequest) : newRequest.hours} disabled={true} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} /><input placeholder="Reason" value={newRequest.reason} onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })} /><button className="primary wide" onClick={saveRequest}>Submit request</button></FormGrid></Card>
-              <Card title="Request history"><Table headers={["Employee", "Type", "Dates", "Days", "Current Balance", "After Approval", "Status"]} rows={filteredRequests.map((r) => [r.employee_name, r.type, `${r.start_date} to ${r.end_date}`, `${requestDaysValue(r).toFixed(1)} day(s)`, r.current_balance ?? "N/A", r.projected_balance ?? "N/A", <Badge>{r.status}</Badge>])} /></Card>
+<div>
+  <Card title="Employee Vacation Balance">
+  <p className="helperText">
+    Use the filters above to review vacation balances by LOB, department,
+    sub-department, Manager / TL, employee, or country.
+  </p>
+
+  {!isAgentOnly && balanceFilteredEmployees.length > 0 && (
+    <div
+      style={{
+        display: "flex",
+        gap: "8px",
+        flexWrap: "wrap",
+        marginBottom: "12px",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() =>
+          setSelectedBalanceEmployeeIds(
+            balanceFilteredEmployees
+              .map((employee) => getBalanceEmployeeId(employee))
+              .filter(Boolean)
+          )
+        }
+      >
+        Select All Filtered
+      </button>
+
+      <button
+        type="button"
+        onClick={() => setSelectedBalanceEmployeeIds([])}
+      >
+        Clear Selection
+      </button>
+
+      <span className="helperText">
+        {balanceFilteredEmployees.length} employee(s) match current filters
+      </span>
+    </div>
+  )}
+
+  {!isAgentOnly && balanceFilteredEmployees.length > 0 && (
+  <details
+    style={{
+      marginBottom: "14px",
+      border: "1px solid #dce9e3",
+      borderRadius: "10px",
+      padding: "10px 12px",
+      background: "#ffffff",
+    }}
+  >
+    <summary
+      style={{
+        cursor: "pointer",
+        fontWeight: "600",
+      }}
+    >
+      {selectedBalanceEmployeeIds.length > 0
+        ? `${selectedBalanceEmployeeIds.length} employee(s) selected`
+        : `Select employees (${balanceFilteredEmployees.length} available)`}
+    </summary>
+
+
+    <div
+      style={{
+        marginTop: "10px",
+        maxHeight: "180px",
+        overflowY: "auto",
+        display: "grid",
+        gridTemplateColumns:
+          "repeat(auto-fit, minmax(170px, 1fr))",
+        gap: "6px",
+      }}
+    >
+      {balanceFilteredEmployees.map((employee) => {
+        const employeeId =
+          getBalanceEmployeeId(employee);
+
+        const employeeName = String(
+          employee.full_name ||
+            employee.name ||
+            employee.email ||
+            employeeId
+        ).trim();
+
+        const checked =
+          selectedBalanceEmployeeIds.includes(
+            employeeId
+          );
+
+        return (
+          <label
+            key={employeeId}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "8px",
+              cursor: "pointer",
+              padding: "6px",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={() => {
+                setSelectedBalanceEmployeeIds(
+                  (current) =>
+                    current.includes(employeeId)
+                      ? current.filter(
+                          (id) =>
+                            id !== employeeId
+                        )
+                      : [
+                          ...current,
+                          employeeId,
+                        ]
+                );
+              }}
+            />
+
+            <span>{employeeName}</span>
+          </label>
+        );
+      })}
+    </div>
+  </details>
+)}
+
+  {displayedBalanceEmployees.length === 0 ? (
+    <p className="helperText">
+      No employees match the current filters.
+    </p>
+  ) : (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+        gap: "12px",
+      }}
+    >
+      {displayedBalanceEmployees.map((employee) => {
+        const employeeId = getBalanceEmployeeId(employee);
+
+        const employeeName = String(
+          employee.full_name ||
+          employee.name ||
+          employee.email ||
+          employeeId
+        ).trim();
+
+        const entitlement = Number(
+          employee.vacation_entitlement_days ?? 0
+        );
+
+        const taken = Number(
+          employee.vacation_taken_days ?? 0
+        );
+
+        const available = Number(
+          employee.pto_balance_days ??
+          employee.available_days ??
+          entitlement - taken
+        );
+
+        const employeeDepartment = String(
+          employee.department || ""
+        ).trim();
+
+        const employeeSubDepartment = String(
+          employee.sub_department ||
+          employee.subDepartment ||
+          ""
+        ).trim();
+
+        const employeeLeader = String(
+          employee.team_leader ||
+          employee.supervisor ||
+          employee.manager ||
+          ""
+        ).trim();
+
+        return (
+          <div
+            key={employeeId}
+            style={{
+              padding: "12px",
+              borderRadius: "10px",
+              background: "#f6fbf8",
+              border: "1px solid #dce9e3",
+            }}
+          >
+            <strong style={{ display: "block" }}>
+              {employeeName}
+            </strong>
+
+            <div
+              className="helperText"
+              style={{ marginBottom: "10px" }}
+            >
+              {[
+                employeeDepartment,
+                employeeSubDepartment,
+                employeeLeader,
+              ]
+                .filter(Boolean)
+                .join(" • ")}
             </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(3, 1fr)",
+                gap: "8px",
+              }}
+            >
+              <div>
+                <small>Entitlement</small>
+                <strong style={{ display: "block" }}>
+                  {entitlement} day(s)
+                </strong>
+              </div>
+
+              <div>
+                <small>Taken / Approved</small>
+                <strong style={{ display: "block" }}>
+                  {taken} day(s)
+                </strong>
+              </div>
+
+              <div>
+                <small>Available</small>
+                <strong style={{ display: "block" }}>
+                  {available} day(s)
+                </strong>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  )}
+</Card>
+
+  <details style={{ marginTop: "12px" }}>
+    <summary
+      style={{
+        cursor: "pointer",
+        fontWeight: "700",
+        padding: "12px",
+      }}
+    >
+      View Request History
+    </summary>
+
+    <Card title="Request history">
+      <Table
+        headers={[
+  "Employee",
+  "Type",
+  "Dates",
+  "Days",
+  "Current Balance",
+  "After Approval",
+  "Status",
+  "Action"
+]}
+rows={filteredRequests.map((r) => [
+  r.employee_name,
+  r.type,
+  `${r.start_date} to ${r.end_date}`,
+  `${requestDaysValue(r)} day(s)`,
+  r.current_balance ?? "N/A",
+  r.projected_balance ?? "N/A",
+  <Badge>{r.status}</Badge>,
+  String(r.status || "").toLowerCase() === "approved" &&
+  ["PTO", "VTO", "Sick Leave"].includes(r.type) ? (
+    <button
+      type="button"
+      className="btn"
+      onClick={() => cancelApprovedRequest(r)}
+    >
+      Cancel
+    </button>
+  ) : (
+    "—"
+  )
+])}
+      />
+    </Card>
+  </details>
+</div>            </div>
             <Card title="Leave planning calendar and staffing capacity">
               <p className="helperText">Select a date to preview rule capacity by the current filters. Green dates are available by staffing rules; red dates may exceed PTO/VTO/Sick limits or minimum staffing.</p>
-              <RequestCapacityCalendar calendar={requestCalendar} onSelectDate={(dateKey) => setNewRequest({ ...newRequest, start_date: dateKey, end_date: dateKey })} selectedDate={newRequest.start_date} />
+              <div
+  style={{
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: "12px",
+    margin: "14px 0",
+  }}
+>
+  <button
+    type="button"
+    className="btn"
+    onClick={() =>
+      setCalendarMonthOffset(
+        (current) => current - 1
+      )
+    }
+  >
+    ← Previous Month
+  </button>
+
+  <strong
+    style={{
+      fontSize: "16px",
+      textAlign: "center",
+    }}
+  >
+    {requestCalendar?.monthLabel}
+  </strong>
+
+  <button
+    type="button"
+    className="btn"
+    onClick={() =>
+      setCalendarMonthOffset(
+        (current) => current + 1
+      )
+    }
+  >
+    Next Month →
+  </button>
+</div>
+              <RequestCapacityCalendar calendar={requestCalendar} onSelectDate={(dateKey) => {
+  setCalendarDetailDate(dateKey);
+
+  setNewRequest({
+    ...newRequest,
+    start_date: dateKey,
+    end_date: dateKey,
+  });
+}} selectedDate={newRequest.start_date} />
             </Card>
+            {calendarDetailDate && (
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      background: "rgba(0, 0, 0, 0.45)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 9999,
+      padding: "20px",
+    }}
+    onClick={() => setCalendarDetailDate(null)}
+  >
+    <div
+      style={{
+        width: "100%",
+        maxWidth: "560px",
+        maxHeight: "80vh",
+        overflowY: "auto",
+        background: "white",
+        borderRadius: "16px",
+        padding: "24px",
+        boxShadow: "0 20px 50px rgba(0,0,0,0.25)",
+      }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: "16px",
+          marginBottom: "16px",
+        }}
+      >
+        <div>
+          <h3 style={{ margin: 0 }}>
+            Approved Time Off
+          </h3>
+
+          <p
+            className="muted"
+            style={{ margin: "4px 0 0" }}
+          >
+            {calendarDetailDate}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setCalendarDetailDate(null)}
+        >
+          Close
+        </button>
+      </div>
+
+      {calendarDateApprovedRequests.length === 0 ? (
+        <p className="muted">
+          No approved PTO, VTO, or Sick Leave for this date.
+        </p>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gap: "10px",
+          }}
+        >
+          {calendarDateApprovedRequests.map((request) => (
+            <div
+              key={request.id}
+              style={{
+                border: "1px solid #dfe8e4",
+                borderRadius: "12px",
+                padding: "14px",
+              }}
+            >
+              <strong>
+                {request.employee_name || "Employee"}
+              </strong>
+
+              <div style={{ marginTop: "5px" }}>
+                {request.type}
+              </div>
+
+              <div
+                className="muted"
+                style={{ marginTop: "4px" }}
+              >
+                {formatDateOnly(request.start_date)}
+                {" → "}
+                {formatDateOnly(
+                  request.end_date || request.start_date
+                )}
+              </div>
+              <button
+  type="button"
+  className="btn"
+  style={{
+    marginTop: "12px",
+    width: "100%",
+  }}
+  onClick={() => cancelApprovedRequest(request)}
+>
+  Cancel Approved Request
+</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  </div>
+)}
           </section>
         )}
 
@@ -10827,10 +12255,226 @@ formatHours(
               <p className="helperText">Use this queue for requests submitted by employees, including PTO, VTO, Sick Leave, Paid Leave, Unpaid Leave, Schedule Change, and OT requests submitted as a formal request. Approval updates the Requests tab, creates an Approvals audit record, and deducts balances when applicable.</p>
               {requests.filter((r) => ["Pending", "Pending Manager Approval"].includes(r.status)).length ? requests.filter((r) => ["Pending", "Pending Manager Approval"].includes(r.status)).map((r) => <Approval key={r.id} title={r.employee_name} detail={`${r.type} · ${formatDateOnly(r.start_date)} to ${formatDateOnly(r.end_date)} · ${requestDaysValue(r).toFixed(1)} day(s) · Current: ${r.current_balance ?? "N/A"} day(s) · After: ${r.projected_balance ?? "N/A"} day(s)`} approve={() => setRequestStatus(r.id, "Approved")} deny={() => setRequestStatus(r.id, "Denied")} />) : <p className="muted">No pending employee requests at this time.</p>}
             </Card>
-            <Card title="Time Log / Overtime Exception Data Backed Up">
-              <p className="helperText">The previous time log and overtime exception approval rule has been removed from this approval view. Time log and overtime records are still retained in Time Logs, payroll review, reporting, and archive/export data for audit purposes.</p>
-              <Table headers={["Employee", "Category", "Date", "Status", "Backup"]} rows={timeEntries.filter((t) => t.approved === "Pending").slice(0, 8).map((t) => [t.employee_name, t.category, formatDateOnly(t.date), t.approved, "Retained"])} />
-            </Card>
+
+<div className="manager-side-column">
+
+  <div>
+    <Card title="Leave planning calendar">
+  <p className="helperText">
+    Review staffing capacity while processing time-off requests.
+  </p>
+
+  <div
+    style={{
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: "8px",
+      margin: "10px 0",
+    }}
+  >
+    <button
+      type="button"
+      className="btn"
+      onClick={() =>
+        setCalendarMonthOffset((current) => current - 1)
+      }
+    >
+      ← Previous
+    </button>
+
+    <strong style={{ fontSize: "14px", textAlign: "center" }}>
+      {requestCalendar?.monthLabel}
+    </strong>
+
+    <button
+      type="button"
+      className="btn"
+      onClick={() =>
+        setCalendarMonthOffset((current) => current + 1)
+      }
+    >
+      Next →
+    </button>
+  </div>
+
+  <RequestCapacityCalendar
+  calendar={requestCalendar}
+  onSelectDate={(dateKey) => {
+    setCalendarDetailDate(dateKey);
+  }}
+  selectedDate={calendarDetailDate}
+/>
+</Card>
+
+{calendarDetailDate && (
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      background: "rgba(0, 0, 0, 0.45)",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 9999,
+      padding: "20px",
+    }}
+    onClick={() => setCalendarDetailDate(null)}
+  >
+    <div
+      style={{
+        width: "100%",
+        maxWidth: "560px",
+        maxHeight: "80vh",
+        overflowY: "auto",
+        background: "white",
+        borderRadius: "16px",
+        padding: "24px",
+        boxShadow: "0 20px 50px rgba(0,0,0,0.25)",
+      }}
+      onClick={(event) => event.stopPropagation()}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          gap: "16px",
+          marginBottom: "16px",
+        }}
+      >
+        <div>
+          <h3 style={{ margin: 0 }}>
+            Approved Time Off
+          </h3>
+
+          <p
+            className="muted"
+            style={{ margin: "4px 0 0" }}
+          >
+            {calendarDetailDate}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="btn"
+          onClick={() =>
+            setCalendarDetailDate(null)
+          }
+        >
+          Close
+        </button>
+      </div>
+
+      {calendarDateApprovedRequests.length === 0 ? (
+        <p className="muted">
+          No approved PTO, VTO, or Sick Leave for this date.
+        </p>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gap: "10px",
+          }}
+        >
+          {calendarDateApprovedRequests.map(
+            (request) => (
+              <div
+                key={request.id}
+                style={{
+                  border: "1px solid #dfe8e4",
+                  borderRadius: "12px",
+                  padding: "14px",
+                }}
+              >
+                <strong>
+                  {request.employee_name ||
+                    "Employee"}
+                </strong>
+
+                <div style={{ marginTop: "5px" }}>
+                  {request.type}
+                </div>
+
+                <div
+                  className="muted"
+                  style={{ marginTop: "4px" }}
+                >
+                  {formatDateOnly(
+                    request.start_date
+                  )}
+                  {" → "}
+                  {formatDateOnly(
+                    request.end_date ||
+                      request.start_date
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  className="btn"
+                  style={{
+                    marginTop: "12px",
+                    width: "100%",
+                  }}
+                  onClick={() =>
+                    cancelApprovedRequest(
+                      request
+                    )
+                  }
+                >
+                  Cancel Approved Request
+                </button>
+              </div>
+            )
+          )}
+        </div>
+      )}
+    </div>
+  </div>
+)}
+
+  <details style={{ marginTop: "12px" }}>
+    <summary
+      style={{
+        cursor: "pointer",
+        fontWeight: "700",
+        padding: "10px 0",
+      }}
+    >
+      Time Log / Overtime Exception Data
+    </summary>
+
+    <Card title="Time Log / Overtime Exception Data Backed Up">
+      <p className="helperText">
+        Time log and overtime records remain available for audit purposes.
+      </p>
+
+      <Table
+        headers={[
+          "Employee",
+          "Category",
+          "Date",
+          "Status",
+          "Backup",
+        ]}
+        rows={timeEntries
+          .filter((t) => t.approved === "Pending")
+          .slice(0, 8)
+          .map((t) => [
+            t.employee_name,
+            t.category,
+            formatDateOnly(t.date),
+            t.approved,
+            "Retained",
+          ])}
+      />
+    </Card>
+  </details>
+</div>
+
+</div>
           </section>
         )}
 
@@ -11107,7 +12751,7 @@ formatHours(
                 </div>
               ))}
             </section>
-            <section className="grid two">
+            <section className="manager-approvals-layout">
               <Card title="Agent-level adherence detail">
                 <Table
                   headers={["Employee", "LOB", "Department", "Sub-Department", "Productivity", "Late", "Break Used", "Scheduled Break", "Variance", "OT"]}
