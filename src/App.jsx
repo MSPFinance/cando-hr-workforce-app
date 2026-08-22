@@ -161,6 +161,7 @@ const DEFAULT_LOGIN_PASSWORD = "Welcome2026!";
 const ADMIN_ACCESS_LEVELS = ["TL", "Team Lead", "Supervisor", "Manager", "Approvals", "Reporting", "HR", "Payroll", "Admin", "Executive"];
 const OT_REQUESTS_ENABLED = false;
 const EARLY_SHIFT_START_GRACE_MINUTES = 15;
+const PAYROLL_VARIANCE_TOLERANCE_MINUTES = 5;
 const REQUEST_TYPE_OPTIONS = ["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Day off due to Swap"];
 const APPROVED_ATTENDANCE_ABSENCE_TYPES = [
   "PTO",
@@ -1128,7 +1129,11 @@ function mapWorkforceSyncRow(row) {
     if (Number.isFinite(numericValue)) payload[field] = numericValue;
   };
 
-  setText("country", ["Country", "Site", "Location"]);
+  setText("country", [
+  "Country",
+  "Employee Country",
+  "Country Code",
+]);
   setText("lob", ["LOB", "Line of Business", "Line_Of_Business", "Client"]);
   setText("department", ["Department", "Team", "Area"]);
   setText("sub_department", ["Sub_Department", "Sub Department", "SubDepartment", "Sub Team", "Queue", "Role"]);
@@ -3012,8 +3017,97 @@ function balanceFieldDays(type) {
   return null;
 }
 
-function isHolidayForCountry(country, date, holidays = countryHolidaySeed) {
-  return holidays.find((holiday) => holiday.country === country && formatDateOnly(holiday.holiday_date) === formatDateOnly(date));
+function isHolidayForCountry(
+  country,
+  date,
+  holidays = countryHolidaySeed
+) {
+  const normalizeCountry = (value) =>
+    String(value || "")
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+
+  const targetCountry =
+    normalizeCountry(country);
+
+  const targetDate =
+    formatDateOnly(date);
+
+  return holidays.find((holiday) => {
+    const holidayCountry =
+      holiday.country_name ||
+      holiday.country ||
+      "";
+
+    return (
+      normalizeCountry(
+        holidayCountry
+      ) === targetCountry &&
+      formatDateOnly(
+        holiday.holiday_date
+      ) === targetDate
+    );
+  });
+}
+
+function getPayrollPeriodRange(
+  monthKey,
+  period
+) {
+  const cleanMonth =
+    String(monthKey || today.slice(0, 7));
+
+  const [year, month] =
+    cleanMonth.split("-").map(Number);
+
+  if (
+    !Number.isFinite(year) ||
+    !Number.isFinite(month)
+  ) {
+    return {
+      startDate: "",
+      endDate: "",
+      label: "",
+    };
+  }
+
+  const lastDay =
+    new Date(year, month, 0).getDate();
+
+  const startDay =
+    period === "second" ? 16 : 1;
+
+  const endDay =
+    period === "second" ? lastDay : 15;
+
+  const pad = (value) =>
+    String(value).padStart(2, "0");
+
+  const startDate =
+    `${year}-${pad(month)}-${pad(startDay)}`;
+
+  const endDate =
+    `${year}-${pad(month)}-${pad(endDay)}`;
+
+  const monthLabel =
+    new Date(
+      year,
+      month - 1,
+      1
+    ).toLocaleDateString("en-US", {
+      month: "long",
+      year: "numeric",
+    });
+
+  return {
+    startDate,
+    endDate,
+    label:
+      `${monthLabel} · ` +
+      `${startDay}-${endDay}`,
+  };
 }
 
 function employeeLiveStatus(
@@ -3607,7 +3701,15 @@ function mapSupabaseEmployee(row = {}, balance = {}, schedule = {}, base = {}) {
     supabase_employee_id: firstKnownValue(row, ["employee_id", "Employee_ID"], row.id || ""),
     full_name: firstKnownValue(row, ["full_name", "name", "employee_name", "Full_Name"], "Unnamed Employee"),
     email: firstKnownValue(row, ["email", "employee_email", "Auth_Email"], ""),
-    country: firstKnownValue(row, ["country", "site", "location"], "Costa Rica"),
+    country: firstKnownValue(
+  row,
+  ["country", "country_code"],
+  firstKnownValue(
+    base,
+    ["country"],
+    ""
+  )
+),
     lob: firstKnownValue(row, ["lob", "LOB"], "GoDay"),
     department: firstKnownValue(row, ["department", "area"], firstKnownValue(row, ["team"], "Operations")),
     sub_department: firstKnownValue(row, ["sub_department", "subDepartment", "queue", "team"], ""),
@@ -4241,6 +4343,414 @@ function ManagerOverrideModal({ title, message, onCancel, onConfirm }) {
   );
 }
 
+function PayrollReviewModal({
+  reviewers = [],
+  selectedRecipients = [],
+  setSelectedRecipients,
+  periodLabel,
+  filters,
+  employeeCount,
+  onClose,
+  onSend,
+}) {
+  const toggleRecipient = (email) => {
+    setSelectedRecipients((current) =>
+      current.includes(email)
+        ? current.filter(
+            (item) => item !== email
+          )
+        : [...current, email]
+    );
+  };
+
+  return (
+    <div
+      className="modalBackdrop"
+      onMouseDown={(event) => {
+        if (
+          event.target ===
+          event.currentTarget
+        ) {
+          onClose();
+        }
+      }}
+    >
+      <section
+        className="payrollReviewModal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Send Payroll for Review"
+        onMouseDown={(event) =>
+          event.stopPropagation()
+        }
+      >
+        <header className="payrollDetailHeader">
+          <div>
+            <span className="payrollDetailEyebrow">
+              Payroll workflow
+            </span>
+
+            <h2>
+              Send Payroll for Review
+            </h2>
+
+            <p>
+              Select only the Managers, TLs,
+              and HR reviewers who should
+              receive this payroll review.
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="payrollDetailClose"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </header>
+
+        <div className="payrollReviewBody">
+          <div className="payrollReviewScope">
+            <strong>
+              Review Scope
+            </strong>
+
+            <div className="reportMiniGrid">
+              <Info
+                label="Pay Period"
+                value={periodLabel}
+              />
+
+              <Info
+                label="LOB"
+                value={filters.lob}
+              />
+
+              <Info
+                label="Country"
+                value={filters.country}
+              />
+
+              <Info
+                label="Manager / TL"
+                value={
+                  filters.teamLeader
+                }
+              />
+
+              <Info
+                label="Employees"
+                value={employeeCount}
+              />
+            </div>
+          </div>
+
+          <div className="payrollReviewerSection">
+            <strong>
+              Select Reviewers
+            </strong>
+
+            <p className="helperText">
+              No reviewer is selected
+              automatically.
+            </p>
+
+            <div className="payrollReviewerList">
+              {reviewers.length ? (
+                reviewers.map(
+                  (reviewer) => (
+                    <label
+                      key={reviewer.email}
+                      className="payrollReviewerOption"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={
+                          selectedRecipients.includes(
+                            reviewer.email
+                          )
+                        }
+                        onChange={() =>
+                          toggleRecipient(
+                            reviewer.email
+                          )
+                        }
+                      />
+
+                      <span>
+                        <strong>
+                          {
+                            reviewer.name
+                          }
+                        </strong>
+
+                        <small>
+                          {
+                            reviewer.role
+                          }
+                          {" · "}
+                          {
+                            reviewer.email
+                          }
+                        </small>
+                      </span>
+                    </label>
+                  )
+                )
+              ) : (
+                <p className="helperText">
+                  No eligible Manager,
+                  TL, or HR reviewer
+                  with an email address
+                  was found.
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <footer className="payrollReviewFooter">
+          <button
+            type="button"
+            className="btn"
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+
+          <button
+            type="button"
+            className="primary"
+            disabled={
+              !selectedRecipients.length
+            }
+            onClick={onSend}
+          >
+            Send for Review
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function PayrollDetailModal({
+  employee,
+  periodLabel,
+  onExport,
+  onClose,
+}) {
+  useEffect(() => {
+    const previousOverflow =
+      document.body.style.overflow;
+
+    document.body.style.overflow =
+      "hidden";
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+
+    window.addEventListener(
+      "keydown",
+      handleKeyDown
+    );
+
+    return () => {
+      document.body.style.overflow =
+        previousOverflow;
+
+      window.removeEventListener(
+        "keydown",
+        handleKeyDown
+      );
+    };
+  }, [onClose]);
+
+  if (!employee) {
+    return null;
+  }
+
+  return (
+    <div
+      className="modalBackdrop"
+      onMouseDown={(event) => {
+        if (
+          event.target ===
+          event.currentTarget
+        ) {
+          onClose();
+        }
+      }}
+    >
+      <section
+        className="payrollDetailModal"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Daily Payroll Detail for ${employee.employeeName}`}
+        onMouseDown={(event) =>
+          event.stopPropagation()
+        }
+      >
+        <header className="payrollDetailHeader">
+          <div>
+            <span className="payrollDetailEyebrow">
+              Payroll reconciliation
+            </span>
+
+            <h2>
+              Daily Payroll Detail ·{" "}
+              {employee.employeeName}
+            </h2>
+
+            <p>
+              {periodLabel}
+              {employee.country
+                ? ` · ${employee.country}`
+                : ""}
+              {" · "}
+              Time outside the scheduled
+              window is shown separately for
+              review.
+            </p>
+          </div>
+
+          <div className="payrollDetailHeaderActions">
+  <button
+    type="button"
+    className="btn"
+    onClick={onExport}
+  >
+    <Download size={16} />
+    Export Employee CSV
+  </button>
+
+  <button
+    type="button"
+    className="payrollDetailClose"
+    onClick={onClose}
+    aria-label="Close payroll detail"
+    title="Close"
+  >
+    ×
+  </button>
+</div>
+        </header>
+
+        <div className="payrollDetailSummary">
+          <Info
+            label="Scheduled"
+            value={`${employee.scheduledHours.toFixed(
+              2
+            )}h`}
+          />
+
+          <Info
+            label="Logged"
+            value={`${employee.loggedHours.toFixed(
+              2
+            )}h`}
+          />
+
+          <Info
+            label="Time Attendance"
+            value={`${employee.timeAttendancePercent.toFixed(
+              1
+            )}%`}
+          />
+
+          <Info
+            label="Missing"
+            value={`${employee.missingHours.toFixed(
+              2
+            )}h`}
+          />
+
+          <Info
+  label="Outside Schedule"
+  value={`${employee.overtimeHours.toFixed(
+    2
+  )}h`}
+/>
+        </div>
+
+        <div className="payrollDetailTable">
+          <Table
+            headers={[
+              "Date",
+              "Day",
+              "Schedule",
+              "Logged",
+              "In Schedule",
+              "Outside Schedule",
+              "Leave",
+              "Holiday",
+              "Missing",
+              "Time %",
+              "Status",
+            ]}
+            rows={(employee.dailyRows || []).map(
+              (day) => [
+                day.date,
+
+                day.dayName,
+
+                day.schedule,
+
+                `${day.loggedHours.toFixed(
+                  2
+                )}h`,
+
+                `${day.inScheduleHours.toFixed(
+                  2
+                )}h`,
+
+                `${day.outsideScheduleHours.toFixed(
+                  2
+                )}h`,
+
+                day.leaveType
+                  ? `${day.leaveType} · ${day.leaveHours.toFixed(
+                      2
+                    )}h`
+                  : "—",
+
+                day.holidayName
+                  ? `${day.holidayName} · ${(
+                      day.holidayCreditHours +
+                      day.holidayWorkedHours
+                    ).toFixed(2)}h · ${
+                      day.holidayRule
+                    }`
+                  : "—",
+
+                `${day.missingHours.toFixed(
+                  2
+                )}h`,
+
+                `${day.timeAttendancePercent.toFixed(
+                  1
+                )}%`,
+
+                day.reviewReasons.length
+                  ? `${
+                      day.status
+                    }: ${day.reviewReasons.join(
+                      ", "
+                    )}`
+                  : day.status,
+              ]
+            )}
+          />
+        </div>
+      </section>
+    </div>
+  );
+}
 function CurrentStatusTimer({ openStatusLog }) {
   const [now, setNow] = useState(Date.now());
 
@@ -4688,6 +5198,8 @@ savedDuration > 0
 function HRWorkforceApp() {
   const [employees, setEmployees] = useState([]);
   const [scheduleExceptions, setScheduleExceptions] = useState([]);
+  const [countryHolidays, setCountryHolidays] = useState([]);
+
   const [
   employeeBreakRows,
   setEmployeeBreakRows,
@@ -4707,6 +5219,38 @@ function HRWorkforceApp() {
   const [adminMode, setAdminMode] = useState(false);
   const [search, setSearch] = useState("");
   const [reportView, setReportView] = useState("LOB");
+  const [payrollMonth, setPayrollMonth] = useState(
+  today.slice(0, 7)
+);
+
+const [payrollPeriod, setPayrollPeriod] = useState(
+  "first"
+);
+const [
+  payrollSourceTimeEntries,
+  setPayrollSourceTimeEntries,
+] = useState([]);
+
+const [
+  payrollLogsLoading,
+  setPayrollLogsLoading,
+] = useState(false);
+
+const [
+  payrollDetailEmployeeId,
+  setPayrollDetailEmployeeId,
+] = useState("");
+
+const [
+  payrollReviewModalOpen,
+  setPayrollReviewModalOpen,
+] = useState(false);
+
+const [
+  payrollReviewRecipients,
+  setPayrollReviewRecipients,
+] = useState([]);
+
 const [filters, setFilters] = useState({
   lob: "All",
   department: "All",
@@ -6315,8 +6859,53 @@ async function loadScheduleExceptions() {
 
   return loadedExceptions;
 }
+
+async function loadCountryHolidays() {
+  if (!supabase) {
+    return [];
+  }
+
+  const {
+    data,
+    error,
+  } = await supabase
+    .from("country_holidays")
+    .select("*")
+    .eq("active", true)
+    .order("holiday_date", {
+      ascending: true,
+    });
+
+  if (error) {
+    console.warn(
+      "Country holidays load failed:",
+      error.message
+    );
+
+    return [];
+  }
+
+  const loadedHolidays =
+    Array.isArray(data)
+      ? data
+      : [];
+
+  setCountryHolidays(
+    loadedHolidays
+  );
+
+  console.log(
+    "Country holidays loaded:",
+    loadedHolidays.length,
+    loadedHolidays
+  );
+
+  return loadedHolidays;
+}
+
   async function refreshLiveData() {
-      await loadScheduleExceptions();
+  await loadScheduleExceptions();
+  await loadCountryHolidays();
 
   const loadedSupabase = await loadSupabaseReferenceData(
   employees,
@@ -6559,6 +7148,7 @@ useEffect(() => {
 
   const loadAuthenticatedData = async () => {
   await loadScheduleExceptions();
+  await loadCountryHolidays();
   await loadAuthenticatedScheduleData();
 };
 
@@ -6935,6 +7525,74 @@ const displayedBalanceEmployees =
     : balanceFilteredEmployees;
 
   const countryOptions = ["All", ...new Set(visibleEmployees.map((e) => e.country).filter(Boolean))];
+
+  const payrollReviewerOptions =
+  useMemo(() => {
+    return visibleEmployees
+      .filter((employee) => {
+        const role =
+          normalizeAccessRole(
+            employee.access_level ||
+              employee.role
+          );
+
+        const email =
+          normalizeEmail(
+            employee.email
+          );
+
+        return (
+          Boolean(email) &&
+          [
+            "Manager",
+            "TL",
+            "Approvals",
+            "HR",
+          ].includes(role)
+        );
+      })
+      .map((employee) => ({
+        id:
+          employee.id ||
+          employee.employee_id,
+
+        name:
+          employee.full_name ||
+          employee.employee_name ||
+          employee.email,
+
+        email:
+          normalizeEmail(
+            employee.email
+          ),
+
+        role:
+          normalizeAccessRole(
+            employee.access_level ||
+              employee.role
+          ),
+      }))
+      .sort((a, b) => {
+        if (
+          a.role === "HR" &&
+          b.role !== "HR"
+        ) {
+          return -1;
+        }
+
+        if (
+          b.role === "HR" &&
+          a.role !== "HR"
+        ) {
+          return 1;
+        }
+
+        return a.name.localeCompare(
+          b.name
+        );
+      });
+  }, [visibleEmployees]);
+
   const categoryOptions = ["All", ...timeCategories, "Sick Leave", "Paid Leave", "Unpaid Leave", "Schedule Change", "Day off due to Swap"];
 
   const normalizeDateForFilter = (value) => {
@@ -7043,6 +7701,1642 @@ const displayedBalanceEmployees =
     )
   );
 });
+
+const payrollDateRange = useMemo(
+  () =>
+    getPayrollPeriodRange(
+      payrollMonth,
+      payrollPeriod
+    ),
+  [payrollMonth, payrollPeriod]
+);
+useEffect(() => {
+  if (
+    !supabase ||
+    !isAuthenticated ||
+    isAgentOnly ||
+    tab !== "payroll" ||
+    !payrollDateRange.startDate ||
+    !payrollDateRange.endDate
+  ) {
+    return undefined;
+  }
+
+  let cancelled = false;
+
+  const loadPayrollPeriodLogs = async () => {
+    setPayrollLogsLoading(true);
+
+    try {
+      const allRows = [];
+
+      /*
+        Supabase commonly returns a limited number
+        of rows per request.
+
+        Payroll can easily exceed that because one
+        employee may create several status rows per day.
+
+        Load the selected payroll period in pages.
+      */
+      const pageSize = 1000;
+
+      let from = 0;
+
+      while (true) {
+        const {
+          data,
+          error,
+        } = await supabase
+          .from("time_logs")
+          .select("*")
+          .gte(
+            "clock_in",
+            `${payrollDateRange.startDate}T00:00:00`
+          )
+          .lte(
+            "clock_in",
+            `${payrollDateRange.endDate}T23:59:59`
+          )
+          .order("clock_in", {
+            ascending: true,
+          })
+          .range(
+            from,
+            from + pageSize - 1
+          );
+
+        if (error) {
+          throw error;
+        }
+
+        const pageRows =
+          Array.isArray(data)
+            ? data
+            : [];
+
+        allRows.push(
+          ...pageRows
+        );
+
+        if (
+          pageRows.length <
+          pageSize
+        ) {
+          break;
+        }
+
+        from += pageSize;
+      }
+
+      const normalizedRows =
+        allRows.map((log) => ({
+          ...log,
+
+          supabase_id:
+            log.id,
+
+          id:
+            log.app_log_id ||
+            log.id,
+
+          date:
+            log.date ||
+            String(
+              log.clock_in ||
+              log.category_start ||
+              log.created_at ||
+              ""
+            ).slice(0, 10),
+
+          category:
+            log.category ||
+            log.status ||
+            "Working",
+
+          approved:
+            log.approval_status ||
+            "Pending",
+        }));
+
+      if (!cancelled) {
+        setPayrollSourceTimeEntries(
+          normalizedRows
+        );
+      }
+
+      console.log(
+        "Payroll period logs loaded:",
+        {
+          start:
+            payrollDateRange.startDate,
+
+          end:
+            payrollDateRange.endDate,
+
+          count:
+            normalizedRows.length,
+
+          sample:
+            normalizedRows.slice(
+              0,
+              5
+            ),
+        }
+      );
+    } catch (error) {
+      console.error(
+        "Payroll period logs failed:",
+        error
+      );
+
+      if (!cancelled) {
+        setPayrollSourceTimeEntries(
+          []
+        );
+      }
+    } finally {
+      if (!cancelled) {
+        setPayrollLogsLoading(
+          false
+        );
+      }
+    }
+  };
+
+  loadPayrollPeriodLogs();
+
+  return () => {
+    cancelled = true;
+  };
+}, [
+  supabase,
+  isAuthenticated,
+  isAgentOnly,
+  tab,
+  payrollDateRange.startDate,
+  payrollDateRange.endDate,
+]);
+
+const payrollTimeEntries = useMemo(() => {
+  return payrollSourceTimeEntries.filter((timeLog) => {
+    const entryDate =
+      normalizeDateForFilter(
+        timeLog.date ||
+          timeLog.clock_in ||
+          timeLog.category_start ||
+          timeLog.created_at
+      );
+
+    if (
+      !entryDate ||
+      entryDate <
+        payrollDateRange.startDate ||
+      entryDate >
+        payrollDateRange.endDate
+    ) {
+      return false;
+    }
+
+    const timeLogEmployee =
+      employees.find((employee) => {
+        const employeeIds = [
+          employee.id,
+          employee.employee_id,
+          employee.supabase_employee_id,
+        ]
+          .map((value) =>
+            String(value || "").trim()
+          )
+          .filter(Boolean);
+
+        return employeeIds.includes(
+          String(
+            timeLog.employee_id || ""
+          ).trim()
+        );
+      }) || null;
+
+    const entryLob =
+      timeLog.lob ||
+      timeLogEmployee?.lob ||
+      "";
+
+    const entryDepartment =
+      timeLog.department ||
+      timeLogEmployee?.department ||
+      "";
+
+    const entrySubDepartment =
+      timeLog.sub_department ||
+      timeLogEmployee?.sub_department ||
+      "";
+
+    const entryCountry =
+      timeLog.country ||
+      timeLogEmployee?.country ||
+      "";
+
+    const entryEmployeeName =
+      timeLog.employee_name ||
+      timeLogEmployee?.full_name ||
+      "";
+
+    const entryLeader = String(
+      timeLogEmployee?.team_leader ||
+        timeLogEmployee?.supervisor ||
+        timeLogEmployee?.manager ||
+        ""
+    ).trim();
+
+    return (
+      (
+        filters.lob === "All" ||
+        entryLob === filters.lob
+      ) &&
+      (
+        filters.department === "All" ||
+        entryDepartment ===
+          filters.department
+      ) &&
+      (
+        filters.subDepartment === "All" ||
+        entrySubDepartment ===
+          filters.subDepartment
+      ) &&
+      (
+        filters.teamLeader === "All" ||
+        entryLeader ===
+          filters.teamLeader
+      ) &&
+      (
+        filters.employee === "All" ||
+        entryEmployeeName ===
+          filters.employee
+      ) &&
+      (
+        filters.country === "All" ||
+        entryCountry ===
+          filters.country
+      )
+    );
+  });
+  
+
+}, [
+  payrollSourceTimeEntries,
+  employees,
+  payrollDateRange.startDate,
+  payrollDateRange.endDate,
+  filters.lob,
+  filters.department,
+  filters.subDepartment,
+  filters.teamLeader,
+  filters.employee,
+  filters.country,
+]);
+const payrollEmployeePeriodSummary = useMemo(() => {
+  /*
+    Payroll reconciliation engine.
+
+    Magnemite does NOT calculate paycheck amounts.
+
+    This engine reconciles:
+    - scheduled time
+    - actual logged time
+    - time attendance %
+    - approved leave
+    - holidays
+    - missing time
+    - overtime / outside-schedule time
+
+    The employee roster is the starting point so an employee
+    with zero time logs still appears in Payroll.
+  */
+
+  if (
+    !payrollDateRange.startDate ||
+    !payrollDateRange.endDate
+  ) {
+    return [];
+  }
+
+  /*
+    Build every date belonging to the selected
+    semi-monthly payroll period.
+  */
+  const payrollDates = [];
+
+  const [startYear, startMonth, startDay] =
+    payrollDateRange.startDate
+      .split("-")
+      .map(Number);
+
+  const [endYear, endMonth, endDay] =
+    payrollDateRange.endDate
+      .split("-")
+      .map(Number);
+
+  const cursor = new Date(
+    Date.UTC(
+      startYear,
+      startMonth - 1,
+      startDay
+    )
+  );
+
+  const periodEnd = new Date(
+    Date.UTC(
+      endYear,
+      endMonth - 1,
+      endDay
+    )
+  );
+
+  while (cursor <= periodEnd) {
+    payrollDates.push(
+      cursor.toISOString().slice(0, 10)
+    );
+
+    cursor.setUTCDate(
+      cursor.getUTCDate() + 1
+    );
+  }
+
+  /*
+    Converts either:
+    - a simple HH:mm value
+    - or a Supabase timestamp
+
+    into the employee's local HH:mm time.
+  */
+  const getEmployeeLocalTime = (
+    value,
+    employee
+  ) => {
+    if (!value) {
+      return "";
+    }
+
+    const simpleTime = String(
+      value
+    ).match(
+      /^(\d{1,2}):(\d{2})(?::\d{2})?$/
+    );
+
+    if (simpleTime) {
+      return `${String(
+        Number(simpleTime[1])
+      ).padStart(2, "0")}:${
+        simpleTime[2]
+      }`;
+    }
+
+    const parsedDate = new Date(value);
+
+    if (
+      Number.isNaN(
+        parsedDate.getTime()
+      )
+    ) {
+      return "";
+    }
+
+    return new Intl.DateTimeFormat(
+      "en-GB",
+      {
+        timeZone:
+          getEmployeeTimeZone(
+            employee
+          ),
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      }
+    ).format(parsedDate);
+  };
+
+  /*
+    Convert HH:mm into a minute number.
+
+    Overnight periods are supported by allowing
+    an end time to continue beyond midnight.
+  */
+  const buildMinuteRange = (
+    startValue,
+    endValue
+  ) => {
+    const startMinutes =
+      timeToMinutes(startValue);
+
+    let endMinutes =
+      timeToMinutes(endValue);
+
+    if (
+      startMinutes === null ||
+      endMinutes === null
+    ) {
+      return null;
+    }
+
+    if (
+      endMinutes < startMinutes
+    ) {
+      endMinutes += 24 * 60;
+    }
+
+    return {
+      start: startMinutes,
+      end: endMinutes,
+    };
+  };
+
+  /*
+    Merge overlapping intervals.
+
+    This prevents duplicate or overlapping status logs
+    from artificially increasing attendance.
+  */
+  const mergeIntervals = (
+    intervals = []
+  ) => {
+    const validIntervals =
+      intervals
+        .filter(
+          (interval) =>
+            interval &&
+            Number.isFinite(
+              interval.start
+            ) &&
+            Number.isFinite(
+              interval.end
+            ) &&
+            interval.end >
+              interval.start
+        )
+        .sort(
+          (a, b) =>
+            a.start - b.start
+        );
+
+    if (!validIntervals.length) {
+      return [];
+    }
+
+    const merged = [
+      {
+        ...validIntervals[0],
+      },
+    ];
+
+    validIntervals
+      .slice(1)
+      .forEach((interval) => {
+        const last =
+          merged[
+            merged.length - 1
+          ];
+
+        if (
+          interval.start <=
+          last.end
+        ) {
+          last.end = Math.max(
+            last.end,
+            interval.end
+          );
+        } else {
+          merged.push({
+            ...interval,
+          });
+        }
+      });
+
+    return merged;
+  };
+
+  const intervalMinutes = (
+    intervals = []
+  ) =>
+    intervals.reduce(
+      (total, interval) =>
+        total +
+        Math.max(
+          0,
+          interval.end -
+            interval.start
+        ),
+      0
+    );
+
+  const result =
+    filteredVisibleEmployees.map(
+      (employee) => {
+        const employeeIds =
+          [
+            employee.id,
+            employee.employee_id,
+            employee.supabase_employee_id,
+          ]
+            .map((value) =>
+              String(
+                value || ""
+              ).trim()
+            )
+            .filter(Boolean);
+
+        const employeeId =
+          String(
+            employee.employee_id ||
+              employee.id ||
+              employee.supabase_employee_id ||
+              ""
+          ).trim();
+
+        const employeeName =
+          employee.full_name ||
+          employee.employee_name ||
+          "Unknown";
+
+        const country =
+          employee.country ||
+          "N/A";
+
+        const hireDate =
+          formatDateOnly(
+            employee.hire_date
+          );
+
+        const terminationDate =
+          formatDateOnly(
+            employee.termination_date
+          );
+
+        let scheduledMinutes = 0;
+        let loggedMinutes = 0;
+        let trackedWithinScheduleMinutes =
+          0;
+
+        let ptoMinutes = 0;
+        let sickMinutes = 0;
+        let vtoMinutes = 0;
+        let paidLeaveMinutes = 0;
+        let unpaidLeaveMinutes = 0;
+        let swapMinutes = 0;
+
+        let holidayCreditMinutes = 0;
+        let holidayWorkedMinutes = 0;
+
+        let missingMinutes = 0;
+        let overtimeMinutes = 0;
+
+        let scheduledDays = 0;
+        let noScheduleDays = 0;
+
+        const loggedDates =
+          new Set();
+
+        const holidayNames =
+          new Set();
+
+        const holidayRules =
+  new Set();
+
+const criticalReviewReasons =
+  new Set();
+
+const reviewReasons =
+  new Set();
+
+const minorVarianceReasons =
+  new Set();
+
+const dailyRows = [];
+
+        payrollDates.forEach(
+          (dateKey) => {
+            /*
+              Do not evaluate dates before hire
+              or after termination.
+            */
+            if (
+              hireDate &&
+              dateKey < hireDate
+            ) {
+              return;
+            }
+
+            if (
+              terminationDate &&
+              dateKey >
+                terminationDate
+            ) {
+              return;
+            }
+
+            const dateObject =
+              new Date(
+                `${dateKey}T12:00:00Z`
+              );
+
+            const dayName =
+              WEEK_DAYS[
+                dateObject.getUTCDay()
+              ];
+
+            const schedule =
+              getStableSchedule(
+                employee,
+                [],
+                dayName,
+                employeeBreakRows,
+                scheduleExceptions,
+                dateKey
+              );
+
+            const normalOffDays =
+              normalizeOffDays(
+                employee.off_days
+              ).map((day) =>
+                normalizeDayName(
+                  day
+                )
+              );
+
+            /*
+              A valid schedule exception overrides
+              the normal employee off-day.
+            */
+            const isOffDay =
+              normalOffDays.includes(
+                dayName
+              ) &&
+              !schedule.has_schedule_exception;
+
+            const scheduleRange =
+              buildMinuteRange(
+                schedule.shift_start,
+                schedule.shift_end
+              );
+
+            const dayScheduledMinutes =
+              !isOffDay &&
+              scheduleRange
+                ? Math.max(
+                    0,
+                    scheduleRange.end -
+                      scheduleRange.start
+                  )
+                : 0;
+
+            if (
+  !isOffDay &&
+  !scheduleRange
+) {
+  noScheduleDays += 1;
+
+  criticalReviewReasons.add(
+    "Missing schedule"
+  );
+}
+
+            if (
+              dayScheduledMinutes > 0
+            ) {
+              scheduledDays += 1;
+
+              scheduledMinutes +=
+                dayScheduledMinutes;
+            }
+
+            /*
+              Country holiday for this employee/date.
+            */
+            const holiday =
+              isHolidayForCountry(
+                country,
+                dateKey,
+                countryHolidays
+              );
+
+            if (holiday) {
+              holidayNames.add(
+                holiday.holiday_name ||
+                  "Holiday"
+              );
+
+              const multiplier =
+                safeNumber(
+                  holiday.pay_multiplier,
+                  1
+                );
+
+              holidayRules.add(
+                `${
+                  holiday.pay_rule ||
+                  "REGULAR"
+                } · ${multiplier.toFixed(
+                  2
+                )}x`
+              );
+            }
+
+            /*
+              Approved absence covering this day.
+            */
+            const approvedLeave =
+  requests.find(
+    (request) => {
+      const requestEmployeeId =
+        String(
+          request.employee_id ||
+            request.Employee_ID ||
+            ""
+        ).trim();
+
+      const requestStatus =
+        String(
+          request.status ||
+            request.approval_status ||
+            request.Status ||
+            ""
+        )
+          .trim()
+          .toLowerCase();
+
+      const requestType =
+        String(
+          request.type ||
+            request.request_type ||
+            request.Request_Type ||
+            ""
+        )
+          .trim()
+          .toLowerCase();
+
+      const payrollLeaveTypes = [
+        "pto",
+        "vto",
+        "sick leave",
+        "paid leave",
+        "unpaid leave",
+        "day off due to swap",
+      ];
+
+      return (
+        employeeIds.includes(
+          requestEmployeeId
+        ) &&
+        requestStatus ===
+          "approved" &&
+        payrollLeaveTypes.includes(
+          requestType
+        ) &&
+        requestCoversDate(
+          request,
+          dateKey
+        )
+      );
+    }
+  );
+
+            const approvedLeaveType =
+              String(
+                approvedLeave?.type ||
+                  approvedLeave?.request_type ||
+                  approvedLeave?.Request_Type ||
+                  ""
+              )
+                .trim()
+                .toLowerCase();
+
+            /*
+              Get all time logs belonging to the
+              employee on this payroll date.
+            */
+            const dayLogs =
+              payrollTimeEntries.filter(
+                (timeLog) => {
+                  const logEmployeeId =
+                    String(
+                      timeLog.employee_id ||
+                        ""
+                    ).trim();
+
+                  const logDate =
+                    normalizeDateForFilter(
+                      timeLog.date ||
+                        timeLog.clock_in ||
+                        timeLog.category_start ||
+                        timeLog.created_at
+                    );
+
+                  return (
+                    employeeIds.includes(
+                      logEmployeeId
+                    ) &&
+                    logDate ===
+                      dateKey
+                  );
+                }
+              );
+
+            const attendanceIntervals =
+              [];
+
+            dayLogs.forEach(
+              (timeLog) => {
+                const category =
+                  String(
+                    timeLog.category ||
+                      timeLog.status ||
+                      ""
+                  )
+                    .trim()
+                    .toLowerCase();
+
+                /*
+                  Leave categories are not actual
+                  logged-presence intervals.
+                */
+                if (
+                  [
+                    "pto",
+                    "vto",
+                    "sick leave",
+                    "paid leave",
+                    "unpaid leave",
+                  ].includes(category)
+                ) {
+                  return;
+                }
+
+                const startValue =
+                  timeLog.category_start ||
+                  timeLog.clock_in ||
+                  timeLog.created_at;
+
+                let endValue =
+                  timeLog.category_end ||
+                  timeLog.clock_out;
+
+                /*
+                  For today's currently open status,
+                  include time through the employee's
+                  current local time.
+                */
+                if (
+                  !endValue &&
+                  dateKey ===
+                    getEmployeeDateKey(
+                      employee
+                    )
+                ) {
+                  endValue =
+                    getEmployeeTimeKey(
+                      employee
+                    );
+                }
+
+                if (!endValue) {
+  criticalReviewReasons.add(
+    "Open time log"
+  );
+
+  return;
+}
+
+                const localStart =
+                  getEmployeeLocalTime(
+                    startValue,
+                    employee
+                  );
+
+                const localEnd =
+                  getEmployeeLocalTime(
+                    endValue,
+                    employee
+                  );
+
+                const logRange =
+                  buildMinuteRange(
+                    localStart,
+                    localEnd
+                  );
+
+                if (!logRange) {
+                  return;
+                }
+
+                attendanceIntervals.push(
+                  logRange
+                );
+              }
+            );
+
+            const mergedAttendance =
+              mergeIntervals(
+                attendanceIntervals
+              );
+
+            const dayLoggedMinutes =
+              intervalMinutes(
+                mergedAttendance
+              );
+
+            loggedMinutes +=
+              dayLoggedMinutes;
+
+            if (
+              dayLoggedMinutes > 0
+            ) {
+              loggedDates.add(
+                dateKey
+              );
+            }
+
+            /*
+              Calculate only the time that overlaps
+              the scheduled working window.
+            */
+            let dayTrackedWithinSchedule =
+              0;
+
+            if (scheduleRange) {
+              const insideIntervals =
+                mergedAttendance
+                  .map(
+                    (interval) => {
+                      const start =
+                        Math.max(
+                          interval.start,
+                          scheduleRange.start
+                        );
+
+                      const end =
+                        Math.min(
+                          interval.end,
+                          scheduleRange.end
+                        );
+
+                      if (
+                        end <= start
+                      ) {
+                        return null;
+                      }
+
+                      return {
+                        start,
+                        end,
+                      };
+                    }
+                  )
+                  .filter(Boolean);
+
+              dayTrackedWithinSchedule =
+                intervalMinutes(
+                  mergeIntervals(
+                    insideIntervals
+                  )
+                );
+            }
+
+            /*
+              Never permit duplicate logs to create
+              more than 100% scheduled attendance.
+            */
+            dayTrackedWithinSchedule =
+              Math.min(
+                dayScheduledMinutes,
+                dayTrackedWithinSchedule
+              );
+
+            trackedWithinScheduleMinutes +=
+              dayTrackedWithinSchedule;
+
+            /*
+              Time outside the employee schedule is
+              treated as OT / unscheduled time for review.
+
+              We are NOT assigning a paycheck value.
+            */
+            const dayOutsideScheduleMinutes =
+  Math.max(
+    0,
+    dayLoggedMinutes -
+      dayTrackedWithinSchedule
+  );
+
+/*
+  Always preserve the actual outside-schedule
+  minutes in Payroll calculations.
+
+  The tolerance only controls whether the
+  variance requires review.
+*/
+if (
+  dayOutsideScheduleMinutes > 0
+) {
+  overtimeMinutes +=
+    dayOutsideScheduleMinutes;
+
+  if (isOffDay) {
+    /*
+      Any work performed on a scheduled off-day
+      requires explicit review.
+    */
+    criticalReviewReasons.add(
+      "Worked on off day"
+    );
+  } else if (
+    dayOutsideScheduleMinutes >
+      PAYROLL_VARIANCE_TOLERANCE_MINUTES
+  ) {
+    reviewReasons.add(
+      "Outside scheduled hours"
+    );
+  } else {
+    minorVarianceReasons.add(
+      "Minor outside-schedule variance"
+    );
+  }
+}
+
+            /*
+              Apply approved leave only against
+              scheduled time.
+
+              Current Magnemite requests are primarily
+              full-day requests, so the scheduled
+              duration becomes the payroll reconciliation
+              value for that date.
+            */
+            let dayLeaveCredit = 0;
+
+            if (
+              dayScheduledMinutes > 0 &&
+              approvedLeave
+            ) {
+              if (
+                approvedLeaveType ===
+                "pto"
+              ) {
+                ptoMinutes +=
+                  dayScheduledMinutes;
+
+                dayLeaveCredit =
+                  dayScheduledMinutes;
+              } else if (
+                approvedLeaveType ===
+                "sick leave"
+              ) {
+                sickMinutes +=
+                  dayScheduledMinutes;
+
+                dayLeaveCredit =
+                  dayScheduledMinutes;
+              } else if (
+                approvedLeaveType ===
+                "vto"
+              ) {
+                vtoMinutes +=
+                  dayScheduledMinutes;
+
+                dayLeaveCredit =
+                  dayScheduledMinutes;
+              } else if (
+                approvedLeaveType ===
+                "paid leave"
+              ) {
+                paidLeaveMinutes +=
+                  dayScheduledMinutes;
+
+                dayLeaveCredit =
+                  dayScheduledMinutes;
+              } else if (
+                approvedLeaveType ===
+                "unpaid leave"
+              ) {
+                unpaidLeaveMinutes +=
+                  dayScheduledMinutes;
+
+                dayLeaveCredit =
+                  dayScheduledMinutes;
+              } else if (
+                approvedLeaveType ===
+                "day off due to swap"
+              ) {
+                swapMinutes +=
+                  dayScheduledMinutes;
+
+                dayLeaveCredit =
+                  dayScheduledMinutes;
+              }
+            }
+
+            /*
+              A paid holiday can account for the
+              scheduled day when the employee did
+              not work and has no overlapping approved
+              leave.
+
+              Holiday payroll factor remains
+              informational only.
+            */
+            let dayHolidayCredit = 0;
+
+            if (
+              holiday &&
+              dayScheduledMinutes > 0
+            ) {
+              const paidIfNotWorked =
+                holiday.paid_if_not_worked !==
+                false;
+
+              if (
+                dayTrackedWithinSchedule >
+                0
+              ) {
+                holidayWorkedMinutes +=
+                  dayTrackedWithinSchedule;
+              } else if (
+                paidIfNotWorked &&
+                dayLeaveCredit === 0
+              ) {
+                dayHolidayCredit =
+                  dayScheduledMinutes;
+
+                holidayCreditMinutes +=
+                  dayHolidayCredit;
+              }
+            }
+
+            /*
+              Missing time = scheduled time that is
+              neither:
+              - actually logged within schedule
+              - approved leave
+              - nor an eligible paid holiday.
+            */
+            const dayAccountedMinutes =
+              Math.min(
+                dayScheduledMinutes,
+                dayTrackedWithinSchedule +
+                  dayLeaveCredit +
+                  dayHolidayCredit
+              );
+
+            const dayMissingMinutes =
+              Math.max(
+                0,
+                dayScheduledMinutes -
+                  dayAccountedMinutes
+              );
+
+            missingMinutes +=
+              dayMissingMinutes;
+
+            if (
+              dayMissingMinutes > 0
+            ) {
+              reviewReasons.add(
+                "Missing scheduled time"
+              );
+            }
+            /*
+  Preserve this individual payroll day so it can
+  be displayed in the Payroll Detail modal.
+*/
+const dayTimeAttendancePercent =
+  dayScheduledMinutes > 0
+    ? Math.min(
+        100,
+        (
+          dayTrackedWithinSchedule /
+          dayScheduledMinutes
+        ) * 100
+      )
+    : 0;
+
+const dayCriticalReasons = [];
+const dayReviewReasons = [];
+const dayMinorVarianceReasons = [];
+
+if (
+  !isOffDay &&
+  !scheduleRange
+) {
+  dayCriticalReasons.push(
+    "Missing schedule"
+  );
+}
+
+const hasOpenTimeLog =
+  dayLogs.some(
+    (timeLog) =>
+      !(
+        timeLog.category_end ||
+        timeLog.clock_out
+      )
+  );
+
+if (hasOpenTimeLog) {
+  dayCriticalReasons.push(
+    "Open time log"
+  );
+}
+
+if (
+  dayOutsideScheduleMinutes > 0
+) {
+  if (isOffDay) {
+    dayCriticalReasons.push(
+      "Worked on off day"
+    );
+  } else if (
+    dayOutsideScheduleMinutes >
+      PAYROLL_VARIANCE_TOLERANCE_MINUTES
+  ) {
+    dayReviewReasons.push(
+      "Outside scheduled hours"
+    );
+  } else {
+    dayMinorVarianceReasons.push(
+      "Minor outside-schedule variance"
+    );
+  }
+}
+
+if (
+  dayMissingMinutes > 0
+) {
+  if (
+    dayMissingMinutes >
+      PAYROLL_VARIANCE_TOLERANCE_MINUTES
+  ) {
+    dayReviewReasons.push(
+      "Missing scheduled time"
+    );
+  } else {
+    dayMinorVarianceReasons.push(
+      "Minor missing-time variance"
+    );
+  }
+}
+
+let dayStatus = "Reconciled";
+
+if (
+  dayCriticalReasons.length > 0
+) {
+  dayStatus = "Critical Review";
+} else if (
+  dayReviewReasons.length > 0
+) {
+  dayStatus = "Review";
+} else if (
+  dayMinorVarianceReasons.length > 0
+) {
+  dayStatus = "Minor Variance";
+} else if (
+  isOffDay &&
+  dayLoggedMinutes === 0
+) {
+  dayStatus = "Off Day";
+} else if (
+  dayLeaveCredit > 0 &&
+  dayTrackedWithinSchedule === 0
+) {
+  dayStatus = "Approved Leave";
+} else if (
+  dayHolidayCredit > 0 &&
+  dayTrackedWithinSchedule === 0
+) {
+  dayStatus = "Holiday";
+} else if (
+  dayScheduledMinutes === 0 &&
+  dayLoggedMinutes > 0
+) {
+  dayStatus = "Unscheduled Work";
+} else if (
+  dayScheduledMinutes === 0
+) {
+  dayStatus = "No Scheduled Time";
+}
+
+const leaveType =
+  approvedLeave
+    ? (
+        approvedLeave.type ||
+        approvedLeave.request_type ||
+        approvedLeave.Request_Type ||
+        "Approved Leave"
+      )
+    : "";
+
+const holidayName =
+  holiday?.holiday_name ||
+  "";
+
+const holidayRule =
+  holiday
+    ? `${
+        holiday.pay_rule ||
+        "REGULAR"
+      } · ${safeNumber(
+        holiday.pay_multiplier,
+        1
+      ).toFixed(2)}x`
+    : "";
+
+dailyRows.push({
+  date: dateKey,
+
+  dayName,
+
+  schedule:
+    isOffDay
+      ? "OFF"
+      : scheduleRange
+      ? `${schedule.shift_start} - ${schedule.shift_end}`
+      : "Missing schedule",
+
+  isOffDay,
+
+  scheduledMinutes:
+    dayScheduledMinutes,
+
+  scheduledHours:
+    dayScheduledMinutes / 60,
+
+  loggedMinutes:
+    dayLoggedMinutes,
+
+  loggedHours:
+    dayLoggedMinutes / 60,
+
+  inScheduleMinutes:
+    dayTrackedWithinSchedule,
+
+  inScheduleHours:
+    dayTrackedWithinSchedule / 60,
+
+  outsideScheduleMinutes:
+    dayOutsideScheduleMinutes,
+
+  outsideScheduleHours:
+    dayOutsideScheduleMinutes / 60,
+
+  leaveType,
+
+  leaveMinutes:
+    dayLeaveCredit,
+
+  leaveHours:
+    dayLeaveCredit / 60,
+
+  holidayName,
+
+  holidayRule,
+
+  holidayCreditMinutes:
+    dayHolidayCredit,
+
+  holidayCreditHours:
+    dayHolidayCredit / 60,
+
+  holidayWorkedMinutes:
+    holiday &&
+    dayTrackedWithinSchedule > 0
+      ? dayTrackedWithinSchedule
+      : 0,
+
+  holidayWorkedHours:
+    holiday &&
+    dayTrackedWithinSchedule > 0
+      ? dayTrackedWithinSchedule / 60
+      : 0,
+
+  missingMinutes:
+    dayMissingMinutes,
+
+  missingHours:
+    dayMissingMinutes / 60,
+
+  timeAttendancePercent:
+    dayTimeAttendancePercent,
+
+  status:
+    dayStatus,
+
+  reviewReasons:
+    dayReviewReasons,
+});
+          }
+        );
+
+        const timeAttendancePercent =
+          scheduledMinutes > 0
+            ? Math.min(
+                100,
+                (
+                  trackedWithinScheduleMinutes /
+                  scheduledMinutes
+                ) * 100
+              )
+            : 0;
+
+        const approvedLeaveMinutes =
+          ptoMinutes +
+          sickMinutes +
+          vtoMinutes +
+          paidLeaveMinutes +
+          unpaidLeaveMinutes +
+          swapMinutes;
+
+        const accountedMinutes =
+          Math.min(
+            scheduledMinutes,
+            trackedWithinScheduleMinutes +
+              approvedLeaveMinutes +
+              holidayCreditMinutes
+          );
+
+        const deltaMinutes =
+          accountedMinutes -
+          scheduledMinutes;
+
+        let status = "Reconciled";
+
+if (
+  criticalReviewReasons.size > 0
+) {
+  status = "Critical Review";
+} else if (
+  reviewReasons.size > 0
+) {
+  status = "Review";
+} else if (
+  minorVarianceReasons.size > 0
+) {
+  status = "Minor Variance";
+} else if (
+  scheduledMinutes === 0 &&
+  loggedMinutes === 0
+) {
+          status = "No Scheduled Time";
+        } else if (
+          scheduledMinutes === 0 &&
+          loggedMinutes > 0
+        ) {
+          status = "Unscheduled Work";
+        } else if (
+          approvedLeaveMinutes > 0 &&
+          trackedWithinScheduleMinutes ===
+            0
+        ) {
+          status =
+            "Approved Leave";
+        }
+
+        return {
+          employeeId,
+          employeeName,
+          country,
+
+          scheduledDays,
+
+          loggedDays:
+            loggedDates.size,
+
+          scheduledMinutes,
+          scheduledHours:
+            scheduledMinutes / 60,
+
+          loggedMinutes,
+          loggedHours:
+            loggedMinutes / 60,
+
+          trackedWithinScheduleMinutes,
+          trackedWithinScheduleHours:
+            trackedWithinScheduleMinutes /
+            60,
+
+          timeAttendancePercent,
+
+          ptoMinutes,
+          ptoHours:
+            ptoMinutes / 60,
+
+          sickMinutes,
+          sickHours:
+            sickMinutes / 60,
+
+          vtoMinutes,
+          vtoHours:
+            vtoMinutes / 60,
+
+          paidLeaveMinutes,
+          paidLeaveHours:
+            paidLeaveMinutes / 60,
+
+          unpaidLeaveMinutes,
+          unpaidLeaveHours:
+            unpaidLeaveMinutes / 60,
+
+          swapMinutes,
+          swapHours:
+            swapMinutes / 60,
+
+          holidayCreditMinutes,
+          holidayCreditHours:
+            holidayCreditMinutes / 60,
+
+          holidayWorkedMinutes,
+          holidayWorkedHours:
+            holidayWorkedMinutes / 60,
+
+          missingMinutes,
+          missingHours:
+            missingMinutes / 60,
+
+          overtimeMinutes,
+          overtimeHours:
+            overtimeMinutes / 60,
+
+          accountedMinutes,
+          accountedHours:
+            accountedMinutes / 60,
+
+          deltaMinutes,
+          deltaHours:
+            deltaMinutes / 60,
+
+          holidayNames:
+            Array.from(
+              holidayNames
+            ),
+
+          holidayRules:
+            Array.from(
+              holidayRules
+            ),
+
+          noScheduleDays,
+
+          reviewReasons: Array.from(
+  new Set([
+    ...criticalReviewReasons,
+    ...reviewReasons,
+    ...minorVarianceReasons,
+  ])
+),
+
+dailyRows,
+
+status,
+
+          /*
+            Temporary backwards-compatible values.
+
+            The current Payroll table still expects
+            workedDays / workedHours. We keep these
+            until we replace the table in the next step.
+          */
+          workedDays:
+            loggedDates.size,
+
+          workedHours:
+            loggedMinutes / 60,
+        };
+      }
+    );
+
+  return result.sort(
+    (a, b) =>
+      a.employeeName.localeCompare(
+        b.employeeName
+      )
+  );
+}, [
+  filteredVisibleEmployees,
+  payrollTimeEntries,
+  payrollDateRange.startDate,
+  payrollDateRange.endDate,
+  employeeBreakRows,
+  scheduleExceptions,
+  requests,
+  countryHolidays,
+]);
+const payrollDetailEmployee =
+  payrollEmployeePeriodSummary.find(
+    (employee) =>
+      String(employee.employeeId) ===
+      String(
+        payrollDetailEmployeeId
+      )
+  ) || null;
+
   const editableTimeLogs = filteredTime.filter((t) => {
   const categoryOk =
     timeLogTableFilters.category === "All" ||
@@ -10308,6 +12602,665 @@ break_end:
     downloadFile(`cando-hr-reporting-by-${reportView.toLowerCase()}.csv`, csv(reportingSummary, headers), "text/csv");
   }
 
+  function payrollFilenamePart(value) {
+  return (
+    String(value || "all")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") ||
+    "all"
+  );
+}
+
+function getPayrollSourceEmployee(
+  summaryEmployee
+) {
+  const targetId = String(
+    summaryEmployee?.employeeId || ""
+  ).trim();
+
+  return (
+    employees.find((employee) => {
+      const employeeIds = [
+        employee.id,
+        employee.employee_id,
+        employee.supabase_employee_id,
+      ]
+        .map((value) =>
+          String(value || "").trim()
+        )
+        .filter(Boolean);
+
+      return employeeIds.includes(
+        targetId
+      );
+    }) || {}
+  );
+}
+
+function buildPayrollSummaryExportRows(
+  summaryRows = []
+) {
+  return summaryRows.map(
+    (summaryEmployee) => {
+      const sourceEmployee =
+        getPayrollSourceEmployee(
+          summaryEmployee
+        );
+
+      const managerTl = String(
+        sourceEmployee.team_leader ||
+          sourceEmployee.supervisor ||
+          sourceEmployee.manager ||
+          ""
+      ).trim();
+
+      return {
+        period_start:
+          payrollDateRange.startDate,
+
+        period_end:
+          payrollDateRange.endDate,
+
+        employee_id:
+          summaryEmployee.employeeId ||
+          "",
+
+        employee_name:
+          summaryEmployee.employeeName ||
+          "",
+
+        country:
+          summaryEmployee.country || "",
+
+        lob:
+          sourceEmployee.lob || "",
+
+        department:
+          sourceEmployee.department || "",
+
+        sub_department:
+          sourceEmployee.sub_department ||
+          "",
+
+        manager_tl:
+          managerTl,
+
+        scheduled_hours:
+          summaryEmployee.scheduledHours.toFixed(
+            2
+          ),
+
+        logged_hours:
+          summaryEmployee.loggedHours.toFixed(
+            2
+          ),
+
+        in_schedule_hours:
+          summaryEmployee.trackedWithinScheduleHours.toFixed(
+            2
+          ),
+
+        time_attendance_percent:
+          summaryEmployee.timeAttendancePercent.toFixed(
+            1
+          ),
+
+        pto_hours:
+          summaryEmployee.ptoHours.toFixed(
+            2
+          ),
+
+        sick_hours:
+          summaryEmployee.sickHours.toFixed(
+            2
+          ),
+
+        vto_hours:
+          summaryEmployee.vtoHours.toFixed(
+            2
+          ),
+
+        paid_leave_hours:
+          summaryEmployee.paidLeaveHours.toFixed(
+            2
+          ),
+
+        unpaid_hours:
+          summaryEmployee.unpaidLeaveHours.toFixed(
+            2
+          ),
+
+        swap_hours:
+          summaryEmployee.swapHours.toFixed(
+            2
+          ),
+
+        missing_hours:
+          summaryEmployee.missingHours.toFixed(
+            2
+          ),
+
+        outside_schedule_hours:
+          summaryEmployee.overtimeHours.toFixed(
+            2
+          ),
+
+        holiday_credit_hours:
+          summaryEmployee.holidayCreditHours.toFixed(
+            2
+          ),
+
+        holiday_worked_hours:
+          summaryEmployee.holidayWorkedHours.toFixed(
+            2
+          ),
+
+        holiday_names:
+          (
+            summaryEmployee.holidayNames ||
+            []
+          ).join("; "),
+
+        holiday_rules:
+          (
+            summaryEmployee.holidayRules ||
+            []
+          ).join("; "),
+
+        status:
+          summaryEmployee.status || "",
+
+        review_reasons:
+          (
+            summaryEmployee.reviewReasons ||
+            []
+          ).join("; "),
+      };
+    }
+  );
+}
+
+function downloadPayrollSummaryCsv(
+  summaryRows,
+  scopeLabel
+) {
+  if (!summaryRows?.length) {
+    showToast(
+      "Nothing to export",
+      "No Payroll records match this scope.",
+      "warning"
+    );
+
+    return;
+  }
+
+  const headers = [
+    "period_start",
+    "period_end",
+    "employee_id",
+    "employee_name",
+    "country",
+    "lob",
+    "department",
+    "sub_department",
+    "manager_tl",
+    "scheduled_hours",
+    "logged_hours",
+    "in_schedule_hours",
+    "time_attendance_percent",
+    "pto_hours",
+    "sick_hours",
+    "vto_hours",
+    "paid_leave_hours",
+    "unpaid_hours",
+    "swap_hours",
+    "missing_hours",
+    "outside_schedule_hours",
+    "holiday_credit_hours",
+    "holiday_worked_hours",
+    "holiday_names",
+    "holiday_rules",
+    "status",
+    "review_reasons",
+  ];
+
+  const rows =
+    buildPayrollSummaryExportRows(
+      summaryRows
+    );
+
+  const filename =
+    `magnemite-payroll-` +
+    `${payrollFilenamePart(
+      scopeLabel
+    )}-` +
+    `${payrollDateRange.startDate}-to-` +
+    `${payrollDateRange.endDate}.csv`;
+
+  downloadFile(
+    filename,
+    `\uFEFF${csv(rows, headers)}`,
+    "text/csv;charset=utf-8;"
+  );
+}
+
+function exportPayrollCurrentViewCsv() {
+  downloadPayrollSummaryCsv(
+    payrollEmployeePeriodSummary,
+    "current-view"
+  );
+}
+
+function exportPayrollCountryCsv() {
+  if (
+    filters.country === "All"
+  ) {
+    showToast(
+      "Select a country",
+      "Choose CR, MX, CAN, or another country before exporting the country Payroll file.",
+      "warning"
+    );
+
+    return;
+  }
+
+  const otherScopeFiltersActive =
+    filters.lob !== "All" ||
+    filters.department !== "All" ||
+    filters.subDepartment !== "All" ||
+    filters.teamLeader !== "All" ||
+    filters.employee !== "All";
+
+  if (otherScopeFiltersActive) {
+    showToast(
+      "Country export needs country-only scope",
+      "Reset LOB, Department, Manager/TL, and Employee filters so the file contains the entire selected country.",
+      "warning"
+    );
+
+    return;
+  }
+
+  downloadPayrollSummaryCsv(
+    payrollEmployeePeriodSummary,
+    `country-${filters.country}`
+  );
+}
+
+function exportPayrollAllCsv() {
+  const payrollScopeFilterActive =
+    filters.lob !== "All" ||
+    filters.department !== "All" ||
+    filters.subDepartment !== "All" ||
+    filters.teamLeader !== "All" ||
+    filters.employee !== "All" ||
+    filters.country !== "All";
+
+  if (payrollScopeFilterActive) {
+    showToast(
+      "Reset Payroll filters first",
+      "Use Reset Payroll Filters before exporting the complete pay-period file.",
+      "warning"
+    );
+
+    return;
+  }
+
+  downloadPayrollSummaryCsv(
+    payrollEmployeePeriodSummary,
+    "all-payroll"
+  );
+}
+
+function exportPayrollEmployeeCsv(
+  summaryEmployee
+) {
+  if (
+    !summaryEmployee ||
+    !summaryEmployee.dailyRows?.length
+  ) {
+    showToast(
+      "Nothing to export",
+      "No daily Payroll detail is available for this employee.",
+      "warning"
+    );
+
+    return;
+  }
+
+  const sourceEmployee =
+    getPayrollSourceEmployee(
+      summaryEmployee
+    );
+
+  const managerTl = String(
+    sourceEmployee.team_leader ||
+      sourceEmployee.supervisor ||
+      sourceEmployee.manager ||
+      ""
+  ).trim();
+
+  const headers = [
+    "period_start",
+    "period_end",
+    "employee_id",
+    "employee_name",
+    "country",
+    "lob",
+    "manager_tl",
+    "date",
+    "day",
+    "schedule",
+    "scheduled_hours",
+    "logged_hours",
+    "in_schedule_hours",
+    "outside_schedule_hours",
+    "leave_type",
+    "leave_hours",
+    "holiday",
+    "holiday_rule",
+    "holiday_credit_hours",
+    "holiday_worked_hours",
+    "missing_hours",
+    "time_attendance_percent",
+    "status",
+    "review_reasons",
+  ];
+
+  const rows =
+    summaryEmployee.dailyRows.map(
+      (day) => ({
+        period_start:
+          payrollDateRange.startDate,
+
+        period_end:
+          payrollDateRange.endDate,
+
+        employee_id:
+          summaryEmployee.employeeId ||
+          "",
+
+        employee_name:
+          summaryEmployee.employeeName ||
+          "",
+
+        country:
+          summaryEmployee.country || "",
+
+        lob:
+          sourceEmployee.lob || "",
+
+        manager_tl:
+          managerTl,
+
+        date:
+          day.date || "",
+
+        day:
+          day.dayName || "",
+
+        schedule:
+          day.schedule || "",
+
+        scheduled_hours:
+          safeNumber(
+            day.scheduledHours,
+            0
+          ).toFixed(2),
+
+        logged_hours:
+          safeNumber(
+            day.loggedHours,
+            0
+          ).toFixed(2),
+
+        in_schedule_hours:
+          safeNumber(
+            day.inScheduleHours,
+            0
+          ).toFixed(2),
+
+        outside_schedule_hours:
+          safeNumber(
+            day.outsideScheduleHours,
+            0
+          ).toFixed(2),
+
+        leave_type:
+          day.leaveType || "",
+
+        leave_hours:
+          safeNumber(
+            day.leaveHours,
+            0
+          ).toFixed(2),
+
+        holiday:
+          day.holidayName || "",
+
+        holiday_rule:
+          day.holidayRule || "",
+
+        holiday_credit_hours:
+          safeNumber(
+            day.holidayCreditHours,
+            0
+          ).toFixed(2),
+
+        holiday_worked_hours:
+          safeNumber(
+            day.holidayWorkedHours,
+            0
+          ).toFixed(2),
+
+        missing_hours:
+          safeNumber(
+            day.missingHours,
+            0
+          ).toFixed(2),
+
+        time_attendance_percent:
+          safeNumber(
+            day.timeAttendancePercent,
+            0
+          ).toFixed(1),
+
+        status:
+          day.status || "",
+
+        review_reasons:
+          (
+            day.reviewReasons || []
+          ).join("; "),
+      })
+    );
+
+  const filename =
+    `magnemite-payroll-employee-` +
+    `${payrollFilenamePart(
+      summaryEmployee.employeeName
+    )}-` +
+    `${payrollDateRange.startDate}-to-` +
+    `${payrollDateRange.endDate}.csv`;
+
+  downloadFile(
+    filename,
+    `\uFEFF${csv(rows, headers)}`,
+    "text/csv;charset=utf-8;"
+  );
+}
+
+async function sendPayrollForReview() {
+  if (
+    !payrollReviewRecipients.length
+  ) {
+    showToast(
+      "Select reviewers",
+      "Select at least one Manager, TL, or HR reviewer.",
+      "warning"
+    );
+
+    return;
+  }
+
+  if (
+    !payrollEmployeePeriodSummary.length
+  ) {
+    showToast(
+      "No Payroll records",
+      "There are no Payroll records in the current view.",
+      "warning"
+    );
+
+    return;
+  }
+
+  const totals =
+    payrollEmployeePeriodSummary.reduce(
+      (summary, employee) => {
+        summary.scheduled +=
+          safeNumber(
+            employee.scheduledHours,
+            0
+          );
+
+        summary.logged +=
+          safeNumber(
+            employee.loggedHours,
+            0
+          );
+
+        summary.missing +=
+          safeNumber(
+            employee.missingHours,
+            0
+          );
+
+        summary.outside +=
+          safeNumber(
+            employee.overtimeHours,
+            0
+          );
+
+        if (
+  [
+    "Review",
+    "Critical Review",
+  ].includes(employee.status)
+) {
+  summary.reviewCount += 1;
+}
+
+        return summary;
+      },
+      {
+        scheduled: 0,
+        logged: 0,
+        missing: 0,
+        outside: 0,
+        reviewCount: 0,
+      }
+    );
+
+  const activeFilters = [
+    filters.lob !== "All"
+      ? `LOB: ${filters.lob}`
+      : "",
+
+    filters.country !== "All"
+      ? `Country: ${filters.country}`
+      : "",
+
+    filters.department !== "All"
+      ? `Department: ${filters.department}`
+      : "",
+
+    filters.subDepartment !==
+      "All"
+      ? `Sub-Department: ${filters.subDepartment}`
+      : "",
+
+    filters.teamLeader !== "All"
+      ? `Manager/TL: ${filters.teamLeader}`
+      : "",
+
+    filters.employee !== "All"
+      ? `Employee: ${filters.employee}`
+      : "",
+  ].filter(Boolean);
+
+  const scopeDescription =
+    activeFilters.length
+      ? activeFilters.join(" | ")
+      : "All Payroll";
+
+  const subject =
+    `Payroll Review Required · ` +
+    `${payrollDateRange.label}`;
+
+  const body =
+    `Hello,\n\n` +
+    `The Magnemite Payroll reconciliation for ${payrollDateRange.label} is ready for review prior to payroll processing.\n\n` +
+
+    `Scope: ${scopeDescription}\n` +
+    `Employees: ${payrollEmployeePeriodSummary.length}\n\n` +
+
+    `Scheduled Hours: ${totals.scheduled.toFixed(2)}h\n` +
+    `Logged Hours: ${totals.logged.toFixed(2)}h\n` +
+    `Missing Hours: ${totals.missing.toFixed(2)}h\n` +
+    `Outside Schedule: ${totals.outside.toFixed(2)}h\n` +
+    `Employees Requiring Review: ${totals.reviewCount}\n\n` +
+
+    `Please log in to Magnemite and open the Payroll tab to review the applicable employee records before payroll payments are processed.\n\n` +
+
+    `Requested by: ${
+      currentUser?.full_name ||
+      currentUser?.email ||
+      "Magnemite Payroll"
+    }`;
+
+  const queueRows =
+    payrollReviewRecipients.map(
+      (recipient) =>
+        mapEmailToSupabaseQueue({
+          recipient,
+          subject,
+          body,
+          status: "Pending",
+        })
+    );
+
+  await runProtectedAction(
+    "send-payroll-review",
+    "Send Payroll for Review",
+    async () => {
+      await supabaseInsert(
+        "email_queue",
+        queueRows,
+        "Payroll review email queue"
+      );
+
+      setPayrollReviewModalOpen(
+        false
+      );
+
+      setPayrollReviewRecipients(
+        []
+      );
+
+      showToast(
+        "Payroll review queued",
+        `${queueRows.length} reviewer email(s) were queued.`,
+        "success"
+      );
+
+      return "silent";
+    }
+  );
+}
+
   function exportPdf() {
     const doc = new jsPDF();
     doc.setFontSize(16);
@@ -12479,8 +15432,345 @@ rows={filteredRequests.map((r) => [
         )}
 
         {!isAgentOnly && tab === "payroll" && (
-          <Card title="Payroll review"><Table headers={["Employee", "Country", "Holiday", "Scheduled", "Clock In/Out", "Late", "Worked", "OT", "Status"]} rows={filteredTime.map((t) => { const employee = employees.find((e) => e.id === t.employee_id); const holiday = isHolidayForCountry(employee?.country, t.date); const late = Math.max(0, minutesBetween(t.scheduled_start, t.clock_in)); const worked = minutesBetween(t.clock_in, t.clock_out); const ot = t.category === "Overtime" ? minutesBetween(t.category_start, t.category_end) : Math.max(0, minutesBetween(t.scheduled_end, t.clock_out)); return [t.employee_name, employee?.country || "N/A", holiday ? <Badge danger>{holiday.holiday_name}</Badge> : <Badge muted>No Holiday</Badge>, formatTimeRange(t.scheduled_start, t.scheduled_end), formatTimeRange(t.clock_in, t.clock_out), `${late} min`, formatHours(worked), formatHours(ot), <Badge danger={late > 0}>{late > 0 ? "Late" : "On Time"}</Badge>]; })} /></Card>
-        )}
+  <section className="reportingPage">
+    <div className="reportHeader">
+      <div>
+        <h2>Payroll Review</h2>
+        <p>
+          Review employee time logs by
+          semi-monthly payroll period.
+          Salary and payment amounts are
+          intentionally excluded.
+        </p>
+      </div>
+
+      <div className="reportControls">
+  <label>
+    Month
+    <input
+      type="month"
+      value={payrollMonth}
+      onChange={(event) =>
+        setPayrollMonth(
+          event.target.value
+        )
+      }
+    />
+  </label>
+
+  <label>
+    Pay Period
+    <select
+      value={payrollPeriod}
+      onChange={(event) =>
+        setPayrollPeriod(
+          event.target.value
+        )
+      }
+    >
+      <option value="first">
+        1st Half · 1–15
+      </option>
+
+      <option value="second">
+        2nd Half · 16–End
+      </option>
+    </select>
+  </label>
+
+  <label>
+    LOB
+    <select
+      value={filters.lob}
+      onChange={(event) =>
+        setFilters((current) => ({
+          ...current,
+          lob: event.target.value,
+          department: "All",
+          subDepartment: "All",
+          teamLeader: "All",
+          employee: "All",
+        }))
+      }
+    >
+      {lobOptions.map((lob) => (
+        <option
+          key={lob}
+          value={lob}
+        >
+          {lob}
+        </option>
+      ))}
+    </select>
+  </label>
+
+  <label>
+    Country
+    <select
+      value={filters.country}
+      onChange={(event) =>
+        setFilters((current) => ({
+          ...current,
+          country: event.target.value,
+          teamLeader: "All",
+          employee: "All",
+        }))
+      }
+    >
+      {countryOptions.map((country) => (
+        <option
+          key={country}
+          value={country}
+        >
+          {country}
+        </option>
+      ))}
+    </select>
+  </label>
+
+  <label>
+    Manager / TL
+    <select
+      value={filters.teamLeader}
+      onChange={(event) =>
+        setFilters((current) => ({
+          ...current,
+          teamLeader:
+            event.target.value,
+          employee: "All",
+        }))
+      }
+    >
+      {teamLeaderOptions.map(
+        (leader) => (
+          <option
+            key={leader}
+            value={leader}
+          >
+            {leader}
+          </option>
+        )
+      )}
+    </select>
+  </label>
+
+  <button
+    type="button"
+    className="btn"
+    onClick={() =>
+      setFilters((current) => ({
+        ...current,
+        lob: "All",
+        department: "All",
+        subDepartment: "All",
+        teamLeader: "All",
+        employee: "All",
+        country: "All",
+      }))
+    }
+  >
+    Reset Payroll Filters
+  </button>
+</div>
+    </div>
+
+    <div className="reportMiniGrid">
+      <Info
+        label="Period Start"
+        value={
+          payrollDateRange.startDate
+        }
+      />
+
+      <Info
+        label="Period End"
+        value={
+          payrollDateRange.endDate
+        }
+      />
+
+      <Info
+  label="Time Log Records"
+  value={
+    payrollLogsLoading
+      ? "Loading..."
+      : payrollTimeEntries.length
+  }
+/>
+    </div>
+<div className="payrollExportActions">
+  <button
+    type="button"
+    className="btn"
+    onClick={
+      exportPayrollCurrentViewCsv
+    }
+  >
+    <Download size={16} />
+    Current View CSV
+  </button>
+
+  <button
+    type="button"
+    className="btn"
+    onClick={
+      exportPayrollCountryCsv
+    }
+  >
+    <Download size={16} />
+    Country CSV
+  </button>
+
+  <button
+    type="button"
+    className="btn"
+    onClick={
+      exportPayrollAllCsv
+    }
+  >
+    <Download size={16} />
+    All Payroll CSV
+  </button>
+
+  <button
+  type="button"
+  className="primary"
+  onClick={() => {
+    setPayrollReviewRecipients(
+      []
+    );
+
+    setPayrollReviewModalOpen(
+      true
+    );
+  }}
+>
+  <FileCheck size={16} />
+  Send for Review
+</button>
+</div>
+    <Card
+      title={`Payroll Period · ${payrollDateRange.label}`}
+    >
+      <Table
+  headers={[
+    "Employee",
+    "Country",
+    "Scheduled",
+    "Logged",
+    "Time %",
+    "PTO",
+    "Sick",
+    "VTO",
+    "Unpaid",
+    "Missing",
+    "Outside",
+    "Holiday",
+    "Holiday Rule",
+"Status",
+"Details",
+  ]}
+  rows={payrollEmployeePeriodSummary.map(
+    (employee) => [
+      employee.employeeName,
+
+      employee.country,
+
+      `${employee.scheduledHours.toFixed(
+        2
+      )}h`,
+
+      `${employee.loggedHours.toFixed(
+        2
+      )}h`,
+
+      `${employee.timeAttendancePercent.toFixed(
+        1
+      )}%`,
+
+      `${employee.ptoHours.toFixed(
+        2
+      )}h`,
+
+      `${employee.sickHours.toFixed(
+        2
+      )}h`,
+
+      `${employee.vtoHours.toFixed(
+        2
+      )}h`,
+
+      `${employee.unpaidLeaveHours.toFixed(
+        2
+      )}h`,
+
+      `${employee.missingHours.toFixed(
+        2
+      )}h`,
+
+      `${employee.overtimeHours.toFixed(
+        2
+      )}h`,
+
+      employee.holidayNames.length
+        ? `${employee.holidayNames.join(
+            ", "
+          )} · ${
+            (
+              employee.holidayCreditHours +
+              employee.holidayWorkedHours
+            ).toFixed(2)
+          }h`
+        : "—",
+
+      employee.holidayRules.length
+        ? employee.holidayRules.join(
+            ", "
+          )
+        : "—",
+
+      employee.reviewReasons.length
+        ? `${employee.status}: ${employee.reviewReasons.join(
+            ", "
+          )}`
+        : employee.status,
+
+        <button
+  type="button"
+  className="btn"
+  onClick={() =>
+    setPayrollDetailEmployeeId(
+      employee.employeeId
+    )
+  }
+>
+  View
+</button>,
+
+    ]
+  )}
+/>
+    </Card>
+    {payrollDetailEmployee && (
+  <PayrollDetailModal
+  employee={
+    payrollDetailEmployee
+  }
+  periodLabel={
+    payrollDateRange.label
+  }
+  onExport={() =>
+    exportPayrollEmployeeCsv(
+      payrollDetailEmployee
+    )
+  }
+  onClose={() =>
+    setPayrollDetailEmployeeId("")
+  }
+/>
+)}
+  </section>
+)}
 
         {!isAgentOnly && tab === "reporting" && (
           <section className="reportingPage">
@@ -12898,14 +16188,45 @@ rows={filteredRequests.map((r) => [
       </main>
       {processingModal && <ProcessingOverlay status={processingModal.status} title={processingModal.title} message={processingModal.message} />}
       {managerOverrideModal && (
-        <ManagerOverrideModal
-          title={managerOverrideModal.title}
-          message={managerOverrideModal.message}
-          onCancel={() => resolveManagerOverride(false)}
-          onConfirm={() => resolveManagerOverride(true)}
-        />
-      )}
-      {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
+  <ManagerOverrideModal
+    title={managerOverrideModal.title}
+    message={managerOverrideModal.message}
+    onCancel={() => resolveManagerOverride(false)}
+    onConfirm={() => resolveManagerOverride(true)}
+  />
+)}
+
+{payrollReviewModalOpen && (
+  <PayrollReviewModal
+    reviewers={
+      payrollReviewerOptions
+    }
+    selectedRecipients={
+      payrollReviewRecipients
+    }
+    setSelectedRecipients={
+      setPayrollReviewRecipients
+    }
+    periodLabel={
+      payrollDateRange.label
+    }
+    filters={
+      filters
+    }
+    employeeCount={
+      payrollEmployeePeriodSummary.length
+    }
+    onClose={() => {
+      setPayrollReviewModalOpen(false);
+      setPayrollReviewRecipients([]);
+    }}
+    onSend={
+      sendPayrollForReview
+    }
+  />
+)}
+
+{toast && <Toast toast={toast} onClose={() => setToast(null)} />}
     </div>
     
   );
@@ -13678,6 +16999,218 @@ select:disabled { opacity: .55; cursor: not-allowed; background: #f1f5f9; }
 .spinner { width: 44px; height: 44px; border-radius: 999px; border: 4px solid #dceee6; border-top-color: var(--green); margin: 0 auto; animation: spin .8s linear infinite; }
 .overrideCard { text-align: left; }
 .overrideActions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+
+.payrollExportActions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
+/* PAYROLL REVIEW MODAL — ADD THIS BLOCK HERE */
+
+.payrollReviewModal {
+  width: min(760px, 94vw);
+  max-height: 88vh;
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  box-shadow: 0 28px 90px rgba(4, 37, 29, .28);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.payrollReviewBody {
+  padding: 20px 24px;
+  overflow-y: auto;
+}
+
+.payrollReviewScope {
+  margin-bottom: 22px;
+}
+
+.payrollReviewerSection {
+  border-top: 1px solid #e4eee9;
+  padding-top: 18px;
+}
+
+.payrollReviewerList {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.payrollReviewerOption {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid #dce9e3;
+  border-radius: 12px;
+  padding: 11px 12px;
+  cursor: pointer;
+  background: #ffffff;
+}
+
+.payrollReviewerOption:hover {
+  background: #f5fbf8;
+}
+
+.payrollReviewerOption input {
+  width: 18px;
+  height: 18px;
+}
+
+.payrollReviewerOption span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.payrollReviewerOption small {
+  color: var(--muted);
+}
+
+.payrollReviewFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 24px;
+  border-top: 1px solid #e4eee9;
+  background: #fbfdfc;
+}
+
+/* EXISTING PAYROLL DETAIL MODAL CONTINUES BELOW */
+
+.payrollDetailModal {
+  width: min(1480px, 96vw);
+  height: min(820px, 88vh);
+  background: #ffffff;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  box-shadow: 0 28px 90px rgba(4, 37, 29, .28);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.payrollDetailHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 22px 24px 18px;
+  border-bottom: 1px solid #e6f0eb;
+  background: #ffffff;
+  flex: 0 0 auto;
+}
+
+.payrollDetailHeader h2 {
+  margin: 3px 0 5px;
+  font-size: 24px;
+}
+
+.payrollDetailHeader p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.payrollDetailEyebrow {
+  display: block;
+  color: #047857;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.payrollDetailHeaderActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.payrollDetailClose {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  padding: 0;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  font-size: 26px;
+  line-height: 1;
+  background: #f8faf9;
+  border: 1px solid #dce9e3;
+  color: #425249;
+}
+
+.payrollDetailClose:hover {
+  background: #eef7f2;
+}
+
+.payrollDetailSummary {
+  display: grid;
+  grid-template-columns:
+    repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  padding: 16px 24px;
+  flex: 0 0 auto;
+  background: #fbfdfc;
+}
+
+.payrollDetailTable {
+  padding: 0 24px 24px;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+}
+
+.payrollDetailTable .table {
+  width: 100%;
+  max-height: none;
+  overflow: visible;
+}
+
+@media (max-width: 1120px) {
+  .payrollDetailSummary {
+    grid-template-columns:
+      repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 760px) {
+  .payrollDetailModal {
+    width: 98vw;
+    max-height: 94vh;
+  }
+
+  .payrollDetailHeader {
+    padding: 16px;
+  }
+
+  .payrollDetailSummary {
+    grid-template-columns:
+      repeat(2, minmax(0, 1fr));
+    padding: 12px 16px;
+  }
+
+  .payrollDetailTable {
+    padding: 0 16px 16px;
+  }
+}
+
+@media (max-width: 520px) {
+  .payrollDetailSummary {
+    grid-template-columns: 1fr;
+  }
+}
+
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .tabMetrics { margin-top: 18px; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
@@ -13765,5 +17298,6 @@ button:disabled:hover { transform: none; box-shadow: none; }
   border-radius: 999px;
   padding: 3px 9px;
   font-weight: 900;
+}
 
 `;
