@@ -109,6 +109,7 @@ const WORKFORCE_SYNC_ALLOWED_FIELDS = [
   "employment_status",
   "employment_type",
   "off_days",
+  "schedule_days",
   "shift_start",
   "shift_end",
   "break_start",
@@ -162,6 +163,7 @@ const ADMIN_ACCESS_LEVELS = ["TL", "Team Lead", "Supervisor", "Manager", "Approv
 const OT_REQUESTS_ENABLED = false;
 const EARLY_SHIFT_START_GRACE_MINUTES = 15;
 const PAYROLL_VARIANCE_TOLERANCE_MINUTES = 5;
+const PAYROLL_STANDARD_WORK_DAYS_PER_PERIOD = 10;
 const REQUEST_TYPE_OPTIONS = ["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Day off due to Swap"];
 const APPROVED_ATTENDANCE_ABSENCE_TYPES = [
   "PTO",
@@ -2393,6 +2395,17 @@ const rawSecondBreakEnd =
   return {
       has_schedule_exception:
     Boolean(matchingScheduleException),
+
+      schedule_exception_id:
+    matchingScheduleException?.exception_id || "",
+
+  schedule_exception_notes:
+    String(
+      matchingScheduleException?.notes || ""
+    ).trim(),
+
+  schedule_exception_source:
+    matchingScheduleException?.source || "",
 
     shift_start:
       convertEasternScheduleToEmployeeLocal(
@@ -8272,7 +8285,114 @@ const payrollEmployeePeriodSummary = useMemo(() => {
             employee.termination_date
           );
 
-        let scheduledMinutes = 0;
+        /*
+  Payroll scheduled target.
+
+  The payroll target is based on the employee's
+  recurring two-week schedule, not on how many
+  occurrences of a weekday happen to fall inside
+  the semi-monthly calendar dates.
+
+  Example:
+  5 scheduled days/week = 10 days per payroll cycle.
+  6 scheduled days/week = 12 days per payroll cycle.
+
+  Schedule exceptions do not increase the normal
+  payroll scheduled-day target.
+*/
+const rosterScheduleDays =
+  employee?.schedule_days &&
+  typeof employee.schedule_days === "object"
+    ? employee.schedule_days
+    : {};
+
+const fallbackOffDays =
+  normalizeOffDays(
+    employee.off_days
+  ).map((day) =>
+    normalizeDayName(day)
+  );
+
+const scheduledWeekDays =
+  WEEK_DAYS.filter((dayName) => {
+    const dayValue =
+      rosterScheduleDays[dayName];
+
+    /*
+      App_Schedules uses values such as:
+      X   = scheduled
+      OFF = off day
+
+      If schedule_days is unavailable for an older
+      employee record, fall back to off_days.
+    */
+    if (
+      dayValue !== undefined &&
+      dayValue !== null &&
+      String(dayValue).trim() !== ""
+    ) {
+      return (
+        String(dayValue)
+          .trim()
+          .toUpperCase() !== "OFF"
+      );
+    }
+
+    return !fallbackOffDays.includes(
+      dayName
+    );
+  });
+
+const weeklyScheduledMinutes =
+  scheduledWeekDays.reduce(
+    (total, dayName) => {
+      /*
+        Use the employee's normal schedule here.
+
+        Schedule exceptions are intentionally excluded
+        from the payroll baseline because a swap/change
+        should not create additional scheduled payroll
+        hours.
+      */
+      const baseSchedule =
+        getStableSchedule(
+          employee,
+          [],
+          dayName,
+          employeeBreakRows,
+          [],
+          ""
+        );
+
+      const baseRange =
+        buildMinuteRange(
+          baseSchedule.shift_start,
+          baseSchedule.shift_end
+        );
+
+      if (!baseRange) {
+        return total;
+      }
+
+      return (
+        total +
+        Math.max(
+          0,
+          baseRange.end -
+            baseRange.start
+        )
+      );
+    },
+    0
+  );
+
+let scheduledDays =
+  scheduledWeekDays.length * 2;
+
+let scheduledMinutes =
+  weeklyScheduledMinutes * 2;
+
+let payrollScheduledMinutesAllocated = 0;
         let loggedMinutes = 0;
         let trackedWithinScheduleMinutes =
           0;
@@ -8290,7 +8410,7 @@ const payrollEmployeePeriodSummary = useMemo(() => {
         let missingMinutes = 0;
         let overtimeMinutes = 0;
 
-        let scheduledDays = 0;
+        
         let noScheduleDays = 0;
 
         const loggedDates =
@@ -8333,6 +8453,15 @@ const dailyRows = [];
             ) {
               return;
             }
+
+const employeeTodayKey =
+  getEmployeeDateKey(employee);
+
+const isFutureDate =
+  dateKey > employeeTodayKey;
+
+  const isCurrentDate =
+  dateKey === employeeTodayKey;
 
             const dateObject =
               new Date(
@@ -8379,6 +8508,21 @@ const dailyRows = [];
                 schedule.shift_end
               );
 
+              const employeeCurrentTimeMinutes =
+  isCurrentDate
+    ? timeToMinutes(
+        getEmployeeTimeKey(employee)
+      )
+    : null;
+
+const isCurrentShiftInProgress =
+  isCurrentDate &&
+  !isOffDay &&
+  scheduleRange &&
+  employeeCurrentTimeMinutes !== null &&
+  employeeCurrentTimeMinutes <
+    scheduleRange.end;
+
             const dayScheduledMinutes =
               !isOffDay &&
               scheduleRange
@@ -8388,6 +8532,8 @@ const dailyRows = [];
                       scheduleRange.start
                   )
                 : 0;
+
+                
 
             if (
   !isOffDay &&
@@ -8400,14 +8546,7 @@ const dailyRows = [];
   );
 }
 
-            if (
-              dayScheduledMinutes > 0
-            ) {
-              scheduledDays += 1;
-
-              scheduledMinutes +=
-                dayScheduledMinutes;
-            }
+           
 
             /*
               Country holiday for this employee/date.
@@ -8501,14 +8640,46 @@ const dailyRows = [];
   );
 
             const approvedLeaveType =
-              String(
-                approvedLeave?.type ||
-                  approvedLeave?.request_type ||
-                  approvedLeave?.Request_Type ||
-                  ""
-              )
-                .trim()
-                .toLowerCase();
+  String(
+    approvedLeave?.type ||
+      approvedLeave?.request_type ||
+      approvedLeave?.Request_Type ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+
+/*
+  A Day off due to Swap does not consume
+  scheduled payroll hours on the original
+  day off.
+*/
+const isSwapDayOff =
+  approvedLeaveType ===
+  "day off due to swap";
+
+const remainingPayrollScheduledMinutes =
+  Math.max(
+    0,
+    scheduledMinutes -
+      payrollScheduledMinutesAllocated
+  );
+
+const payrollDayScheduledMinutes =
+  isSwapDayOff
+    ? 0
+    : Math.min(
+        dayScheduledMinutes,
+        remainingPayrollScheduledMinutes
+      );
+
+if (!isSwapDayOff) {
+  payrollScheduledMinutesAllocated +=
+    payrollDayScheduledMinutes;
+}
+
+const isPayrollScheduledDay =
+  payrollDayScheduledMinutes > 0;
 
             /*
               Get all time logs belonging to the
@@ -8879,19 +9050,22 @@ if (
               - nor an eligible paid holiday.
             */
             const dayAccountedMinutes =
-              Math.min(
-                dayScheduledMinutes,
-                dayTrackedWithinSchedule +
-                  dayLeaveCredit +
-                  dayHolidayCredit
-              );
+  Math.min(
+    payrollDayScheduledMinutes,
+    dayTrackedWithinSchedule +
+      dayLeaveCredit +
+      dayHolidayCredit
+  );
 
-            const dayMissingMinutes =
-              Math.max(
-                0,
-                dayScheduledMinutes -
-                  dayAccountedMinutes
-              );
+const dayMissingMinutes =
+  isFutureDate ||
+  isCurrentShiftInProgress
+    ? 0
+    : Math.max(
+        0,
+        payrollDayScheduledMinutes -
+          dayAccountedMinutes
+      );
 
             missingMinutes +=
               dayMissingMinutes;
@@ -8908,12 +9082,12 @@ if (
   be displayed in the Payroll Detail modal.
 */
 const dayTimeAttendancePercent =
-  dayScheduledMinutes > 0
+  payrollDayScheduledMinutes > 0
     ? Math.min(
         100,
         (
           dayTrackedWithinSchedule /
-          dayScheduledMinutes
+          payrollDayScheduledMinutes
         ) * 100
       )
     : 0;
@@ -8940,7 +9114,10 @@ const hasOpenTimeLog =
       )
   );
 
-if (hasOpenTimeLog) {
+if (
+  hasOpenTimeLog &&
+  !isCurrentShiftInProgress
+) {
   dayCriticalReasons.push(
     "Open time log"
   );
@@ -8987,6 +9164,17 @@ if (
 let dayStatus = "Reconciled";
 
 if (
+  isFutureDate
+) {
+  dayStatus =
+    isOffDay
+      ? "Upcoming Off Day"
+      : "Upcoming";
+} else if (
+  isCurrentShiftInProgress
+) {
+  dayStatus = "In Progress";
+} else if (
   dayCriticalReasons.length > 0
 ) {
   dayStatus = "Critical Review";
@@ -9004,8 +9192,13 @@ if (
 ) {
   dayStatus = "Off Day";
 } else if (
+  !isPayrollScheduledDay &&
+  dayLoggedMinutes === 0
+) {
+  dayStatus = "Payroll Schedule Fulfilled";
+} else if (
   dayLeaveCredit > 0 &&
-  dayTrackedWithinSchedule === 0
+    dayTrackedWithinSchedule === 0
 ) {
   dayStatus = "Approved Leave";
 } else if (
@@ -9055,19 +9248,21 @@ dailyRows.push({
   dayName,
 
   schedule:
-    isOffDay
-      ? "OFF"
-      : scheduleRange
-      ? `${schedule.shift_start} - ${schedule.shift_end}`
-      : "Missing schedule",
+  isOffDay
+    ? "OFF"
+    : scheduleRange
+    ? `${schedule.shift_start} - ${schedule.shift_end}`
+    : "Missing schedule",
 
-  isOffDay,
+isOffDay,
 
-  scheduledMinutes:
-    dayScheduledMinutes,
+isPayrollScheduledDay,
 
-  scheduledHours:
-    dayScheduledMinutes / 60,
+scheduledMinutes:
+  payrollDayScheduledMinutes,
+
+scheduledHours:
+  payrollDayScheduledMinutes / 60,
 
   loggedMinutes:
     dayLoggedMinutes,
@@ -13232,33 +13427,126 @@ async function sendPayrollForReview() {
         })
     );
 
-  await runProtectedAction(
-    "send-payroll-review",
-    "Send Payroll for Review",
-    async () => {
-      await supabaseInsert(
-        "email_queue",
-        queueRows,
-        "Payroll review email queue"
-      );
+  const payrollScopeType =
+  filters.employee !== "All"
+    ? "EMPLOYEE"
+    : filters.teamLeader !== "All"
+    ? "MANAGER_TL"
+    : filters.country !== "All"
+    ? "COUNTRY"
+    : filters.lob !== "All"
+    ? "LOB"
+    : "ALL";
 
-      setPayrollReviewModalOpen(
-        false
-      );
+const payrollScopeFilters = {
+  lob: filters.lob,
+  department: filters.department,
+  sub_department: filters.subDepartment,
+  manager_tl: filters.teamLeader,
+  employee: filters.employee,
+  country: filters.country,
+  month: payrollMonth,
+  pay_period: payrollPeriod,
+};
 
-      setPayrollReviewRecipients(
-        []
-      );
+await runProtectedAction(
+  "send-payroll-review",
+  "Send Payroll for Review",
+  async () => {
+    const reviewResponse = await fetch(
+      "/api/payroll-review",
+      {
+        method: "POST",
 
-      showToast(
-        "Payroll review queued",
-        `${queueRows.length} reviewer email(s) were queued.`,
-        "success"
-      );
+        headers: {
+          "Content-Type": "application/json",
+        },
 
-      return "silent";
+        body: JSON.stringify({
+          period_start:
+            payrollDateRange.startDate,
+
+          period_end:
+            payrollDateRange.endDate,
+
+          scope_type:
+            payrollScopeType,
+
+          scope_filters:
+            payrollScopeFilters,
+
+          employee_count:
+            payrollEmployeePeriodSummary.length,
+
+          requested_by_name:
+            currentUser?.full_name ||
+            currentUser?.email ||
+            "Magnemite Payroll",
+
+          requested_by_email:
+            normalizeEmail(
+              currentUser?.email
+            ),
+
+          actor_role:
+            normalizeAccessRole(
+              currentUser?.access_level ||
+              currentUser?.role ||
+              ""
+            ),
+
+          reviewer_emails:
+            payrollReviewRecipients,
+        }),
+      }
+    );
+
+    let reviewResult = {};
+
+    try {
+      reviewResult =
+        await reviewResponse.json();
+    } catch {
+      reviewResult = {};
     }
-  );
+
+    if (
+      !reviewResponse.ok ||
+      !reviewResult?.success
+    ) {
+      throw new Error(
+        reviewResult?.error ||
+          "Unable to create the Payroll review record."
+      );
+    }
+
+    /*
+      Keep the existing Phase 1
+      email notification process.
+    */
+    await supabaseInsert(
+      "email_queue",
+      queueRows,
+      "Payroll review email queue"
+    );
+
+    setPayrollReviewModalOpen(
+      false
+    );
+
+    setPayrollReviewRecipients(
+      []
+    );
+
+    showToast(
+      "Payroll review queued",
+      `${queueRows.length} reviewer email(s) were queued.`,
+      "success"
+    );
+
+    return "silent";
+  }
+);
 }
 
   function exportPdf() {
