@@ -3049,15 +3049,18 @@ function isHolidayForCountry(
     formatDateOnly(date);
 
   return holidays.find((holiday) => {
-    const holidayCountry =
-      holiday.country_name ||
-      holiday.country ||
-      "";
+    const holidayCountries = [
+      holiday.country_code,
+      holiday.country_name,
+      holiday.country,
+    ]
+      .map(normalizeCountry)
+      .filter(Boolean);
 
     return (
-      normalizeCountry(
-        holidayCountry
-      ) === targetCountry &&
+      holidayCountries.includes(
+        targetCountry
+      ) &&
       formatDateOnly(
         holiday.holiday_date
       ) === targetDate
@@ -4686,6 +4689,13 @@ function PayrollDetailModal({
           <Info
   label="Outside Schedule"
   value={`${employee.overtimeHours.toFixed(
+    2
+  )}h`}
+/>
+
+<Info
+  label="Total Payable Hours"
+  value={`${employee.totalPayableHours.toFixed(
     2
   )}h`}
 />
@@ -8403,6 +8413,8 @@ let payrollScheduledMinutesAllocated = 0;
         let paidLeaveMinutes = 0;
         let unpaidLeaveMinutes = 0;
         let swapMinutes = 0;
+        let holidayWorkedPremiumMinutes = 0;
+let holidayPaidNotWorkedMinutes = 0;
 
         let holidayCreditMinutes = 0;
         let holidayWorkedMinutes = 0;
@@ -8565,19 +8577,40 @@ const isCurrentShiftInProgress =
               );
 
               const multiplier =
-                safeNumber(
-                  holiday.pay_multiplier,
-                  1
-                );
+  safeNumber(
+    holiday.pay_multiplier,
+    1
+  );
 
-              holidayRules.add(
-                `${
-                  holiday.pay_rule ||
-                  "REGULAR"
-                } · ${multiplier.toFixed(
-                  2
-                )}x`
-              );
+const holidayPayRule =
+  String(
+    holiday.pay_rule ||
+    "REGULAR"
+  ).toLowerCase();
+
+const effectiveWorkedMultiplier =
+  holidayPayRule ===
+    "double_if_worked" &&
+  holiday.additional_pay === true
+    ? 1 + multiplier
+    : multiplier;
+
+
+   
+
+holidayRules.add(
+  holidayPayRule ===
+      "double_if_worked" &&
+    holiday.additional_pay === true
+    ? `double_if_worked · +${multiplier.toFixed(
+        2
+      )}x premium · ${effectiveWorkedMultiplier.toFixed(
+        2
+      )}x total`
+    : `${holidayPayRule} · ${multiplier.toFixed(
+        2
+      )}x`
+);
             }
 
             /*
@@ -9192,20 +9225,20 @@ if (
 ) {
   dayStatus = "Off Day";
 } else if (
-  !isPayrollScheduledDay &&
-  dayLoggedMinutes === 0
-) {
-  dayStatus = "Payroll Schedule Fulfilled";
-} else if (
-  dayLeaveCredit > 0 &&
-    dayTrackedWithinSchedule === 0
-) {
-  dayStatus = "Approved Leave";
-} else if (
   dayHolidayCredit > 0 &&
   dayTrackedWithinSchedule === 0
 ) {
   dayStatus = "Holiday";
+} else if (
+  dayLeaveCredit > 0 &&
+  dayTrackedWithinSchedule === 0
+) {
+  dayStatus = "Approved Leave";
+} else if (
+  !isPayrollScheduledDay &&
+  dayLoggedMinutes === 0
+) {
+  dayStatus = "Payroll Schedule Fulfilled";
 } else if (
   dayScheduledMinutes === 0 &&
   dayLoggedMinutes > 0
@@ -9236,11 +9269,82 @@ const holidayRule =
     ? `${
         holiday.pay_rule ||
         "REGULAR"
-      } · ${safeNumber(
-        holiday.pay_multiplier,
+      } · ${
+  String(holiday?.pay_rule || "")
+    .trim()
+    .toLowerCase() === "double_if_worked" &&
+  holiday?.additional_pay === true
+    ? `+${safeNumber(
+        holiday?.pay_multiplier,
+        1
+      ).toFixed(2)}x premium · ${(
+        1 +
+        safeNumber(
+          holiday?.pay_multiplier,
+          1
+        )
+      ).toFixed(2)}x if worked`
+    : `${safeNumber(
+        holiday?.pay_multiplier,
         1
       ).toFixed(2)}x`
+}`
     : "";
+
+    const dayHolidayPayRule =
+  String(
+    holiday?.pay_rule || ""
+  )
+    .trim()
+    .toLowerCase();
+
+const dayHolidayMultiplier =
+  safeNumber(
+    holiday?.pay_multiplier,
+    1
+  );
+
+const dayEffectiveWorkedMultiplier =
+  dayHolidayPayRule ===
+      "double_if_worked" &&
+    holiday?.additional_pay === true
+    ? 1 + dayHolidayMultiplier
+    : dayHolidayMultiplier;
+
+const dayHolidayPremiumMinutes =
+  holiday &&
+  dayTrackedWithinSchedule > 0
+    ? dayTrackedWithinSchedule *
+      Math.max(
+        0,
+        dayEffectiveWorkedMultiplier - 1
+      )
+    : 0;
+
+const dayHolidayPaidNotWorkedMinutes =
+  holiday &&
+  dayLoggedMinutes === 0 &&
+  holiday?.paid_if_not_worked === true &&
+  payrollDayScheduledMinutes > 0
+    ? payrollDayScheduledMinutes
+    : 0;
+
+const dayPaidLeaveMinutes =
+  approvedLeaveType === "paid leave"
+    ? dayLeaveCredit
+    : 0;
+
+const dayTotalPayableMinutes =
+  dayTrackedWithinSchedule +
+  dayPaidLeaveMinutes +
+  dayHolidayPaidNotWorkedMinutes +
+  dayHolidayPremiumMinutes;
+
+  holidayWorkedPremiumMinutes +=
+  dayHolidayPremiumMinutes;
+
+holidayPaidNotWorkedMinutes +=
+  dayHolidayPaidNotWorkedMinutes;
 
 dailyRows.push({
   date: dateKey,
@@ -9269,6 +9373,12 @@ scheduledHours:
 
   loggedHours:
     dayLoggedMinutes / 60,
+
+    payableMinutes:
+  dayTotalPayableMinutes,
+
+payableHours:
+  dayTotalPayableMinutes / 60,
 
   inScheduleMinutes:
     dayTrackedWithinSchedule,
@@ -9394,6 +9504,15 @@ if (
             "Approved Leave";
         }
 
+        const totalPayableMinutes =
+  trackedWithinScheduleMinutes +
+  paidLeaveMinutes +
+  holidayPaidNotWorkedMinutes +
+  holidayWorkedPremiumMinutes;
+
+const totalPayableHours =
+  totalPayableMinutes / 60;
+
         return {
           employeeId,
           employeeName,
@@ -9411,6 +9530,9 @@ if (
           loggedMinutes,
           loggedHours:
             loggedMinutes / 60,
+
+            totalPayableMinutes,
+totalPayableHours,
 
           trackedWithinScheduleMinutes,
           trackedWithinScheduleHours:
@@ -12892,6 +13014,11 @@ function buildPayrollSummaryExportRows(
             2
           ),
 
+          total_payable_hours:
+  summaryEmployee.totalPayableHours.toFixed(
+    2
+  ),
+
         in_schedule_hours:
           summaryEmployee.trackedWithinScheduleHours.toFixed(
             2
@@ -13002,9 +13129,10 @@ function downloadPayrollSummaryCsv(
     "sub_department",
     "manager_tl",
     "scheduled_hours",
-    "logged_hours",
-    "in_schedule_hours",
-    "time_attendance_percent",
+"logged_hours",
+"total_payable_hours",
+"in_schedule_hours",
+"time_attendance_percent",
     "pto_hours",
     "sick_hours",
     "vto_hours",
@@ -13154,6 +13282,7 @@ function exportPayrollEmployeeCsv(
     "outside_schedule_hours",
     "leave_type",
     "leave_hours",
+    "payable_hours",
     "holiday",
     "holiday_rule",
     "holiday_credit_hours",
@@ -13232,6 +13361,12 @@ function exportPayrollEmployeeCsv(
             0
           ).toFixed(2),
 
+          payable_hours:
+  safeNumber(
+    day.payableHours,
+    0
+  ).toFixed(2),
+  
         holiday:
           day.holidayName || "",
 
@@ -15946,6 +16081,7 @@ rows={filteredRequests.map((r) => [
     "Country",
     "Scheduled",
     "Logged",
+    "Payable",
     "Time %",
     "PTO",
     "Sick",
@@ -15971,6 +16107,10 @@ rows={filteredRequests.map((r) => [
       `${employee.loggedHours.toFixed(
         2
       )}h`,
+
+      `${employee.totalPayableHours.toFixed(
+  2
+)}h`,
 
       `${employee.timeAttendancePercent.toFixed(
         1
