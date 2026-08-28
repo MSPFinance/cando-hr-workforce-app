@@ -2926,6 +2926,126 @@ function isActiveEmployee(employee) {
     hasValidIdentity
   );
 }
+function applyMagnemiteScopeToEmployees(
+  employeesList = [],
+  scopeRows = []
+) {
+  const byId = new Map();
+  const byName = new Map();
+
+  scopeRows.forEach((row) => {
+    const employeeId = normalizeIdKey(
+      row.employee_id ||
+      row.Employee_ID ||
+      ""
+    );
+
+    const employeeName = normalizeNameKey(
+      row.employee_name ||
+      row.Employee_Name ||
+      ""
+    );
+
+    if (employeeId) {
+      byId.set(employeeId, row);
+    }
+
+    if (employeeName) {
+      byName.set(employeeName, row);
+    }
+  });
+
+  return employeesList.map((employee) => {
+    const employeeId = normalizeIdKey(
+      employee.id ||
+      employee.employee_id ||
+      ""
+    );
+
+    const employeeName = normalizeNameKey(
+      employee.full_name ||
+      employee.employee_name ||
+      ""
+    );
+
+    const scope =
+      byId.get(employeeId) ||
+      byName.get(employeeName) ||
+      null;
+
+    if (!scope) {
+      return {
+        ...employee,
+        display_mode: "Default",
+        searchable: true,
+        include_attendance_email: true,
+      };
+    }
+
+    const displayMode = String(
+      scope.display_mode ||
+      "Default"
+    ).trim();
+
+    const searchable =
+      String(
+        scope.searchable || "Yes"
+      )
+        .trim()
+        .toLowerCase() !== "no";
+
+    const includeAttendanceEmail =
+      String(
+        scope.include_attendance_email ||
+        "Yes"
+      )
+        .trim()
+        .toLowerCase() !== "no";
+
+    return {
+      ...employee,
+
+      raw_lob:
+        employee.lob || "",
+
+      raw_department:
+        employee.department || "",
+
+      raw_sub_department:
+        employee.sub_department || "",
+
+      display_mode:
+        displayMode,
+
+      searchable,
+
+      include_attendance_email:
+        includeAttendanceEmail,
+
+      lob:
+        String(
+          scope.display_lob ||
+          employee.lob ||
+          ""
+        ).trim(),
+
+      department:
+        String(
+          scope.display_department ||
+          employee.department ||
+          ""
+        ).trim(),
+
+      sub_department:
+        String(
+          scope.display_sub_department ||
+          employee.sub_department ||
+          ""
+        ).trim(),
+    };
+  });
+}
+
 function normalizeAccessRole(value) {
   const normalized = String(value || "")
     .trim()
@@ -5242,7 +5362,12 @@ function HRWorkforceApp() {
   const [adminMode, setAdminMode] = useState(false);
   const [search, setSearch] = useState("");
   const [reportView, setReportView] = useState("LOB");
-  const [payrollMonth, setPayrollMonth] = useState(
+
+const [reportingNow, setReportingNow] = useState(
+  Date.now()
+);
+
+const [payrollMonth, setPayrollMonth] = useState(
   today.slice(0, 7)
 );
 
@@ -5373,6 +5498,24 @@ const [attendanceDetailView, setAttendanceDetailView] =
   sortOrder: "newest",
 });
 
+useEffect(() => {
+  if (tab !== "reporting") {
+    return undefined;
+  }
+
+  // Update live reporting every 30 seconds so an
+  // active Break/Bathroom/Working status continues
+  // increasing without requiring a manual refresh.
+  setReportingNow(Date.now());
+
+  const timer = window.setInterval(() => {
+    setReportingNow(Date.now());
+  }, 30000);
+
+  return () => {
+    window.clearInterval(timer);
+  };
+}, [tab]);
 
   async function syncWorkforcePlanningSheet(options = {}) {
     const { silent = false, automatic = false } = options;
@@ -5585,6 +5728,10 @@ if (finalSyncedEmployees?.length) {
       }
 
       const sheetEmployees = (database.employees || []).map(mapEmployeeFromSheet);
+      const scopeRows =
+  Array.isArray(database.magnemite_scope)
+    ? database.magnemite_scope
+    : [];
       const sheetTime = (database.timeLogs || []).map(mapTimeFromSheet);
       const sheetRequests = (database.requests || []).map(mapRequestFromSheet);
       const sheetRules = (database.staffingRules || []).map(mapRuleFromSheet);
@@ -5636,7 +5783,13 @@ const googleSourceEmployees =
   (balanceResult.employees || rosterResult.employees || [])
     .filter(isActiveEmployee);
 
-setEmployees(googleSourceEmployees);
+const scopedGoogleEmployees =
+  applyMagnemiteScopeToEmployees(
+    googleSourceEmployees,
+    scopeRows
+  );
+
+setEmployees(scopedGoogleEmployees);
 
 if (sheetTime.length) {
   setTimeEntries(sheetTime);
@@ -5673,7 +5826,7 @@ if (sheetSubDepartments.length) {
   It does not replace the Google Sheets schedule.
 */
 const loadedSupabase = await loadSupabaseReferenceData(
-  googleSourceEmployees,
+  scopedGoogleEmployees,
   setEmployees,
   setDatabaseStatus
 );
@@ -5925,16 +6078,42 @@ const filteredTimeLogEmployeeId =
   filteredTimeLogEmployee?.id ||
   "";
 
-  const visibleEmployees =
+  const searchingEmployees =
+  tab === "employees" &&
+  Boolean(search.trim());
+
+const visibleEmployees =
   isAgentOnly && currentUser
     ? isActiveEmployee(currentUser)
       ? [currentUser]
       : []
-    : employees.filter(
-        (employee) =>
-          Boolean(employee) &&
-          isActiveEmployee(employee)
-      );
+    : employees.filter((employee) => {
+        if (
+          !employee ||
+          !isActiveEmployee(employee)
+        ) {
+          return false;
+        }
+
+        const displayMode = String(
+          employee.display_mode ||
+          "Default"
+        )
+          .trim()
+          .toLowerCase();
+
+        const isSearchOnly =
+          displayMode === "search only";
+
+        if (!isSearchOnly) {
+          return true;
+        }
+
+        return (
+          searchingEmployees &&
+          employee.searchable !== false
+        );
+      });
  const visibleTime = isAgentOnly && currentUser?.id
   ? timeEntries.filter((t) => t.employee_id === currentUser.id)
   : timeEntries;
@@ -7387,8 +7566,29 @@ const {
   available separately.
 */
 
-  const lobOptions = ["All", ...new Set([...lobs, ...visibleEmployees.map((e) => e.lob).filter(Boolean)])];
-  const departmentOptions = ["All", ...new Set([...departments, ...visibleEmployees.map((e) => e.department).filter(Boolean)])];
+  const lobOptions = [
+  "All",
+  ...new Set(
+    visibleEmployees
+      .map((employee) =>
+        String(employee.lob || "").trim()
+      )
+      .filter(Boolean)
+  ),
+];
+
+const departmentOptions = [
+  "All",
+  ...new Set(
+    visibleEmployees
+      .map((employee) =>
+        String(
+          employee.department || ""
+        ).trim()
+      )
+      .filter(Boolean)
+  ),
+];
   const subDepartmentOptions = [
   "All",
   ...new Set(
@@ -9743,11 +9943,7 @@ const displayedTimeLogs =
     };
   }, [filteredTime, visibleEmployees, visibleRequests, visibleTime]);
 
-  const categoryStats = useMemo(() => {
-    const result = new Map();
-    filteredTime.forEach((t) => result.set(t.category, (result.get(t.category) || 0) + minutesBetween(t.category_start, t.category_end)));
-    return [...result.entries()].map(([label, minutes]) => ({ label, minutes }));
-  }, [filteredTime]);
+  
 
   const teamStats = useMemo(() => {
     const result = new Map();
@@ -9760,55 +9956,1265 @@ const displayedTimeLogs =
     return [...result.entries()].map(([label, minutes]) => ({ label, minutes }));
   }, [filteredTime]);
 
-  const reportingSummary = useMemo(() => {
-    const keyGetter = reportView === "LOB" ? (item) => item.lob : (item) => item.department;
-    const groupedEmployees = groupBy(employees, keyGetter);
-    const groups = [];
+  
+const liveReportingRows = useMemo(() => {
+  /*
+    Reporting is intentionally separate from Payroll.
 
-    groupedEmployees.forEach((groupEmployees, groupName) => {
-      const ids = new Set(groupEmployees.map((e) => e.id));
-      const groupTime = filteredTime.filter((t) => ids.has(t.employee_id));
-      const groupRequests = requests.filter((r) => ids.has(r.employee_id));
-      const totalMinutes = groupTime.reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
-      const workingMinutes = groupTime.filter((t) => t.category === "Working").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
-      const breakMinutes = groupTime.filter((t) => ["Break","Bathroom"].includes(t.category)).reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
-      const otMinutes = groupTime.filter((t) => t.category === "Overtime").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
-      const pendingRequests = groupRequests.filter((r) => r.status === "Pending").length;
-      const approvedRequests = groupRequests.filter((r) => r.status === "Approved").length;
-      const scheduledBreakLunch = groupEmployees.reduce((sum, e) => sum + safeNumber(e.break_minutes, 60) + safeNumber(e.lunch_minutes, 0), 0);
-      const adherenceRisk = breakMinutes > scheduledBreakLunch || pendingRequests > 0;
+    Reporting Date:
+    - Start Date if selected
+    - otherwise End Date if selected
+    - otherwise today
 
-      groups.push({
+    For today's report, Expected time represents
+    the amount of scheduled time that should have
+    elapsed up to the current moment.
+
+    For previous dates, Expected represents the
+    employee's complete scheduled shift.
+  */
+  const reportDate =
+    filters.startDate ||
+    filters.endDate ||
+    getAppDateKey();
+
+  const nowDate =
+    new Date(reportingNow);
+
+  /*
+    Determine the employee-local date belonging to
+    a time log.
+
+    Prefer the saved date when available. Otherwise,
+    convert the timestamp to the employee timezone.
+  */
+  const getEntryDateForEmployee = (
+    entry,
+    employee
+  ) => {
+    const explicitDate =
+      String(entry?.date || "").trim();
+
+    if (
+      /^\d{4}-\d{2}-\d{2}/.test(
+        explicitDate
+      )
+    ) {
+      return explicitDate.slice(0, 10);
+    }
+
+    const timestamp =
+      entry?.clock_in ||
+      entry?.category_start ||
+      entry?.created_at ||
+      "";
+
+    if (!timestamp) {
+      return "";
+    }
+
+    const parsedDate =
+      new Date(timestamp);
+
+    if (
+      Number.isNaN(
+        parsedDate.getTime()
+      )
+    ) {
+      return String(timestamp).slice(
+        0,
+        10
+      );
+    }
+
+    return new Intl.DateTimeFormat(
+      "en-CA",
+      {
+        timeZone:
+          getEmployeeTimeZone(
+            employee
+          ),
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }
+    ).format(parsedDate);
+  };
+
+  /*
+    Convert either:
+    - HH:mm
+    - Supabase timestamp
+
+    into employee-local minutes after midnight.
+  */
+  const getLocalMinutes = (
+    value,
+    employee
+  ) => {
+    if (!value) {
+      return null;
+    }
+
+    const raw =
+      String(value).trim();
+
+    const simpleTime = raw.match(
+      /^(\d{1,2}):(\d{2})(?::\d{2})?$/
+    );
+
+    if (simpleTime) {
+      return (
+        Number(simpleTime[1]) * 60 +
+        Number(simpleTime[2])
+      );
+    }
+
+    const parsedDate =
+      new Date(value);
+
+    if (
+      Number.isNaN(
+        parsedDate.getTime()
+      )
+    ) {
+      return null;
+    }
+
+    const localTime =
+      new Intl.DateTimeFormat(
+        "en-GB",
+        {
+          timeZone:
+            getEmployeeTimeZone(
+              employee
+            ),
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }
+      ).format(parsedDate);
+
+    return timeToMinutes(localTime);
+  };
+
+  /*
+    Calculate duration for both closed and currently
+    open status records.
+  */
+  const getEntryMinutes = (
+    entry,
+    employee,
+    employeeCurrentDate
+  ) => {
+    const isOpen =
+      !entry?.clock_out &&
+      !entry?.category_end;
+
+    const savedDuration =
+      Number(
+        entry?.duration_minutes
+      );
+
+    if (
+      !isOpen &&
+      Number.isFinite(
+        savedDuration
+      ) &&
+      savedDuration > 0
+    ) {
+      return savedDuration;
+    }
+
+    const startValue =
+      entry?.category_start ||
+      entry?.clock_in ||
+      entry?.created_at ||
+      "";
+
+    let endValue =
+      entry?.category_end ||
+      entry?.clock_out ||
+      "";
+
+    /*
+      An open status continues through "now"
+      only when viewing the employee's current date.
+    */
+    if (
+      isOpen &&
+      reportDate ===
+        employeeCurrentDate
+    ) {
+      endValue =
+        nowDate.toISOString();
+    }
+
+    const startMinutes =
+      getLocalMinutes(
+        startValue,
+        employee
+      );
+
+    const endMinutes =
+      getLocalMinutes(
+        endValue,
+        employee
+      );
+
+    if (
+      startMinutes !== null &&
+      endMinutes !== null
+    ) {
+      const difference =
+        endMinutes -
+        startMinutes;
+
+      return difference >= 0
+        ? difference
+        : difference + 1440;
+    }
+
+    /*
+      Timestamp fallback.
+    */
+    const startTimestamp =
+      startValue
+        ? new Date(
+            startValue
+          ).getTime()
+        : NaN;
+
+    const endTimestamp =
+      endValue
+        ? new Date(
+            endValue
+          ).getTime()
+        : NaN;
+
+    if (
+      !Number.isNaN(
+        startTimestamp
+      ) &&
+      !Number.isNaN(
+        endTimestamp
+      )
+    ) {
+      return Math.max(
+        0,
+        Math.round(
+          (
+            endTimestamp -
+            startTimestamp
+          ) / 60000
+        )
+      );
+    }
+
+    return 0;
+  };
+
+  return filteredVisibleEmployees
+    .map((employee) => {
+      const employeeIds = [
+        employee.id,
+        employee.employee_id,
+        employee.supabase_employee_id,
+      ]
+        .map((value) =>
+          String(
+            value || ""
+          ).trim()
+        )
+        .filter(Boolean);
+
+      const employeeCurrentDate =
+        getEmployeeDateKey(
+          employee,
+          nowDate
+        );
+
+      const employeeCurrentMinutes =
+        timeToMinutes(
+          getEmployeeTimeKey(
+            employee,
+            nowDate
+          )
+        );
+
+      /*
+        Only use records belonging to the selected
+        Reporting date.
+      */
+      const employeeLogs =
+        timeEntries.filter(
+          (entry) => {
+            const sameEmployee =
+              employeeIds.includes(
+                String(
+                  entry.employee_id ||
+                    ""
+                ).trim()
+              );
+
+            if (!sameEmployee) {
+              return false;
+            }
+
+            return (
+              getEntryDateForEmployee(
+                entry,
+                employee
+              ) === reportDate
+            );
+          }
+        );
+
+        /*
+  APPROVED REPORTING ABSENCE
+
+  Requests in the current Magnemite model are
+  date-based/full-day requests. Therefore an
+  approved PTO, VTO, or Sick Leave request that
+  covers this reporting date excuses the employee
+  from the scheduled-start lateness calculation.
+*/
+const approvedReportingAbsence =
+  requests.find((request) => {
+    const requestEmployeeId =
+      String(
+        request.employee_id ||
+        request.Employee_ID ||
+        ""
+      ).trim();
+
+    const requestStatus =
+      String(
+        request.status ||
+        request.approval_status ||
+        request.Status ||
+        ""
+      )
+        .trim()
+        .toLowerCase();
+
+    const requestType =
+      String(
+        request.type ||
+        request.request_type ||
+        request.Request_Type ||
+        ""
+      )
+        .trim()
+        .toLowerCase();
+
+    return (
+      employeeIds.includes(
+        requestEmployeeId
+      ) &&
+      requestStatus === "approved" &&
+      [
+        "pto",
+        "vto",
+        "sick leave",
+      ].includes(requestType) &&
+      requestCoversDate(
+        request,
+        reportDate
+      )
+    );
+  });
+
+const approvedReportingAbsenceType =
+  String(
+    approvedReportingAbsence?.type ||
+    approvedReportingAbsence?.request_type ||
+    approvedReportingAbsence?.Request_Type ||
+    ""
+  )
+    .trim()
+    .toLowerCase();
+
+const approvedAbsenceLabel =
+  approvedReportingAbsenceType ===
+  "pto"
+    ? "PTO"
+    : approvedReportingAbsenceType ===
+      "vto"
+    ? "VTO"
+    : approvedReportingAbsenceType ===
+      "sick leave"
+    ? "Sick"
+    : "";
+
+const hasApprovedReportingAbsence =
+  Boolean(
+    approvedReportingAbsence
+  );
+
+      /*
+        Resolve the employee's schedule for the
+        selected date, including Schedule Exceptions
+        and employee_breaks.
+      */
+      const reportDateObject =
+        new Date(
+          `${reportDate}T12:00:00Z`
+        );
+
+      const dayName =
+        todayDayName(
+          getEmployeeTimeZone(
+            employee
+          ),
+          reportDateObject
+        );
+
+      const schedule =
+        getStableSchedule(
+          employee,
+          [],
+          dayName,
+          employeeBreakRows,
+          scheduleExceptions,
+          reportDate
+        );
+
+      const normalOffDay =
+        normalizeOffDays(
+          employee.off_days
+        ).some(
+          (day) =>
+            normalizeDayName(day) ===
+            dayName
+        );
+
+      /*
+        A valid schedule exception overrides
+        the employee's normal off-day.
+      */
+      const isOffDay =
+        normalOffDay &&
+        !schedule.has_schedule_exception;
+
+      const shiftStart =
+        isOffDay
+          ? null
+          : timeToMinutes(
+              schedule.shift_start
+            );
+
+      const shiftEnd =
+        isOffDay
+          ? null
+          : timeToMinutes(
+              schedule.shift_end
+            );
+
+      const fullScheduledMinutes =
+        shiftStart !== null &&
+        shiftEnd !== null
+          ? Math.max(
+              0,
+              shiftEnd -
+                shiftStart
+            )
+          : 0;
+
+      const isCurrentDate =
+        reportDate ===
+        employeeCurrentDate;
+
+      const isPastDate =
+        reportDate <
+        employeeCurrentDate;
+
+      const isFutureDate =
+        reportDate >
+        employeeCurrentDate;
+
+        /*
+  SCHEDULE START / LATE REPORTING
+
+  Find the first actual activity recorded for the
+  employee on the selected reporting date.
+
+  This represents the first recorded arrival/start
+  for comparison against the scheduled shift start.
+*/
+const firstActualStartMinutes =
+  employeeLogs.reduce(
+    (earliest, entry) => {
+      const startValue =
+        entry.clock_in ||
+        entry.category_start ||
+        entry.created_at ||
+        "";
+
+      const startMinutes =
+        getLocalMinutes(
+          startValue,
+          employee
+        );
+
+      if (startMinutes === null) {
+        return earliest;
+      }
+
+      return earliest === null
+        ? startMinutes
+        : Math.min(
+            earliest,
+            startMinutes
+          );
+    },
+    null
+  );
+
+/*
+  Late is not applicable when:
+  - employee is OFF;
+  - employee has approved PTO/VTO/Sick;
+  - reporting date is in the future;
+  - shift start is unavailable.
+
+  For today, when the employee has not logged in yet,
+  lateness increases live after scheduled start.
+*/
+const lateApplicable =
+  !isOffDay &&
+  !hasApprovedReportingAbsence &&
+  !isFutureDate &&
+  shiftStart !== null &&
+  (
+    firstActualStartMinutes !== null ||
+    (
+      isCurrentDate &&
+      employeeCurrentMinutes !== null &&
+      employeeCurrentMinutes >
+        shiftStart
+    )
+  );
+
+const lateIsLive =
+  lateApplicable &&
+  isCurrentDate &&
+  firstActualStartMinutes === null &&
+  employeeCurrentMinutes !== null &&
+  employeeCurrentMinutes >
+    shiftStart;
+
+const lateMinutes =
+  !lateApplicable
+    ? 0
+    : firstActualStartMinutes !== null
+    ? Math.max(
+        0,
+        firstActualStartMinutes -
+          shiftStart
+      )
+    : Math.max(
+        0,
+        employeeCurrentMinutes -
+          shiftStart
+      );
+
+      /*
+        EXPECTED SCHEDULE TO DATE
+
+        Historical date:
+          full scheduled shift
+
+        Current date:
+          only scheduled minutes that should
+          already have elapsed
+
+        Future date:
+          zero
+      */
+      let expectedToDateMinutes = 0;
+
+      if (
+        !isOffDay &&
+        fullScheduledMinutes > 0
+      ) {
+        if (isPastDate) {
+          expectedToDateMinutes =
+            fullScheduledMinutes;
+        } else if (
+          isCurrentDate &&
+          employeeCurrentMinutes !== null &&
+          shiftStart !== null &&
+          shiftEnd !== null
+        ) {
+          expectedToDateMinutes =
+            Math.max(
+              0,
+              Math.min(
+                employeeCurrentMinutes,
+                shiftEnd
+              ) -
+                shiftStart
+            );
+        }
+      }
+
+      /*
+        Scheduled break windows.
+        These come from employee_breaks /
+        schedule exceptions rather than relying
+        only on the generic employee break_minutes.
+      */
+      const breakWindows = [
+        [
+          schedule.break_start,
+          schedule.break_end,
+        ],
+        [
+          schedule.second_break_start,
+          schedule.second_break_end,
+        ],
+      ];
+
+      const fullExpectedBreakMinutes =
+        isOffDay
+          ? 0
+          : breakWindows.reduce(
+              (
+                total,
+                [start, end]
+              ) =>
+                total +
+                minutesBetween(
+                  start,
+                  end
+                ),
+              0
+            );
+
+      let expectedBreakMinutes = 0;
+
+      if (
+        !isOffDay &&
+        !isFutureDate
+      ) {
+        if (isPastDate) {
+          expectedBreakMinutes =
+            fullExpectedBreakMinutes;
+        } else if (
+          employeeCurrentMinutes !==
+          null
+        ) {
+          expectedBreakMinutes =
+            breakWindows.reduce(
+              (
+                total,
+                [start, end]
+              ) => {
+                const startMinutes =
+                  timeToMinutes(
+                    start
+                  );
+
+                const endMinutes =
+                  timeToMinutes(
+                    end
+                  );
+
+                if (
+                  startMinutes === null ||
+                  endMinutes === null
+                ) {
+                  return total;
+                }
+
+                if (
+                  employeeCurrentMinutes <=
+                  startMinutes
+                ) {
+                  return total;
+                }
+
+                if (
+                  employeeCurrentMinutes >=
+                  endMinutes
+                ) {
+                  return (
+                    total +
+                    Math.max(
+                      0,
+                      endMinutes -
+                        startMinutes
+                    )
+                  );
+                }
+
+                return (
+                  total +
+                  Math.max(
+                    0,
+                    employeeCurrentMinutes -
+                      startMinutes
+                  )
+                );
+              },
+              0
+            );
+        }
+      }
+
+      const expectedBreakEvents =
+        isOffDay
+          ? 0
+          : breakWindows.filter(
+              ([start, end]) =>
+                minutesBetween(
+                  start,
+                  end
+                ) > 0
+            ).length;
+
+      let actualTrackedMinutes = 0;
+      let actualInScheduleMinutes = 0;
+      let outsideScheduleMinutes = 0;
+
+      let actualBreakMinutes = 0;
+      let actualBreakEvents = 0;
+
+      let bathroomMinutes = 0;
+      let bathroomEvents = 0;
+
+      employeeLogs.forEach(
+        (entry) => {
+          const duration =
+            getEntryMinutes(
+              entry,
+              employee,
+              employeeCurrentDate
+            );
+
+          const category =
+            String(
+              entry.category ||
+                entry.status ||
+                ""
+            )
+              .trim()
+              .toLowerCase();
+
+          actualTrackedMinutes +=
+            duration;
+
+          if (
+            category === "break"
+          ) {
+            actualBreakMinutes +=
+              duration;
+
+            actualBreakEvents += 1;
+          }
+
+          if (
+            category ===
+            "bathroom"
+          ) {
+            bathroomMinutes +=
+              duration;
+
+            bathroomEvents += 1;
+          }
+
+          const startValue =
+            entry.category_start ||
+            entry.clock_in ||
+            entry.created_at ||
+            "";
+
+          let endValue =
+            entry.category_end ||
+            entry.clock_out ||
+            "";
+
+          const isOpen =
+            !entry.clock_out &&
+            !entry.category_end;
+
+          if (
+            isOpen &&
+            isCurrentDate
+          ) {
+            endValue =
+              nowDate.toISOString();
+          }
+
+          const entryStart =
+            getLocalMinutes(
+              startValue,
+              employee
+            );
+
+          const entryEnd =
+            getLocalMinutes(
+              endValue,
+              employee
+            );
+
+          if (
+            shiftStart !== null &&
+            shiftEnd !== null &&
+            entryStart !== null &&
+            entryEnd !== null &&
+            !isOffDay
+          ) {
+            const inSchedule =
+              Math.max(
+                0,
+                Math.min(
+                  entryEnd,
+                  shiftEnd
+                ) -
+                  Math.max(
+                    entryStart,
+                    shiftStart
+                  )
+              );
+
+            actualInScheduleMinutes +=
+              inSchedule;
+
+            outsideScheduleMinutes +=
+              Math.max(
+                0,
+                duration -
+                  inSchedule
+              );
+          } else {
+            outsideScheduleMinutes +=
+              duration;
+          }
+        }
+      );
+
+      const adherencePercent =
+        expectedToDateMinutes > 0
+          ? Math.min(
+              100,
+              (
+                actualInScheduleMinutes /
+                expectedToDateMinutes
+              ) * 100
+            )
+          : 0;
+
+      const missingToDateMinutes =
+        Math.max(
+          0,
+          expectedToDateMinutes -
+            actualInScheduleMinutes
+        );
+
+      const breakVarianceMinutes =
+        actualBreakMinutes -
+        expectedBreakMinutes;
+
+      /*
+        Do NOT create an "expected bathroom"
+        value. Bathroom use is reported as actual
+        minutes/events only unless a formal policy
+        is later configured.
+      */
+
+      let status = "On Track";
+
+if (isFutureDate) {
+  status = "Upcoming";
+} else if (isOffDay) {
+  status =
+    actualTrackedMinutes > 0
+      ? "Review: Off-day activity"
+      : "Off Day";
+} else if (
+  hasApprovedReportingAbsence
+) {
+  /*
+    Approved leave takes priority over Late and
+    Missing Scheduled Time.
+
+    If time was nevertheless recorded, flag it
+    for review instead of silently ignoring it.
+  */
+  status =
+    actualTrackedMinutes > 0
+      ? `Review: ${approvedAbsenceLabel} approved + activity`
+      : `${approvedAbsenceLabel} · Approved`;
+} else if (
+  isCurrentDate &&
+  employeeCurrentMinutes !== null &&
+  shiftStart !== null &&
+  employeeCurrentMinutes <
+    shiftStart
+) {
+  status = "Upcoming";
+} else if (
+  isCurrentDate &&
+  employeeCurrentMinutes !== null &&
+  shiftEnd !== null &&
+  employeeCurrentMinutes <
+    shiftEnd
+) {
+  const liveStatus =
+    employeeLiveStatus(
+      employee,
+      timeEntries
+    );
+
+  if (lateIsLive) {
+    status =
+      `Live · Late ${lateMinutes} min`;
+  } else if (
+    liveStatus.status === "Offline"
+  ) {
+    status =
+      lateMinutes > 0
+        ? `In Progress · Late ${lateMinutes} min`
+        : "In Progress";
+  } else {
+    status =
+      lateMinutes > 0
+        ? `Live · ${liveStatus.status} · Late ${lateMinutes} min`
+        : `Live · ${liveStatus.status}`;
+  }
+} else if (
+  missingToDateMinutes >
+  PAYROLL_VARIANCE_TOLERANCE_MINUTES
+) {
+  status =
+    "Review: Missing scheduled time";
+} else if (
+  lateMinutes > 0
+) {
+  status =
+    `Review: Late start ${lateMinutes} min`;
+}
+      return {
+        employeeId:
+          employee.id ||
+          employee.employee_id ||
+          "",
+
+        employeeName:
+          employee.full_name ||
+          employee.employee_name ||
+          "Unknown Employee",
+
+        country:
+          employee.country || "—",
+
+        lob:
+          employee.lob || "—",
+
+        department:
+          employee.department ||
+          "—",
+
+        subDepartment:
+          employee.sub_department ||
+          "—",
+
+        managerTl:
+          employee.team_leader ||
+          employee.supervisor ||
+          employee.manager ||
+          "—",
+
+        reportDate,
+
+        scheduleLabel:
+          isOffDay
+            ? "OFF"
+            : formatTimeRange(
+                schedule.shift_start,
+                schedule.shift_end
+              ),
+
+        fullScheduledMinutes,
+        expectedToDateMinutes,
+
+        actualTrackedMinutes,
+        actualInScheduleMinutes,
+
+        adherencePercent,
+        missingToDateMinutes,
+
+        lateMinutes,
+lateApplicable,
+lateIsLive,
+
+approvedAbsence:
+  hasApprovedReportingAbsence,
+
+approvedAbsenceType:
+  approvedAbsenceLabel,
+
+        expectedBreakMinutes,
+        fullExpectedBreakMinutes,
+        expectedBreakEvents,
+
+        actualBreakMinutes,
+        actualBreakEvents,
+        breakVarianceMinutes,
+
+        bathroomMinutes,
+        bathroomEvents,
+
+        outsideScheduleMinutes,
+
+        status,
+      };
+    })
+    .sort((a, b) =>
+      a.employeeName.localeCompare(
+        b.employeeName
+      )
+    );
+}, [
+  filteredVisibleEmployees,
+  timeEntries,
+  requests,
+  filters.startDate,
+  filters.endDate,
+  employeeBreakRows,
+  scheduleExceptions,
+  reportingNow,
+]);
+const reportingSummary = useMemo(() => {
+  const grouped = new Map();
+
+  liveReportingRows.forEach((row) => {
+    const groupName =
+      reportView === "Department"
+        ? row.department || "Unassigned"
+        : row.lob || "Unassigned";
+
+    if (!grouped.has(groupName)) {
+      grouped.set(groupName, []);
+    }
+
+    grouped.get(groupName).push(row);
+  });
+
+  return Array.from(grouped.entries())
+    .map(([groupName, rows]) => {
+      const scheduledRows = rows.filter(
+        (row) =>
+          String(row.scheduleLabel || "")
+            .trim()
+            .toUpperCase() !== "OFF"
+      );
+
+      const loggedInRows = scheduledRows.filter(
+        (row) =>
+          safeNumber(
+            row.actualTrackedMinutes,
+            0
+          ) > 0
+      );
+
+      const approvedAbsenceRows =
+        scheduledRows.filter(
+          (row) =>
+            Boolean(row.approvedAbsence)
+        );
+
+      const adherenceRows =
+        scheduledRows.filter(
+          (row) =>
+            !row.approvedAbsence &&
+            safeNumber(
+              row.expectedToDateMinutes,
+              0
+            ) > 0
+        );
+
+      const averageAdherence =
+        adherenceRows.length
+          ? adherenceRows.reduce(
+              (sum, row) =>
+                sum +
+                safeNumber(
+                  row.adherencePercent,
+                  0
+                ),
+              0
+            ) / adherenceRows.length
+          : 0;
+
+      const lateCount =
+        scheduledRows.filter(
+          (row) =>
+            !row.approvedAbsence &&
+            safeNumber(
+              row.lateMinutes,
+              0
+            ) > 0
+        ).length;
+
+      const expectedBreakMinutes =
+        rows.reduce(
+          (sum, row) =>
+            sum +
+            safeNumber(
+              row.expectedBreakMinutes,
+              0
+            ),
+          0
+        );
+
+      const actualBreakMinutes =
+        rows.reduce(
+          (sum, row) =>
+            sum +
+            safeNumber(
+              row.actualBreakMinutes,
+              0
+            ),
+          0
+        );
+
+      const bathroomMinutes =
+        rows.reduce(
+          (sum, row) =>
+            sum +
+            safeNumber(
+              row.bathroomMinutes,
+              0
+            ),
+          0
+        );
+
+      const bathroomEvents =
+        rows.reduce(
+          (sum, row) =>
+            sum +
+            safeNumber(
+              row.bathroomEvents,
+              0
+            ),
+          0
+        );
+
+      const outsideScheduleMinutes =
+        rows.reduce(
+          (sum, row) =>
+            sum +
+            safeNumber(
+              row.outsideScheduleMinutes,
+              0
+            ),
+          0
+        );
+
+      const needsReview =
+        rows.filter((row) =>
+          String(row.status || "")
+            .toLowerCase()
+            .includes("review")
+        ).length;
+
+      const employeeIds = new Set(
+        rows
+          .map((row) =>
+            String(
+              row.employeeId || ""
+            ).trim()
+          )
+          .filter(Boolean)
+      );
+
+      const pendingRequests =
+        requests.filter((request) => {
+          const employeeId = String(
+            request.employee_id || ""
+          ).trim();
+
+          const status = String(
+            request.status || ""
+          )
+            .trim()
+            .toLowerCase();
+
+          return (
+            employeeIds.has(employeeId) &&
+            [
+              "pending",
+              "pending manager approval",
+            ].includes(status)
+          );
+        }).length;
+
+      const breakVarianceMinutes =
+        actualBreakMinutes -
+        expectedBreakMinutes;
+
+      let health = "Healthy";
+
+      if (
+        needsReview > 0 ||
+        (adherenceRows.length &&
+          averageAdherence < 90)
+      ) {
+        health = "Needs Attention";
+      } else if (
+        lateCount > 0 ||
+        (adherenceRows.length &&
+          averageAdherence < 95)
+      ) {
+        health = "Watch";
+      }
+
+      return {
         groupName,
-        headcount: groupEmployees.length,
-        totalMinutes,
-        workingMinutes,
-        breakMinutes,
-        scheduledBreakLunch,
-        otMinutes,
-        productivity: totalMinutes ? Math.round((workingMinutes / totalMinutes) * 100) : 0,
+
+        headcount: rows.length,
+        scheduledCount:
+          scheduledRows.length,
+
+        loggedInCount:
+          loggedInRows.length,
+
+        approvedAbsenceCount:
+          approvedAbsenceRows.length,
+
+        averageAdherence,
+
+        lateCount,
+
+        expectedBreakMinutes,
+        actualBreakMinutes,
+        breakVarianceMinutes,
+
+        bathroomMinutes,
+        bathroomEvents,
+
+        outsideScheduleMinutes,
+
+        needsReview,
         pendingRequests,
-        approvedRequests,
-        adherenceRisk,
-      });
-    });
 
-    return groups.sort((a, b) => a.groupName.localeCompare(b.groupName));
-  }, [employees, filteredTime, requests, reportView]);
-
-  const agentReporting = useMemo(() => {
-    return filteredVisibleEmployees.map((e) => {
-      const empTime = filteredTime.filter((t) => t.employee_id === e.id);
-      const totalMinutes = empTime.reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
-      const workingMinutes = empTime.filter((t) => t.category === "Working").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
-      const breakMinutes = empTime.filter((t) => ["Break", "Lunch", "Bathroom"].includes(t.category)).reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
-      const otMinutes = empTime.filter((t) => t.category === "Overtime").reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
-      const scheduledBreakLunch = safeNumber(e.break_minutes, 0) + safeNumber(e.lunch_minutes, 0);
-      const lateMinutes = empTime.reduce((sum, t) => sum + Math.max(0, minutesBetween(t.scheduled_start, t.clock_in)), 0);
-      const productivity = totalMinutes ? Math.round((workingMinutes / totalMinutes) * 100) : 0;
-      return { ...e, totalMinutes, workingMinutes, breakMinutes, otMinutes, scheduledBreakLunch, lateMinutes, productivity, variance: breakMinutes - scheduledBreakLunch };
-    });
-  }, [filteredVisibleEmployees, filteredTime]);
+        health,
+      };
+    })
+    .sort((a, b) =>
+      a.groupName.localeCompare(
+        b.groupName
+      )
+    );
+}, [
+  liveReportingRows,
+  reportView,
+  requests,
+]);
+  
 function requestIncludesCalendarDate(request, dateKey) {
   const selectedDate = String(dateKey || "").slice(0, 10);
   const startDate = String(request?.start_date || "").slice(0, 10);
@@ -16215,6 +17621,187 @@ rows={filteredRequests.map((r) => [
                 <button onClick={exportReportingCsv}><Download size={16} /> Export Summary CSV</button>
               </div>
             </div>
+            <Card title="Workforce Adherence & Activity">
+  <p className="helperText">
+    Live operational reporting for{" "}
+    {filters.startDate ||
+      filters.endDate ||
+      getAppDateKey()}.
+    Expected time represents scheduled time
+    that should have elapsed through the current
+    moment for today, or the full schedule for
+    a previous date. Break and Bathroom usage are
+    monitored separately.
+  </p>
+
+  <div
+    style={{
+      overflowX: "auto",
+      width: "100%",
+    }}
+  >
+    <table
+      style={{
+        width: "100%",
+        borderCollapse: "collapse",
+        minWidth: "1650px",
+      }}
+    >
+      <thead>
+        <tr>
+          <th>Employee</th>
+          <th>Department</th>
+          <th>Manager / TL</th>
+          <th>Schedule</th>
+          <th>Expected to Date</th>
+          <th>Actual In Schedule</th>
+          <th>Adherence</th>
+<th>Missing to Date</th>
+<th>Late</th>
+<th>Expected Break</th>
+          <th>Actual Break</th>
+          <th>Break Variance</th>
+          <th>Bathroom</th>
+          <th>Bathroom Events</th>
+          <th>Outside Schedule</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+
+      <tbody>
+        {liveReportingRows.length === 0 ? (
+          <tr>
+            <td
+              colSpan={16}
+              style={{
+                textAlign: "center",
+                padding: "24px",
+              }}
+            >
+              No workforce reporting data available
+              for the selected date and filters.
+            </td>
+          </tr>
+        ) : (
+          liveReportingRows.map(
+            (employee) => (
+              <tr
+                key={
+                  employee.employeeId ||
+                  employee.employeeName
+                }
+              >
+                <td>
+                  {employee.employeeName}
+                </td>
+
+                <td>
+                  {employee.department}
+                </td>
+
+                <td>
+                  {employee.managerTl}
+                </td>
+
+                <td>
+                  {employee.scheduleLabel}
+                </td>
+
+                <td>
+                  {formatHours(
+                    employee.expectedToDateMinutes
+                  )}
+                </td>
+
+                <td>
+                  {formatHours(
+                    employee.actualInScheduleMinutes
+                  )}
+                </td>
+
+                <td>
+                  <strong>
+                    {!employee.approvedAbsence &&
+employee.expectedToDateMinutes > 0
+  ? `${employee.adherencePercent.toFixed(
+      1
+    )}%`
+  : "—"}
+                  </strong>
+                </td>
+
+                <td>
+  {employee.approvedAbsence
+    ? "—"
+    : formatMinutes(
+        employee.missingToDateMinutes
+      )}
+</td>
+
+<td>
+  {!employee.lateApplicable
+    ? "—"
+    : employee.lateIsLive
+    ? `${formatMinutes(
+        employee.lateMinutes
+      )} · Live`
+    : formatMinutes(
+        employee.lateMinutes
+      )}
+</td>
+
+<td>
+  {employee.approvedAbsence
+    ? "—"
+    : formatMinutes(
+        employee.expectedBreakMinutes
+      )}
+</td>
+
+                <td>
+                  {formatMinutes(
+                    employee.actualBreakMinutes
+                  )}
+                </td>
+
+                <td>
+                  {employee.breakVarianceMinutes >
+                  0
+                    ? `+${formatMinutes(
+                        employee.breakVarianceMinutes
+                      )}`
+                    : formatMinutes(
+                        employee.breakVarianceMinutes
+                      )}
+                </td>
+
+                <td>
+                  {formatMinutes(
+                    employee.bathroomMinutes
+                  )}
+                </td>
+
+                <td>
+                  {employee.bathroomEvents}
+                </td>
+
+                <td>
+                  {formatMinutes(
+                    employee.outsideScheduleMinutes
+                  )}
+                </td>
+
+                <td>
+                  {employee.status}
+                </td>
+              </tr>
+            )
+          )
+        )}
+      </tbody>
+    </table>
+  </div>
+</Card>
             <Card title="Daily Attendance Headcount">
   <p className="helperText">
     Scheduled headcount classified as Logged In,
@@ -16449,42 +18036,136 @@ rows={filteredRequests.map((r) => [
   )}
 </Card>
             <section className="reportGrid">
-              {reportingSummary.map((group) => (
-                <div className="reportCard" key={group.groupName}>
-                  <div className="reportCardHead">
-                    <div><span>{reportView}</span><strong>{group.groupName}</strong></div>
-                    <Badge danger={group.adherenceRisk}>{group.adherenceRisk ? "Review" : "Healthy"}</Badge>
-                  </div>
-                  <div className="reportMiniGrid">
-                    <Info label="Headcount" value={group.headcount} />
-                    <Info label="Productivity" value={`${group.productivity}%`} />
-                    <Info label="Break/Lunch Used" value={formatMinutes(group.breakMinutes)} />
-                    <Info label="Scheduled Break/Lunch" value={formatMinutes(group.scheduledBreakLunch)} />
-                    <Info label="Overtime" value={formatHours(group.otMinutes)} />
-                    <Info label="Pending Requests" value={group.pendingRequests} />
-                  </div>
-                  <Progress label="Working Time" value={formatHours(group.workingMinutes)} percent={group.totalMinutes ? (group.workingMinutes / group.totalMinutes) * 100 : 0} />
-                  <Progress label="Break/Lunch/Bathroom" value={formatHours(group.breakMinutes)} percent={group.totalMinutes ? (group.breakMinutes / group.totalMinutes) * 100 : 0} />
-                  <Progress label="Overtime" value={formatHours(group.otMinutes)} percent={group.totalMinutes ? (group.otMinutes / group.totalMinutes) * 100 : 0} />
-                </div>
-              ))}
-            </section>
-            <section className="manager-approvals-layout">
-              <Card title="Agent-level adherence detail">
-                <Table
-                  headers={["Employee", "LOB", "Department", "Sub-Department", "Productivity", "Late", "Break Used", "Scheduled Break", "Variance", "OT"]}
-                  rows={agentReporting.map((e) => [e.full_name, e.lob, e.department, e.sub_department || "N/A", `${e.productivity}%`, formatMinutes(e.lateMinutes), formatMinutes(e.breakMinutes), formatMinutes(e.scheduledBreakLunch), <Badge danger={e.variance > 0} muted={e.variance <= 0}>{e.variance > 0 ? "+" : ""}{formatMinutes(e.variance)}</Badge>, formatHours(e.otMinutes)])}
-                />
-              </Card>
-              <Card title="Overall time productivity">
-                <div className="productivityHelp">
-                  <strong>How productivity is calculated</strong>
-                  <p>Productivity % = Working Time ÷ Total Tracked Time × 100. first break, second break, bathroom, training, meetings, system issues, and other non-working dispositions reduce the percentage. Working time and approved overtime count as productive time.</p>
-                </div>
-                {categoryStats.map((item) => <Progress key={item.label} label={item.label} value={formatHours(item.minutes)} percent={stats.total ? (item.minutes / stats.total) * 100 : 0} />)}
-                <div className="reportNote">Use this view to compare scheduled expectations against actual logged time by LOB, department, and agent. This helps review breaks, lunch, bathroom time, meetings, training, system issues, OT, and productivity.</div>
-              </Card>
-            </section>
+  {reportingSummary.map((group) => (
+    <div
+      className="reportCard"
+      key={group.groupName}
+    >
+      <div className="reportCardHead">
+        <div>
+          <span>{reportView}</span>
+
+          <strong>
+            {group.groupName}
+          </strong>
+        </div>
+
+        <Badge
+          danger={
+            group.health ===
+            "Needs Attention"
+          }
+          muted={
+            group.health ===
+            "Healthy"
+          }
+        >
+          {group.health}
+        </Badge>
+      </div>
+
+      <div className="reportMiniGrid">
+        <Info
+          label="Headcount"
+          value={group.headcount}
+        />
+
+        <Info
+          label="Scheduled"
+          value={group.scheduledCount}
+        />
+
+        <Info
+          label="Logged In"
+          value={group.loggedInCount}
+        />
+
+        <Info
+          label="Approved Absence"
+          value={group.approvedAbsenceCount}
+        />
+
+        <Info
+          label="Avg. Adherence"
+          value={`${group.averageAdherence.toFixed(
+            1
+          )}%`}
+        />
+
+        <Info
+          label="Late"
+          value={group.lateCount}
+        />
+
+        <Info
+          label="Expected Break"
+          value={formatMinutes(
+            group.expectedBreakMinutes
+          )}
+        />
+
+        <Info
+          label="Actual Break"
+          value={formatMinutes(
+            group.actualBreakMinutes
+          )}
+        />
+
+        <Info
+          label="Break Variance"
+          value={`${
+            group.breakVarianceMinutes > 0
+              ? "+"
+              : ""
+          }${formatMinutes(
+            group.breakVarianceMinutes
+          )}`}
+        />
+
+        <Info
+          label="Bathroom"
+          value={formatMinutes(
+            group.bathroomMinutes
+          )}
+        />
+
+        <Info
+          label="Bathroom Events"
+          value={group.bathroomEvents}
+        />
+
+        <Info
+          label="Outside Schedule"
+          value={formatMinutes(
+            group.outsideScheduleMinutes
+          )}
+        />
+
+        <Info
+          label="Needs Review"
+          value={group.needsReview}
+        />
+
+        <Info
+          label="Pending Requests"
+          value={group.pendingRequests}
+        />
+      </div>
+
+      <Progress
+        label="Average Schedule Adherence"
+        value={`${group.averageAdherence.toFixed(
+          1
+        )}%`}
+        percent={Math.min(
+          100,
+          group.averageAdherence
+        )}
+      />
+    </div>
+  ))}
+</section>
+            
           </section>
         )}
 
