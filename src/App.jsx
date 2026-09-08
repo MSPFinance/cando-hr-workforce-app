@@ -16,6 +16,13 @@ import {
   XCircle,
   Settings,
 } from "lucide-react";
+import {
+  getAvailablePrimaryStatuses,
+  getAvailableSubStatuses,
+  getDefaultSubStatus,
+  isSecondaryRequired,
+  shouldShowDispositionNote,
+} from "./lib/dispositions";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -612,7 +619,25 @@ function TimeCategoryOptions() {
     </option>
   ));
 }
+function AgentTimeCategoryOptions({
+  accessRole,
+}) {
+  const categories =
+    getAvailablePrimaryStatuses(
+      accessRole
+    );
 
+  return categories.map(
+    (category) => (
+      <option
+        key={category}
+        value={category}
+      >
+        {category}
+      </option>
+    )
+  );
+}
 const timeSeed = [
   {
     id: "TIME-001",
@@ -3685,39 +3710,130 @@ function localDateTimeToUtcIso(
   ).toISOString();
 }
 
-function mapTimeEntryToSupabaseLog(entry, employee = {}) {
+function mapTimeEntryToSupabaseLog(
+  entry,
+  employee = {}
+) {
   return {
     app_log_id: String(
-  entry.app_log_id ||
-  entry.id ||
-  ""
-),
-    employee_id: String(entry.employee_id || employee.id || ""),
-    employee_email: entry.employee_email || employee.email || employee.auth_email || "",
-    employee_name: entry.employee_name || employee.full_name || "",
-    status: entry.category || entry.status || "Working",
-    clock_in: toSupabaseTimestamp(
-  entry.date,
-  entry.category_start || entry.clock_in
-),
+      entry.app_log_id ||
+        entry.id ||
+        ""
+    ),
 
-clock_out: entry.category_end || entry.clock_out
-  ? toSupabaseTimestamp(
+    employee_id: String(
+      entry.employee_id ||
+        employee.id ||
+        ""
+    ),
+
+    employee_email:
+      entry.employee_email ||
+      employee.email ||
+      employee.auth_email ||
+      "",
+
+    employee_name:
+      entry.employee_name ||
+      employee.full_name ||
+      "",
+
+    status:
+      entry.category ||
+      entry.status ||
+      "Working",
+
+    sub_status:
+      entry.sub_status ||
+      entry.subStatus ||
+      "",
+
+    disposition_note:
+      entry.disposition_note ||
+      entry.dispositionNote ||
+      "",
+
+    clock_in: toSupabaseTimestamp(
       entry.date,
-      entry.category_end || entry.clock_out
-    )
-  : null,
-    break_start: entry.category === "Break" ? toSupabaseTimestamp(entry.date, entry.category_start) : null,
-    break_end: entry.category === "Break" ? toSupabaseTimestamp(entry.date, entry.category_end) : null,
-    category_start: entry.category_start ? toSupabaseTimestamp(entry.date, entry.category_start) : null,
-    category_end: entry.category_end ? toSupabaseTimestamp(entry.date, entry.category_end) : null,
-    duration_minutes: minutesBetween(entry.category_start, entry.category_end),
-    approval_status: entry.approved || "Pending",
-    payable_status: entry.payable_status || "",
-    notes: entry.notes || "",
-    lob: entry.lob || employee.lob || "",
-    department: entry.department || employee.department || "",
-    sub_department: entry.sub_department || employee.sub_department || "",
+      entry.category_start ||
+        entry.clock_in
+    ),
+
+    clock_out:
+      entry.category_end ||
+      entry.clock_out
+        ? toSupabaseTimestamp(
+            entry.date,
+            entry.category_end ||
+              entry.clock_out
+          )
+        : null,
+
+    break_start:
+      entry.category === "Break"
+        ? toSupabaseTimestamp(
+            entry.date,
+            entry.category_start
+          )
+        : null,
+
+    break_end:
+      entry.category === "Break" &&
+      entry.category_end
+        ? toSupabaseTimestamp(
+            entry.date,
+            entry.category_end
+          )
+        : null,
+
+    category_start:
+      entry.category_start
+        ? toSupabaseTimestamp(
+            entry.date,
+            entry.category_start
+          )
+        : null,
+
+    category_end:
+      entry.category_end
+        ? toSupabaseTimestamp(
+            entry.date,
+            entry.category_end
+          )
+        : null,
+
+    duration_minutes:
+      minutesBetween(
+        entry.category_start,
+        entry.category_end
+      ),
+
+    approval_status:
+      entry.approved ||
+      "Pending",
+
+    payable_status:
+      entry.payable_status ||
+      "",
+
+    notes:
+      entry.notes ||
+      "",
+
+    lob:
+      entry.lob ||
+      employee.lob ||
+      "",
+
+    department:
+      entry.department ||
+      employee.department ||
+      "",
+
+    sub_department:
+      entry.sub_department ||
+      employee.sub_department ||
+      "",
   };
 }
 
@@ -5410,7 +5526,23 @@ const [filters, setFilters] = useState({
   startDate: "",
   endDate: "",
 });
-  const [agentStatus, setAgentStatus] = useState("Working");
+  const [
+  agentStatus,
+  setAgentStatus,
+] = useState("Working");
+
+const [
+  agentSubStatus,
+  setAgentSubStatus,
+] = useState(
+  getDefaultSubStatus("Working") || ""
+);
+
+const [
+  agentDispositionNote,
+  setAgentDispositionNote,
+] = useState("");
+
   const [newTime, setNewTime] = useState({
   date: today,
   category: "Working",
@@ -6021,13 +6153,93 @@ useEffect(() => {
   selectedBalanceEmployeeIds,
   setSelectedBalanceEmployeeIds
 ] = useState([]);
-const selectedEmployee = isAgentOnly
-  ? currentUser
-  : employees.find(
-      (employee) =>
-        String(employee.id || employee.employee_id || "") ===
-        String(selectedEmployeeId || "")
-    ) || currentUser || null;
+const selectedEmployee =
+  isAgentOnly
+    ? currentUser
+    : employees.find(
+        (employee) =>
+          String(
+            employee.id ||
+              employee.employee_id ||
+              ""
+          ) ===
+          String(
+            selectedEmployeeId || ""
+          )
+      ) ||
+      currentUser ||
+      null;
+
+/*
+  The app currently uses "Approvals" as the
+  management profile in some records.
+
+  For disposition visibility, treat it as
+  Manager so TL / Manager users receive all
+  approved disposition choices.
+*/
+const dispositionAccessRole =
+  userRole === "Approvals"
+    ? "Manager"
+    : userRole;
+
+/*
+  Operational teams such as CS, LO, RET,
+  Collector, CLS, Emails and Documents are
+  normally stored in sub_department.
+
+  Fall back to department when needed.
+*/
+const dispositionDepartment =
+  selectedEmployee?.sub_department ||
+  selectedEmployee?.department ||
+  "";
+
+const agentSubStatusOptions =
+  useMemo(
+    () =>
+      getAvailableSubStatuses({
+        status: agentStatus,
+
+        lob:
+          selectedEmployee?.lob ||
+          "",
+
+        department:
+          dispositionDepartment,
+
+        accessLevel:
+          dispositionAccessRole,
+      }),
+    [
+      agentStatus,
+      selectedEmployee?.lob,
+      dispositionDepartment,
+      dispositionAccessRole,
+    ]
+  );
+
+const agentDefaultSubStatus =
+  getDefaultSubStatus(
+    agentStatus
+  ) || "";
+
+useEffect(() => {
+  setAgentSubStatus(
+    getDefaultSubStatus(
+      agentStatus
+    ) || ""
+  );
+
+  if (
+    agentStatus !==
+    "System Issue"
+  ) {
+    setAgentDispositionNote("");
+  }
+}, [agentStatus]);
+
+  
     const filteredLeaveEmployee =
   filters.employee !== "All"
     ? employees.find(
@@ -6175,28 +6387,248 @@ const selectedEmployeeDate = selectedEmployee
   timeEntries,
 ]);
 
+const [agentTimeLogs, setAgentTimeLogs] = useState([]);
 
+useEffect(() => {
+  if (!isAgentOnly || !currentUser?.id || !supabase) {
+    setAgentTimeLogs([]);
+    return;
+  }
 
-const visibleActivity = isAgentOnly && currentUser?.id
-  ? activityLog.filter(
-      (activity) =>
-        String(activity.employee_id) === String(currentUser.id) &&
-        String(activity.date || "").slice(0, 10) === selectedEmployeeDate
+  let cancelled = false;
+
+  async function loadAgentTimeLogs() {
+    const { data, error } = await supabase
+      .from("time_logs")
+      .select(
+        "id, employee_id, employee_name, status, sub_status, disposition_note, clock_in, clock_out, duration_minutes"
+      )
+      .eq("employee_id", String(currentUser.id))
+      .order("clock_in", { ascending: false })
+      .limit(250);
+
+    if (error) {
+      console.error("Unable to load agent time logs:", error);
+      return;
+    }
+
+    if (!cancelled) {
+      setAgentTimeLogs(data || []);
+    }
+  }
+
+  loadAgentTimeLogs();
+
+  return () => {
+    cancelled = true;
+  };
+}, [isAgentOnly, currentUser?.id, supabase]);
+
+const visibleActivity = useMemo(() => {
+    if (!selectedEmployee) {
+    return [];
+  }
+
+  /*
+    Match every possible employee ID used by
+    Magnemite / Supabase.
+  */
+  const employeeIds = [
+    selectedEmployee.id,
+    selectedEmployee.employee_id,
+    selectedEmployee.supabase_employee_id,
+    selectedEmployee.Employee_ID,
+  ]
+    .map((value) =>
+      String(value || "").trim()
     )
-  : activityLog.filter((activity) => {
-      const activityEmployee = employees.find(
-        (employee) =>
-          String(employee.id) === String(activity.employee_id)
-      );
+    .filter(Boolean);
 
-      const activityDate = activityEmployee
-        ? getEmployeeDateKey(activityEmployee)
-        : getAppDateKey();
+  /*
+    Rebuild My Activity Today directly from
+    Supabase time_logs instead of browser memory.
+  */
+  const activitySource =
+  isAgentOnly && agentTimeLogs.length
+    ? agentTimeLogs
+    : timeEntries;
+
+const todaysLogs = activitySource
+    .filter((entry) => {
+      const entryEmployeeId =
+        String(
+          entry.employee_id || ""
+        ).trim();
+
+      const sameEmployee =
+        employeeIds.includes(
+          entryEmployeeId
+        );
+
+      const entryDate =
+        String(
+          entry.date ||
+          entry.clock_in ||
+          entry.category_start ||
+          entry.created_at ||
+          ""
+        ).slice(0, 10);
 
       return (
-        String(activity.date || "").slice(0, 10) === activityDate
+        sameEmployee &&
+        entryDate === selectedEmployeeDate
       );
+    })
+    .sort((a, b) => {
+      const aTime = new Date(
+        a.clock_in ||
+        a.category_start ||
+        a.created_at ||
+        0
+      ).getTime();
+
+      const bTime = new Date(
+        b.clock_in ||
+        b.category_start ||
+        b.created_at ||
+        0
+      ).getTime();
+
+      return aTime - bTime;
     });
+
+  /*
+    Convert time_logs into the format expected
+    by the existing ActivityList component.
+  */
+  const activities = todaysLogs.map(
+    (entry, index) => ({
+      id:
+        `ACT-${
+          entry.supabase_id ||
+          entry.id ||
+          entry.app_log_id ||
+          index
+        }`,
+
+      employee_id:
+        entry.employee_id,
+
+      employee_name:
+        entry.employee_name ||
+        selectedEmployee.full_name ||
+        "",
+
+      date:
+        selectedEmployeeDate,
+
+      action:
+        index === 0
+          ? "Shift Started"
+          : "Status Changed",
+
+      time:
+        formatLogTimeForInput(
+          entry.clock_in ||
+          entry.category_start ||
+          entry.created_at,
+          entry,
+          employees
+        ),
+
+      status:
+        entry.category ||
+        entry.status ||
+        "Working",
+
+      sub_status:
+        entry.sub_status || "",
+
+      disposition_note:
+        entry.disposition_note || "",
+    })
+  );
+
+  /*
+    If today's final time log is closed and
+    there is no active/open log, show Shift Ended.
+  */
+  const lastLog =
+    todaysLogs[
+      todaysLogs.length - 1
+    ];
+
+  const hasOpenLog =
+    todaysLogs.some(
+      (entry) =>
+        !entry.clock_out &&
+        !entry.category_end
+    );
+
+  if (
+    lastLog &&
+    !hasOpenLog &&
+    (
+      lastLog.clock_out ||
+      lastLog.category_end
+    )
+  ) {
+    activities.push({
+      id:
+        `ACT-END-${
+          lastLog.supabase_id ||
+          lastLog.id ||
+          lastLog.app_log_id ||
+          "today"
+        }`,
+
+      employee_id:
+        lastLog.employee_id,
+
+      employee_name:
+        lastLog.employee_name ||
+        selectedEmployee.full_name ||
+        "",
+
+      date:
+        selectedEmployeeDate,
+
+      action:
+        "Shift Ended",
+
+      time:
+        formatLogTimeForInput(
+          lastLog.clock_out ||
+          lastLog.category_end,
+          lastLog,
+          employees
+        ),
+
+      status:
+        lastLog.category ||
+        lastLog.status ||
+        "Working",
+
+      sub_status:
+        lastLog.sub_status || "",
+
+      disposition_note:
+        lastLog.disposition_note || "",
+    });
+  }
+
+  /*
+    Display most recent activity first.
+  */
+  return activities.reverse();
+}, [
+  selectedEmployee,
+  selectedEmployeeDate,
+  timeEntries,
+  employees,
+  agentTimeLogs,
+  isAgentOnly,
+]);
 
   
   const filteredVisibleEmployees = visibleEmployees.filter((employee) => {
@@ -11677,6 +12109,62 @@ User can now log into the Agent Portal.`
     console.warn("No selected employee. Agent action stopped.");
     return;
   }
+  /*
+  Capture the secondary disposition before
+  the time-log transaction is processed.
+
+  Start Shift defaults to the configured
+  Working sub-status.
+
+  Status Changed uses the employee's
+  selected secondary classification.
+*/
+const isDispositionChange =
+  action === "Status Changed";
+
+const selectedSubStatus =
+  isDispositionChange
+    ? String(
+        agentSubStatus ||
+          getDefaultSubStatus(status) ||
+          ""
+      ).trim()
+    : action === "Shift Started" &&
+      status === "Working"
+    ? String(
+        getDefaultSubStatus(
+          "Working"
+        ) || ""
+      ).trim()
+    : "";
+
+const selectedDispositionNote =
+  isDispositionChange &&
+  shouldShowDispositionNote(status)
+    ? String(
+        agentDispositionNote ||
+          ""
+      ).trim()
+    : "";
+
+/*
+  Meeting, Training, Coaching, System Issue,
+  and any other configured required-secondary
+  statuses cannot be submitted without a reason.
+*/
+if (
+  isDispositionChange &&
+  isSecondaryRequired(status) &&
+  !selectedSubStatus
+) {
+  showToast(
+    "Reason required",
+    "Please select a reason / sub-classification before logging this status.",
+    "warning"
+  );
+
+  return null;
+}
 
     const now = new Date();
 
@@ -11906,17 +12394,21 @@ if (
 
       
       const activity = {
-        id: `ACT-${Date.now().toString().slice(-6)}`,
-        employee_id: selectedEmployee.id,
-        employee_name: selectedEmployee.full_name,
-        date: employeeDate,
-        action,
-        time,
-        status: resolvedStatus,
-        lob: selectedEmployee.lob,
-        department: selectedEmployee.department,
-        sub_department: selectedEmployee.sub_department || "",
-      };
+  id: `ACT-${Date.now().toString().slice(-6)}`,
+  employee_id: selectedEmployee.id,
+  employee_name: selectedEmployee.full_name,
+  date: employeeDate,
+  action,
+  time,
+  status: resolvedStatus,
+
+  sub_status: selectedSubStatus || "",
+  disposition_note: selectedDispositionNote || "",
+
+  lob: selectedEmployee.lob,
+  department: selectedEmployee.department,
+  sub_department: selectedEmployee.sub_department || "",
+};
 
       const baseTimeEntry = {
         id: `TIME-${Date.now().toString().slice(-6)}`,
@@ -11933,6 +12425,11 @@ if (
         clock_in: new Date().toISOString(),
         clock_out: null,
         category: resolvedStatus,
+        sub_status:
+  selectedSubStatus,
+
+disposition_note:
+  selectedDispositionNote,
         category_start: time,
         category_end: null,
         duration_minutes: 0,
@@ -11993,7 +12490,13 @@ const { data: statusResults, error: statusError } =
         selectedEmployee.department || "",
 
       p_sub_department:
-        selectedEmployee.sub_department || "",
+  selectedEmployee.sub_department || "",
+
+p_sub_status:
+  selectedSubStatus || "",
+
+p_disposition_note:
+  selectedDispositionNote || "",
     }
   );
 
@@ -12064,10 +12567,13 @@ if (
 
   return "silent";
 }
-
 /*
-  Shift Started and Status Changed still create a new open
-  chronological time log.
+  The existing process_time_log_status RPC owns
+  the chronological status transaction.
+
+  Once it creates the new time_logs record,
+  enrich that exact database row with the
+  selected secondary disposition information.
 */
 const savedTimeEntry = {
   ...baseTimeEntry,
@@ -12091,11 +12597,24 @@ const savedTimeEntry = {
     statusResult?.status ||
     resolvedStatus,
 
+  sub_status:
+    selectedSubStatus || "",
+
+  disposition_note:
+    selectedDispositionNote || "",
+
   clock_in:
     statusResult?.clock_in ||
     baseTimeEntry.clock_in,
 };
 
+/*
+  Shift Started and Status Changed still create a new open
+  chronological time log.
+*/
+
+
+  
 const entriesToSave = [savedTimeEntry];
 
 for (const entry of entriesToSave) {
@@ -16023,23 +16542,124 @@ if (startupLoading) {
               </div>
 
               <div className="currentStatus">
-                <label>
-                  <span>Current Status / Disposition</span>
-                  <select value={agentStatus} onChange={(e) => setAgentStatus(e.target.value)}>
-                    <TimeCategoryOptions />
-                  </select>
-                </label>
-                <button className="primary" onClick={() => agentAction("Status Changed", agentStatus)}>
-                  Log Status
-                </button>
-                <button
-                  disabled
-                  className="disabledBtn otDisabledBtn"
-                  title="Manual overtime is disabled. Overtime is created automatically after the scheduled shift end."
-                >
-                  Automatic OT Only
-                </button>
-              </div>
+  <label>
+    <span>
+      Current Status / Disposition
+    </span>
+
+    <select
+      value={agentStatus}
+      onChange={(event) =>
+        setAgentStatus(
+          event.target.value
+        )
+      }
+    >
+      <AgentTimeCategoryOptions
+        accessRole={
+          dispositionAccessRole
+        }
+      />
+    </select>
+  </label>
+
+  {agentSubStatusOptions.length > 0 && (
+    <label>
+      <span>
+        {isSecondaryRequired(
+          agentStatus
+        )
+          ? "Reason / Sub-Classification *"
+          : "Work Type / Sub-Classification"}
+      </span>
+
+      <select
+        value={agentSubStatus}
+        onChange={(event) =>
+          setAgentSubStatus(
+            event.target.value
+          )
+        }
+      >
+        {!agentDefaultSubStatus && (
+          <option value="">
+            Select reason
+          </option>
+        )}
+
+        {agentDefaultSubStatus &&
+          !agentSubStatusOptions.includes(
+            agentDefaultSubStatus
+          ) && (
+            <option
+              value={
+                agentDefaultSubStatus
+              }
+            >
+              {
+                agentDefaultSubStatus
+              }
+              {" (Default)"}
+            </option>
+          )}
+
+        {agentSubStatusOptions.map(
+          (option) => (
+            <option
+              key={option}
+              value={option}
+            >
+              {option}
+            </option>
+          )
+        )}
+      </select>
+    </label>
+  )}
+
+  {shouldShowDispositionNote(
+    agentStatus
+  ) && (
+    <label>
+      <span>
+        Ticket / Note
+      </span>
+
+      <input
+        type="text"
+        value={
+          agentDispositionNote
+        }
+        onChange={(event) =>
+          setAgentDispositionNote(
+            event.target.value
+          )
+        }
+        placeholder="Optional ticket or system issue note"
+      />
+    </label>
+  )}
+
+  <button
+    className="primary"
+    onClick={() =>
+      agentAction(
+        "Status Changed",
+        agentStatus
+      )
+    }
+  >
+    Log Status
+  </button>
+
+  <button
+    disabled
+    className="disabledBtn otDisabledBtn"
+    title="Manual overtime is disabled. Overtime is created automatically after the scheduled shift end."
+  >
+    Automatic OT Only
+  </button>
+</div>
               <CurrentStatusTimer
   openStatusLog={currentOpenStatusLog}
 />
@@ -18830,9 +19450,20 @@ function ActivityList({ activities }) {
             <strong>{a.action}</strong>
           </div>
           <div>
-            <span>Status</span>
-            <Badge muted>{a.status}</Badge>
-          </div>
+  <span>Status</span>
+  <Badge muted>{a.status}</Badge>
+
+  {a.sub_status && (
+    <small
+      style={{
+        display: "block",
+        marginTop: "4px",
+      }}
+    >
+      {a.sub_status}
+    </small>
+  )}
+</div>
           <div>
             <span>Time</span>
             <strong>{formatMilitaryTime(a.time)}</strong>
