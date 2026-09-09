@@ -5478,6 +5478,414 @@ function HRWorkforceApp() {
   const [adminMode, setAdminMode] = useState(false);
   const [search, setSearch] = useState("");
   const [reportView, setReportView] = useState("LOB");
+  const [productivityRows, setProductivityRows] = useState([]);
+const [productivityLoading, setProductivityLoading] = useState(false);
+const [productivityError, setProductivityError] = useState("");
+
+const [productivityFilters, setProductivityFilters] = useState({
+  startDate: getAppDateKey(),
+  endDate: getAppDateKey(),
+  lob: "ALL",
+  department: "ALL",
+  subDepartment: "ALL",
+  managerTl: "ALL",
+  employeeName: "ALL",
+  country: "ALL",
+  category: "ALL",
+});
+
+const loadProductivityReporting = async () => {
+  if (!supabase) return;
+
+  try {
+    setProductivityLoading(true);
+    setProductivityError("");
+
+    let query = supabase
+      .from("productivity_employee_daily_summary")
+      .select(`
+        activity_date,
+        employee_id,
+        employee_name,
+        lob,
+        department,
+        sub_department,
+        total_logged_hours,
+        productive_hours,
+        unproductive_hours,
+        auxiliary_hours,
+        business_utilized_hours,
+        productivity_percentage,
+        business_utilization_percentage,
+        break_hours,
+        bathroom_hours,
+        meeting_hours,
+        training_hours,
+        coaching_hours,
+        system_issue_hours
+      `)
+      .gte(
+        "activity_date",
+        productivityFilters.startDate
+      )
+      .lte(
+        "activity_date",
+        productivityFilters.endDate
+      )
+      .order("activity_date", {
+        ascending: false,
+      })
+      .order("employee_name", {
+        ascending: true,
+      });
+
+    if (
+      productivityFilters.lob !== "ALL"
+    ) {
+      query = query.eq(
+        "lob",
+        productivityFilters.lob
+      );
+    }
+
+    if (
+      productivityFilters.department !== "ALL"
+    ) {
+      query = query.eq(
+        "department",
+        productivityFilters.department
+      );
+    }
+
+    if (
+      productivityFilters.subDepartment !== "ALL"
+    ) {
+      query = query.eq(
+        "sub_department",
+        productivityFilters.subDepartment
+      );
+    }
+
+    if (
+      productivityFilters.employeeName !== "ALL"
+    ) {
+      query = query.eq(
+        "employee_name",
+        productivityFilters.employeeName
+      );
+    }
+
+    const {
+      data,
+      error,
+    } = await query;
+
+    if (error) {
+      throw error;
+    }
+
+    let resolvedRows =
+      Array.isArray(data)
+        ? data
+        : [];
+
+    /*
+      TYPE FILTER
+
+      The daily summary does not contain a single
+      status field because it aggregates the whole day.
+
+      When Type is selected, use the detailed
+      productivity view to identify the exact
+      employee/date combinations containing that
+      status.
+    */
+    if (
+      productivityFilters.category !== "ALL"
+    ) {
+      const selectedCategory =
+        productivityFilters.category;
+
+      if (
+        timeCategories.includes(
+          selectedCategory
+        )
+      ) {
+        let detailQuery = supabase
+          .from("productivity_time_log_detail")
+          .select(`
+            activity_date,
+            employee_id,
+            employee_name,
+            lob,
+            department,
+            sub_department,
+            status
+          `)
+          .gte(
+            "activity_date",
+            productivityFilters.startDate
+          )
+          .lte(
+            "activity_date",
+            productivityFilters.endDate
+          )
+          .eq(
+            "status",
+            selectedCategory
+          );
+
+        if (
+          productivityFilters.lob !== "ALL"
+        ) {
+          detailQuery = detailQuery.eq(
+            "lob",
+            productivityFilters.lob
+          );
+        }
+
+        if (
+          productivityFilters.department !== "ALL"
+        ) {
+          detailQuery = detailQuery.eq(
+            "department",
+            productivityFilters.department
+          );
+        }
+
+        if (
+          productivityFilters.subDepartment !== "ALL"
+        ) {
+          detailQuery = detailQuery.eq(
+            "sub_department",
+            productivityFilters.subDepartment
+          );
+        }
+
+        if (
+          productivityFilters.employeeName !== "ALL"
+        ) {
+          detailQuery = detailQuery.eq(
+            "employee_name",
+            productivityFilters.employeeName
+          );
+        }
+
+        const {
+          data: detailData,
+          error: detailError,
+        } = await detailQuery;
+
+        if (detailError) {
+          throw detailError;
+        }
+
+        const matchingKeys = new Set(
+          (detailData || []).map(
+            (row) =>
+              `${row.activity_date}|${row.employee_id}`
+          )
+        );
+
+        resolvedRows =
+          resolvedRows.filter(
+            (row) =>
+              matchingKeys.has(
+                `${row.activity_date}|${row.employee_id}`
+              )
+          );
+      } else {
+        /*
+          Request-only types such as Sick Leave,
+          Paid Leave, Unpaid Leave and Schedule Change
+          are not productivity time-log statuses.
+        */
+        resolvedRows = [];
+      }
+    }
+
+    /*
+      COUNTRY + MANAGER/TL
+
+      These values live in the employee roster rather
+      than the productivity summary view, so apply
+      them using the employee master data.
+    */
+    resolvedRows =
+      resolvedRows.filter((row) => {
+        const rowEmployeeId =
+          String(
+            row.employee_id || ""
+          ).trim();
+
+        const rowEmployeeName =
+          normalizeNameKey(
+            row.employee_name
+          );
+
+        const employee =
+          employees.find((item) => {
+            const employeeIds = [
+              item.id,
+              item.employee_id,
+              item.supabase_employee_id,
+              item.Employee_ID,
+            ]
+              .map((value) =>
+                String(
+                  value || ""
+                ).trim()
+              )
+              .filter(Boolean);
+
+            return (
+              employeeIds.includes(
+                rowEmployeeId
+              ) ||
+              normalizeNameKey(
+                item.full_name
+              ) === rowEmployeeName
+            );
+          }) || null;
+
+        if (
+          productivityFilters.country !== "ALL"
+        ) {
+          if (
+            !employee ||
+            String(
+              employee.country || ""
+            ).trim() !==
+              productivityFilters.country
+          ) {
+            return false;
+          }
+        }
+
+        if (
+          productivityFilters.managerTl !== "ALL"
+        ) {
+          const leader =
+            String(
+              employee?.team_leader ||
+              employee?.supervisor ||
+              employee?.manager ||
+              ""
+            ).trim();
+
+          if (
+            leader !==
+            productivityFilters.managerTl
+          ) {
+            return false;
+          }
+        }
+
+        return true;
+      });
+
+    setProductivityRows(
+      resolvedRows
+    );
+
+    console.log(
+      "Productivity reporting rows loaded:",
+      resolvedRows.length,
+      resolvedRows
+    );
+  } catch (error) {
+    console.error(
+      "Productivity reporting load failed:",
+      error
+    );
+
+    setProductivityRows([]);
+
+    setProductivityError(
+      error?.message ||
+        "Unable to load productivity reporting."
+    );
+  } finally {
+    setProductivityLoading(false);
+  }
+};
+
+useEffect(() => {
+  if (tab !== "reporting") {
+    return;
+  }
+
+  loadProductivityReporting();
+}, [
+  tab,
+  productivityFilters.startDate,
+  productivityFilters.endDate,
+  productivityFilters.lob,
+  productivityFilters.department,
+  productivityFilters.subDepartment,
+  productivityFilters.managerTl,
+  productivityFilters.employeeName,
+  productivityFilters.country,
+  productivityFilters.category,
+  employees,
+]);
+
+const productivitySummary = useMemo(() => {
+  const totals = productivityRows.reduce(
+    (summary, row) => {
+      summary.totalLoggedHours += Number(
+        row.total_logged_hours || 0
+      );
+
+      summary.productiveHours += Number(
+        row.productive_hours || 0
+      );
+
+      summary.unproductiveHours += Number(
+        row.unproductive_hours || 0
+      );
+
+      summary.auxiliaryHours += Number(
+        row.auxiliary_hours || 0
+      );
+
+      summary.businessUtilizedHours += Number(
+        row.business_utilized_hours || 0
+      );
+
+      return summary;
+    },
+    {
+      totalLoggedHours: 0,
+      productiveHours: 0,
+      unproductiveHours: 0,
+      auxiliaryHours: 0,
+      businessUtilizedHours: 0,
+    }
+  );
+
+  const productivityPercentage =
+    totals.totalLoggedHours > 0
+      ? (
+          totals.productiveHours /
+          totals.totalLoggedHours
+        ) * 100
+      : 0;
+
+  const businessUtilizationPercentage =
+    totals.totalLoggedHours > 0
+      ? (
+          totals.businessUtilizedHours /
+          totals.totalLoggedHours
+        ) * 100
+      : 0;
+
+  return {
+    ...totals,
+    productivityPercentage,
+    businessUtilizationPercentage,
+  };
+}, [productivityRows]);
 
 const [reportingNow, setReportingNow] = useState(
   Date.now()
@@ -5526,6 +5934,75 @@ const [filters, setFilters] = useState({
   startDate: "",
   endDate: "",
 });
+useEffect(() => {
+  /*
+    The top Reporting filters are the single
+    source of truth for Productivity Reporting.
+  */
+
+  const resolvedStartDate =
+    filters.startDate ||
+    filters.endDate ||
+    getAppDateKey();
+
+  const resolvedEndDate =
+    filters.endDate ||
+    filters.startDate ||
+    getAppDateKey();
+
+  setProductivityFilters({
+    startDate:
+      resolvedStartDate,
+
+    endDate:
+      resolvedEndDate,
+
+    lob:
+      filters.lob === "All"
+        ? "ALL"
+        : filters.lob,
+
+    department:
+      filters.department === "All"
+        ? "ALL"
+        : filters.department,
+
+    subDepartment:
+      filters.subDepartment === "All"
+        ? "ALL"
+        : filters.subDepartment,
+
+    managerTl:
+      filters.teamLeader === "All"
+        ? "ALL"
+        : filters.teamLeader,
+
+    employeeName:
+      filters.employee === "All"
+        ? "ALL"
+        : filters.employee,
+
+    country:
+      filters.country === "All"
+        ? "ALL"
+        : filters.country,
+
+    category:
+      filters.category === "All"
+        ? "ALL"
+        : filters.category,
+  });
+}, [
+  filters.lob,
+  filters.department,
+  filters.subDepartment,
+  filters.teamLeader,
+  filters.employee,
+  filters.country,
+  filters.category,
+  filters.startDate,
+  filters.endDate,
+]);
   const [
   agentStatus,
   setAgentStatus,
@@ -6337,60 +6814,101 @@ const visibleRequests = isAgentOnly && currentUser?.id
 const selectedEmployeeDate = selectedEmployee
   ? getEmployeeDateKey(selectedEmployee)
   : getAppDateKey();
-  const currentOpenStatusLog = useMemo(() => {
-  if (!selectedEmployee?.id) return null;
 
-  return timeEntries
-    .filter((entry) => {
-      const sameEmployee =
-        String(entry.employee_id || "") ===
-        String(selectedEmployee.id || selectedEmployee.employee_id || "");
+  const [agentTimeLogs, setAgentTimeLogs] = useState([]);
 
-      const entryDate = String(
-        entry.date ||
-        entry.clock_in ||
-        entry.category_start ||
-        entry.created_at ||
-        ""
-      ).slice(0, 10);
+/*
+  Use one consistent employee ID for all agent
+  time-log reads and timer calculations.
 
-      const isOpen =
-        !entry.clock_out &&
-        !entry.category_end;
+  Supabase employee_id is preferred because
+  process_time_log_status uses the same identifier.
+*/
+const agentEmployeeTimeLogId =
+  selectedEmployee?.supabase_employee_id ||
+  selectedEmployee?.employee_id ||
+  selectedEmployee?.Employee_ID ||
+  selectedEmployee?.id ||
+  "";
 
-      return (
-        sameEmployee &&
-        entryDate === selectedEmployeeDate &&
-        isOpen
-      );
-    })
-    .sort((a, b) => {
-      const aTime = new Date(
-        a.clock_in ||
-        a.category_start ||
-        a.created_at ||
-        0
-      ).getTime();
+const currentOpenStatusLog = useMemo(() => {
+  if (!selectedEmployee || !agentEmployeeTimeLogId) {
+    return null;
+  }
 
-      const bTime = new Date(
-        b.clock_in ||
-        b.category_start ||
-        b.created_at ||
-        0
-      ).getTime();
+  /*
+    Agent Portal uses the dedicated Supabase-backed
+    agentTimeLogs state.
 
-      return bTime - aTime;
-    })[0] || null;
+    Management views continue using timeEntries.
+  */
+  const sourceLogs =
+    isAgentOnly
+      ? agentTimeLogs
+      : timeEntries;
+
+  return (
+    sourceLogs
+      .filter((entry) => {
+        const sameEmployee =
+          String(entry.employee_id || "") ===
+          String(agentEmployeeTimeLogId);
+
+        const entryDate = String(
+          entry.date ||
+          entry.clock_in ||
+          entry.category_start ||
+          entry.created_at ||
+          ""
+        ).slice(0, 10);
+
+        /*
+          A timer can only run from a genuinely
+          open database time log.
+        */
+        const isOpen =
+          !entry.clock_out &&
+          !entry.category_end;
+
+        return (
+          sameEmployee &&
+          entryDate === selectedEmployeeDate &&
+          isOpen
+        );
+      })
+      .sort((a, b) => {
+        const aTime = new Date(
+          a.clock_in ||
+          a.category_start ||
+          a.created_at ||
+          0
+        ).getTime();
+
+        const bTime = new Date(
+          b.clock_in ||
+          b.category_start ||
+          b.created_at ||
+          0
+        ).getTime();
+
+        return bTime - aTime;
+      })[0] || null
+  );
 }, [
   selectedEmployee,
   selectedEmployeeDate,
+  agentEmployeeTimeLogId,
   timeEntries,
+  agentTimeLogs,
+  isAgentOnly,
 ]);
 
-const [agentTimeLogs, setAgentTimeLogs] = useState([]);
-
 useEffect(() => {
-  if (!isAgentOnly || !currentUser?.id || !supabase) {
+  if (
+    !isAgentOnly ||
+    !agentEmployeeTimeLogId ||
+    !supabase
+  ) {
     setAgentTimeLogs([]);
     return;
   }
@@ -6401,14 +6919,36 @@ useEffect(() => {
     const { data, error } = await supabase
       .from("time_logs")
       .select(
-        "id, employee_id, employee_name, status, sub_status, disposition_note, clock_in, clock_out, duration_minutes"
+        [
+          "id",
+          "app_log_id",
+          "employee_id",
+          "employee_name",
+          "status",
+          "sub_status",
+          "disposition_note",
+          "clock_in",
+          "clock_out",
+          "category_start",
+          "category_end",
+          "duration_minutes",
+          "created_at",
+        ].join(",")
       )
-      .eq("employee_id", String(currentUser.id))
-      .order("clock_in", { ascending: false })
+      .eq(
+        "employee_id",
+        String(agentEmployeeTimeLogId)
+      )
+      .order("clock_in", {
+        ascending: false,
+      })
       .limit(250);
 
     if (error) {
-      console.error("Unable to load agent time logs:", error);
+      console.error(
+        "Unable to load agent time logs:",
+        error
+      );
       return;
     }
 
@@ -6422,7 +6962,11 @@ useEffect(() => {
   return () => {
     cancelled = true;
   };
-}, [isAgentOnly, currentUser?.id, supabase]);
+}, [
+  isAgentOnly,
+  agentEmployeeTimeLogId,
+  supabase,
+]);
 
 const visibleActivity = useMemo(() => {
     if (!selectedEmployee) {
@@ -10325,19 +10869,141 @@ const sortedEditableTimeLogs = [...editableTimeLogs].sort((a, b) => {
 const displayedTimeLogs =
   sortedEditableTimeLogs.slice(0, 100);
 
-  const filteredRequests = visibleRequests.filter((r) => {
-    const employee = employees.find((e) => e.id === r.employee_id);
-    const dateOk = (!filters.startDate || r.start_date >= filters.startDate) && (!filters.endDate || r.end_date <= filters.endDate);
-    return (
-      dateOk &&
-      (filters.lob === "All" || employee?.lob === filters.lob) &&
-      (filters.department === "All" || employee?.department === filters.department) &&
-      (filters.subDepartment === "All" || employee?.sub_department === filters.subDepartment) &&
-      (filters.employee === "All" || r.employee_name === filters.employee) &&
-      (filters.country === "All" || employee?.country === filters.country) &&
-      (filters.category === "All" || r.type === filters.category)
+  const filteredRequests = visibleRequests.filter((request) => {
+  /*
+    Find the employee connected to this request.
+
+    Match all employee ID versions because Supabase
+    employee_id and the Magnemite employee id can differ.
+  */
+  const requestEmployeeId = String(
+    request.employee_id ||
+    request.Employee_ID ||
+    ""
+  ).trim();
+
+  const employee =
+    employees.find((item) => {
+      const employeeIds = [
+        item.id,
+        item.employee_id,
+        item.supabase_employee_id,
+        item.Employee_ID,
+      ]
+        .map((value) =>
+          String(value || "").trim()
+        )
+        .filter(Boolean);
+
+      return employeeIds.includes(
+        requestEmployeeId
+      );
+    }) || null;
+
+  /*
+    Request dates.
+
+    This allows a request spanning several days
+    to remain visible when any part of it overlaps
+    the selected reporting date range.
+  */
+  const requestStart = formatDateOnly(
+    request.start_date ||
+    request.Start_Date ||
+    request.created_at ||
+    ""
+  );
+
+  const requestEnd = formatDateOnly(
+    request.end_date ||
+    request.End_Date ||
+    request.start_date ||
+    request.Start_Date ||
+    request.created_at ||
+    ""
+  );
+
+  const dateOk =
+    (
+      !filters.startDate ||
+      !requestEnd ||
+      requestEnd >= filters.startDate
+    ) &&
+    (
+      !filters.endDate ||
+      !requestStart ||
+      requestStart <= filters.endDate
     );
-  });
+
+  /*
+    Manager / TL source.
+
+    Magnemite may store the leader as team_leader,
+    supervisor, or manager depending on the employee.
+  */
+  const assignedLeader = String(
+    employee?.team_leader ||
+    employee?.supervisor ||
+    employee?.manager ||
+    ""
+  ).trim();
+
+  const requestType =
+    request.type ||
+    request.request_type ||
+    request.Request_Type ||
+    "";
+
+  const requestEmployeeName =
+    request.employee_name ||
+    employee?.full_name ||
+    "";
+
+  return (
+    dateOk &&
+
+    (
+      filters.lob === "All" ||
+      employee?.lob === filters.lob
+    ) &&
+
+    (
+      filters.department === "All" ||
+      employee?.department ===
+        filters.department
+    ) &&
+
+    (
+      filters.subDepartment === "All" ||
+      employee?.sub_department ===
+        filters.subDepartment
+    ) &&
+
+    (
+      filters.teamLeader === "All" ||
+      assignedLeader ===
+        filters.teamLeader
+    ) &&
+
+    (
+      filters.employee === "All" ||
+      requestEmployeeName ===
+        filters.employee
+    ) &&
+
+    (
+      filters.country === "All" ||
+      employee?.country ===
+        filters.country
+    ) &&
+
+    (
+      filters.category === "All" ||
+      requestType ===
+        filters.category
+    )
+  );
+});
 
   const filteredEmployees = filteredVisibleEmployees.filter((e) =>
     [e.full_name, e.email, e.lob, e.department, e.sub_department, e.role, e.country, e.supervisor, e.manager]
@@ -12098,7 +12764,11 @@ User can now log into the Agent Portal.`
     });
   }
 
-  async function agentAction(action, status = agentStatus) {
+  async function agentAction(
+  action,
+  status = agentStatus,
+  subStatusOverride = null
+) {
     if (status === "Overtime" && action !== "Shift Ended") {
       showToast("Manual overtime disabled", "Overtime is created automatically after the scheduled shift end.", "warning");
       return null;
@@ -12493,7 +13163,7 @@ const { data: statusResults, error: statusError } =
   selectedEmployee.sub_department || "",
 
 p_sub_status:
-  selectedSubStatus || "",
+  subStatusOverride ?? selectedSubStatus ?? "",
 
 p_disposition_note:
   selectedDispositionNote || "",
@@ -12515,6 +13185,79 @@ if (!statusResult) {
     "Supabase completed the request but did not return a time-log result."
   );
 }
+
+/*
+  Keep the agent's local time-log state synchronized with
+  the database transaction.
+
+  This is especially important for End Shift because the
+  timer reads currentOpenStatusLog from agentTimeLogs.
+*/
+if (isAgentOnly && action === "Shift Ended") {
+  const endedAt =
+    statusResult.clock_out ||
+    new Date().toISOString();
+
+  setAgentTimeLogs((currentLogs) =>
+    currentLogs.map((log) => {
+      const sameEmployee =
+        String(log.employee_id || "") ===
+        String(
+          statusResult.employee_id ||
+          selectedEmployeeTimeLogId ||
+          ""
+        );
+
+      const isOpen =
+        !log.clock_out &&
+        !log.category_end;
+
+      if (sameEmployee && isOpen) {
+        return {
+          ...log,
+          clock_out: endedAt,
+          category_end: endedAt,
+          duration_minutes:
+            statusResult.duration_minutes ??
+            log.duration_minutes ??
+            0,
+        };
+      }
+
+      return log;
+    })
+  );
+}
+setTimeEntries((currentLogs) =>
+  currentLogs.map((log) => {
+    const sameEmployee =
+      String(log.employee_id || "") ===
+      String(selectedEmployeeTimeLogId || "");
+
+    const isOpen =
+      !log.clock_out &&
+      !log.category_end;
+
+    if (sameEmployee && isOpen) {
+      const resolvedEndAt =
+        statusResult.clock_out ||
+        statusResult.category_end ||
+        new Date().toISOString();
+
+      return {
+        ...log,
+        clock_out: resolvedEndAt,
+        category_end: resolvedEndAt,
+        duration_minutes:
+          statusResult.duration_minutes ??
+          log.duration_minutes ??
+          0,
+      };
+    }
+
+    return log;
+  })
+);
 
 console.log(
   "Time-log transaction result:",
@@ -16531,12 +17274,18 @@ if (startupLoading) {
               <div className="agentActions">
                 <button
                   className="primary"
-                  onClick={() => agentAction("Shift Started", "Working")}
+                  onClick={() =>
+  agentAction(
+    "Shift Started",
+    "Working",
+    "Customer / Production Work"
+  )
+}
                 >
                   Start Shift
                 </button>
 
-                <button onClick={() => agentAction("Shift Ended", "Working")}>
+                <button onClick={() => agentAction("End Shift", "Working")}>
                   End Shift
                 </button>
               </div>
@@ -18241,6 +18990,175 @@ rows={filteredRequests.map((r) => [
                 <button onClick={exportReportingCsv}><Download size={16} /> Export Summary CSV</button>
               </div>
             </div>
+            <Card title="Productivity & Business Utilization">
+  <p className="helperText">
+    Productivity reporting from{" "}
+    {productivityFilters.startDate} through{" "}
+    {productivityFilters.endDate}.
+    Productive time includes Working and approved
+    productive activity. Business Utilization also
+    recognizes approved auxiliary business time.
+  </p>
+
+  <div
+    style={{
+      display: "grid",
+      gridTemplateColumns:
+        "repeat(auto-fit, minmax(150px, 1fr))",
+      gap: "12px",
+      marginBottom: "18px",
+    }}
+  >
+    <Info
+      label="Total Logged"
+      value={`${productivitySummary.totalLoggedHours.toFixed(
+        2
+      )}h`}
+    />
+
+    <Info
+      label="Productive"
+      value={`${productivitySummary.productiveHours.toFixed(
+        2
+      )}h`}
+    />
+
+    <Info
+      label="Unproductive"
+      value={`${productivitySummary.unproductiveHours.toFixed(
+        2
+      )}h`}
+    />
+
+    <Info
+      label="Auxiliary"
+      value={`${productivitySummary.auxiliaryHours.toFixed(
+        2
+      )}h`}
+    />
+
+    <Info
+      label="Productivity %"
+      value={`${productivitySummary.productivityPercentage.toFixed(
+        2
+      )}%`}
+    />
+
+    <Info
+      label="Business Utilization %"
+      value={`${productivitySummary.businessUtilizationPercentage.toFixed(
+        2
+      )}%`}
+    />
+
+    <Info
+      label="Business Utilized"
+      value={`${productivitySummary.businessUtilizedHours.toFixed(
+        2
+      )}h`}
+    />
+  </div>
+
+  {productivityLoading && (
+    <p className="helperText">
+      Loading productivity reporting...
+    </p>
+  )}
+
+  {productivityError && (
+    <p
+      className="helperText"
+      style={{
+        color: "#b42318",
+        fontWeight: 600,
+      }}
+    >
+      {productivityError}
+    </p>
+  )}
+
+  {!productivityLoading &&
+    !productivityError && (
+      <Table
+        headers={[
+          "Date",
+          "Employee",
+          "LOB",
+          "Department",
+          "Logged",
+          "Productive",
+          "Unproductive",
+          "Auxiliary",
+          "Productivity %",
+          "Business Utilization %",
+          "Break",
+          "Bathroom",
+          "Meeting",
+          "Training",
+          "Coaching",
+          "System Issue",
+        ]}
+        rows={productivityRows.map((row) => [
+          row.activity_date || "—",
+
+          row.employee_name || "—",
+
+          row.lob || "—",
+
+          row.department || "—",
+
+          `${Number(
+            row.total_logged_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.productive_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.unproductive_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.auxiliary_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.productivity_percentage || 0
+          ).toFixed(2)}%`,
+
+          `${Number(
+            row.business_utilization_percentage ||
+              0
+          ).toFixed(2)}%`,
+
+          `${Number(
+            row.break_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.bathroom_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.meeting_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.training_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.coaching_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.system_issue_hours || 0
+          ).toFixed(2)}h`,
+        ])}
+      />
+    )}
+</Card>
             <Card title="Workforce Adherence & Activity">
   <p className="helperText">
     Live operational reporting for{" "}
