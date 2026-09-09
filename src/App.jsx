@@ -5479,6 +5479,7 @@ function HRWorkforceApp() {
   const [search, setSearch] = useState("");
   const [reportView, setReportView] = useState("LOB");
   const [productivityRows, setProductivityRows] = useState([]);
+  
 const [productivityLoading, setProductivityLoading] = useState(false);
 const [productivityError, setProductivityError] = useState("");
 
@@ -5493,6 +5494,117 @@ const [productivityFilters, setProductivityFilters] = useState({
   country: "ALL",
   category: "ALL",
 });
+const [productivityDetailOpen, setProductivityDetailOpen] = useState(false);
+const [productivityDetailRow, setProductivityDetailRow] = useState(null);
+const [productivityDetailRows, setProductivityDetailRows] = useState([]);
+const [productivityDetailLoading, setProductivityDetailLoading] = useState(false);
+const [productivityDetailError, setProductivityDetailError] = useState("");
+
+const openProductivityDetail = async (row) => {
+  if (!supabase || !row) return;
+
+  setProductivityDetailOpen(true);
+  setProductivityDetailRow(row);
+  setProductivityDetailRows([]);
+  setProductivityDetailError("");
+  setProductivityDetailLoading(true);
+
+  try {
+    const { data, error } = await supabase
+      .from("productivity_time_log_detail")
+      .select(`
+        activity_date,
+        employee_id,
+        employee_name,
+        lob,
+        department,
+        sub_department,
+        status,
+        sub_status,
+        duration_minutes,
+        duration_hours,
+        productivity_classification,
+        is_auxiliary,
+        is_business_utilized,
+        is_open
+      `)
+      .eq("employee_id", String(row.employee_id))
+      .eq("activity_date", row.activity_date);
+
+    if (error) throw error;
+
+    setProductivityDetailRows(data || []);
+  } catch (error) {
+    console.error("Productivity detail load failed:", error);
+    setProductivityDetailError(
+      error?.message || "Unable to load employee productivity details."
+    );
+  } finally {
+    setProductivityDetailLoading(false);
+  }
+};
+
+const productivityDetailStats = useMemo(() => {
+  const logs = productivityDetailRows || [];
+
+  const grouped = new Map();
+
+  let bathroomCount = 0;
+  let breakCount = 0;
+  let meetingCount = 0;
+  let trainingCount = 0;
+  let coachingCount = 0;
+  let systemIssueCount = 0;
+
+  logs.forEach((log) => {
+    const status = String(log.status || "Unclassified");
+    const subStatus = String(
+      log.sub_status || "No sub-category"
+    );
+
+    const minutes = Number(log.duration_minutes || 0);
+
+    if (status === "Bathroom") bathroomCount += 1;
+    if (status === "Break") breakCount += 1;
+    if (status === "Meeting") meetingCount += 1;
+    if (status === "Training") trainingCount += 1;
+    if (status === "Coaching") coachingCount += 1;
+    if (status === "System Issue") systemIssueCount += 1;
+
+    const key = `${status}|||${subStatus}`;
+
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        status,
+        subStatus,
+        count: 0,
+        minutes: 0,
+      });
+    }
+
+    const item = grouped.get(key);
+
+    item.count += 1;
+    item.minutes += minutes;
+  });
+
+  const breakdown = Array.from(grouped.values()).sort(
+    (a, b) =>
+      b.minutes - a.minutes ||
+      b.count - a.count
+  );
+
+  return {
+    totalEvents: logs.length,
+    bathroomCount,
+    breakCount,
+    meetingCount,
+    trainingCount,
+    coachingCount,
+    systemIssueCount,
+    breakdown,
+  };
+}, [productivityDetailRows]);
 
 const loadProductivityReporting = async () => {
   if (!supabase) return;
@@ -5805,10 +5917,11 @@ const loadProductivityReporting = async () => {
       error?.message ||
         "Unable to load productivity reporting."
     );
-  } finally {
+    } finally {
     setProductivityLoading(false);
   }
 };
+
 
 useEffect(() => {
   if (tab !== "reporting") {
@@ -8082,14 +8195,28 @@ async function loadCountryHolidays() {
 }
 
   async function refreshLiveData() {
-  await loadScheduleExceptions();
-  await loadCountryHolidays();
+  /*
+    Load independent reference data in parallel.
 
-  const loadedSupabase = await loadSupabaseReferenceData(
-  employees,
-  () => {},
-  setDatabaseStatus
-);
+    This keeps the same data and same historical
+    time-log requirements, but avoids waiting for
+    each request one after another.
+  */
+  const [
+    loadedExceptions,
+    loadedHolidays,
+    loadedSupabase,
+  ] = await Promise.all([
+    loadScheduleExceptions(),
+
+    loadCountryHolidays(),
+
+    loadSupabaseReferenceData(
+      employees,
+      () => {},
+      setDatabaseStatus
+    ),
+  ]);
 
   if (supabase) {
   let historicalLogsQuery = supabase
@@ -8490,21 +8617,181 @@ const {
 
   reloadLiveLogsOnly();
 
-  const channel = supabase
-    .channel("magnemite-live-dashboard")
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "time_logs" },
-      reloadLiveLogsOnly
-    )
-    .subscribe((status) => {
-  console.log(
-    "Live dashboard subscription:",
-    status
-  );
-});
+  const normalizeRealtimeLog = (log) => {
+  if (!log) {
+    return null;
+  }
 
-  return () => {
+  return {
+    ...log,
+
+    supabase_id: log.id,
+
+    id:
+      log.app_log_id ||
+      log.id,
+
+    date:
+      log.date ||
+      String(
+        log.clock_in ||
+        log.category_start ||
+        log.created_at ||
+        ""
+      ).slice(0, 10),
+
+    category:
+      log.category ||
+      log.status ||
+      "Working",
+
+    approved:
+      log.approval_status ||
+      "Pending",
+  };
+};
+
+const logMatchesCurrentFilters = (log) => {
+  if (!log) {
+    return false;
+  }
+
+  const logDate =
+    String(
+      log.date ||
+      log.clock_in ||
+      log.category_start ||
+      log.created_at ||
+      ""
+    ).slice(0, 10);
+
+  if (
+    filters.employee !== "All" &&
+    filteredTimeLogEmployeeId &&
+    String(log.employee_id || "") !==
+      String(filteredTimeLogEmployeeId)
+  ) {
+    return false;
+  }
+
+  if (
+    filters.startDate &&
+    logDate < filters.startDate
+  ) {
+    return false;
+  }
+
+  if (
+    filters.endDate &&
+    logDate > filters.endDate
+  ) {
+    return false;
+  }
+
+  return true;
+};
+
+const channel = supabase
+  .channel("magnemite-live-dashboard")
+  .on(
+    "postgres_changes",
+    {
+      event: "*",
+      schema: "public",
+      table: "time_logs",
+    },
+    (payload) => {
+      const eventType =
+        payload?.eventType || "";
+
+      const rawLog =
+        eventType === "DELETE"
+          ? payload?.old
+          : payload?.new;
+
+      if (!rawLog?.id) {
+        return;
+      }
+
+      const normalizedLog =
+        normalizeRealtimeLog(rawLog);
+
+      setTimeEntries((currentLogs) => {
+        /*
+          Remove the previous copy of this same
+          Supabase row first.
+
+          This handles UPDATE without creating
+          duplicates.
+        */
+        const remainingLogs =
+          currentLogs.filter((log) => {
+            const existingSupabaseId =
+              log.supabase_id ||
+              log.id;
+
+            return (
+              String(existingSupabaseId) !==
+              String(rawLog.id)
+            );
+          });
+
+        /*
+          DELETE:
+          the existing row has already been removed.
+        */
+        if (eventType === "DELETE") {
+          return remainingLogs;
+        }
+
+        /*
+          If an INSERT/UPDATE does not belong to
+          the currently selected employee/date
+          filters, do not add it to this view.
+        */
+        if (
+          !logMatchesCurrentFilters(
+            normalizedLog
+          )
+        ) {
+          return remainingLogs;
+        }
+
+        /*
+          Add the changed log without re-querying
+          the other 5,000 records.
+        */
+        return [
+          normalizedLog,
+          ...remainingLogs,
+        ].sort((a, b) => {
+          const aTime = new Date(
+            a.clock_in ||
+            a.category_start ||
+            a.created_at ||
+            0
+          ).getTime();
+
+          const bTime = new Date(
+            b.clock_in ||
+            b.category_start ||
+            b.created_at ||
+            0
+          ).getTime();
+
+          return bTime - aTime;
+        });
+      });
+    }
+  )
+  .subscribe((status) => {
+    console.log(
+      "Live dashboard subscription:",
+      status
+    );
+  });
+
+return () => {
   supabase.removeChannel(channel);
 };
 }, [
@@ -19096,8 +19383,9 @@ rows={filteredRequests.map((r) => [
           "Meeting",
           "Training",
           "Coaching",
-          "System Issue",
-        ]}
+"System Issue",
+"Details",
+]}
         rows={productivityRows.map((row) => [
           row.activity_date || "—",
 
@@ -19149,16 +19437,280 @@ rows={filteredRequests.map((r) => [
           ).toFixed(2)}h`,
 
           `${Number(
-            row.coaching_hours || 0
-          ).toFixed(2)}h`,
+  row.coaching_hours || 0
+).toFixed(2)}h`,
 
-          `${Number(
-            row.system_issue_hours || 0
-          ).toFixed(2)}h`,
-        ])}
+`${Number(
+  row.system_issue_hours || 0
+).toFixed(2)}h`,
+
+<button
+  type="button"
+  className="btn"
+  onClick={() =>
+    openProductivityDetail(row)
+  }
+>
+  View More
+</button>,
+])}
       />
     )}
 </Card>
+{productivityDetailOpen && (
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      background: "rgba(0,0,0,0.45)",
+      zIndex: 9999,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "24px",
+    }}
+    onClick={() => setProductivityDetailOpen(false)}
+  >
+    <div
+      style={{
+        background: "#ffffff",
+        borderRadius: "16px",
+        width: "min(1200px, 96vw)",
+        maxHeight: "90vh",
+        overflowY: "auto",
+        padding: "24px",
+        boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: "16px",
+          alignItems: "flex-start",
+          marginBottom: "20px",
+        }}
+      >
+        <div>
+          <h2 style={{ margin: 0 }}>
+            Employee Productivity Deep Dive
+          </h2>
+
+          <p style={{ marginTop: "6px" }}>
+            <strong>
+              {productivityDetailRow?.employee_name || "Employee"}
+            </strong>
+            {" · "}
+            {productivityDetailRow?.activity_date || "—"}
+            {" · "}
+            {productivityDetailRow?.lob || "—"}
+            {" · "}
+            {productivityDetailRow?.department || "—"}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setProductivityDetailOpen(false)}
+        >
+          Close
+        </button>
+      </div>
+
+      {productivityDetailLoading && (
+        <p>Loading employee details...</p>
+      )}
+
+      {productivityDetailError && (
+        <p style={{ color: "#b42318" }}>
+          {productivityDetailError}
+        </p>
+      )}
+
+      {!productivityDetailLoading &&
+        !productivityDetailError && (
+          <>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(auto-fit, minmax(150px, 1fr))",
+                gap: "10px",
+                marginBottom: "18px",
+              }}
+            >
+              <div className="metricCard">
+                <strong>Total Logged</strong>
+                <div>
+                  {Number(
+                    productivityDetailRow?.total_logged_hours || 0
+                  ).toFixed(2)}
+                  h
+                </div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Productive</strong>
+                <div>
+                  {Number(
+                    productivityDetailRow?.productive_hours || 0
+                  ).toFixed(2)}
+                  h
+                </div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Unproductive</strong>
+                <div>
+                  {Number(
+                    productivityDetailRow?.unproductive_hours || 0
+                  ).toFixed(2)}
+                  h
+                </div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Auxiliary</strong>
+                <div>
+                  {Number(
+                    productivityDetailRow?.auxiliary_hours || 0
+                  ).toFixed(2)}
+                  h
+                </div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Productivity</strong>
+                <div>
+                  {Number(
+                    productivityDetailRow?.productivity_percentage || 0
+                  ).toFixed(2)}
+                  %
+                </div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Business Utilization</strong>
+                <div>
+                  {Number(
+                    productivityDetailRow
+                      ?.business_utilization_percentage || 0
+                  ).toFixed(2)}
+                  %
+                </div>
+              </div>
+            </div>
+
+            <h3>Disposition Counts</h3>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(auto-fit, minmax(140px, 1fr))",
+                gap: "10px",
+                marginBottom: "22px",
+              }}
+            >
+              <div className="metricCard">
+                <strong>All Events</strong>
+                <div>{productivityDetailStats.totalEvents}</div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Bathroom</strong>
+                <div>{productivityDetailStats.bathroomCount}</div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Break</strong>
+                <div>{productivityDetailStats.breakCount}</div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Meeting</strong>
+                <div>{productivityDetailStats.meetingCount}</div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Training</strong>
+                <div>{productivityDetailStats.trainingCount}</div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Coaching</strong>
+                <div>{productivityDetailStats.coachingCount}</div>
+              </div>
+
+              <div className="metricCard">
+                <strong>System Issue</strong>
+                <div>{productivityDetailStats.systemIssueCount}</div>
+              </div>
+            </div>
+
+            <h3>Disposition & Sub-Category Usage</h3>
+
+            <Table
+              headers={[
+                "Disposition",
+                "Sub-Category",
+                "Count",
+                "Total Time",
+                "% of Logged Time",
+              ]}
+              rows={productivityDetailStats.breakdown.map(
+                (item) => {
+                  const hours = item.minutes / 60;
+
+                  const totalLogged = Number(
+                    productivityDetailRow?.total_logged_hours || 0
+                  );
+
+                  const percentage =
+                    totalLogged > 0
+                      ? (hours / totalLogged) * 100
+                      : 0;
+
+                  return [
+                    item.status,
+                    item.subStatus,
+                    item.count,
+                    `${hours.toFixed(2)}h`,
+                    `${percentage.toFixed(2)}%`,
+                  ];
+                }
+              )}
+            />
+
+            <h3 style={{ marginTop: "24px" }}>
+              Individual Disposition Entries
+            </h3>
+
+            <Table
+              headers={[
+                "Disposition",
+                "Sub-Category",
+                "Minutes",
+                "Hours",
+                "Classification",
+                "Auxiliary",
+              ]}
+              rows={productivityDetailRows.map((log) => [
+                log.status || "—",
+                log.sub_status || "No sub-category",
+                Number(log.duration_minutes || 0).toFixed(0),
+                Number(log.duration_hours || 0).toFixed(2),
+                log.productivity_classification || "—",
+                log.is_auxiliary ? "Yes" : "No",
+              ])}
+            />
+          </>
+        )}
+    </div>
+  </div>
+)}
             <Card title="Workforce Adherence & Activity">
   <p className="helperText">
     Live operational reporting for{" "}
