@@ -6417,10 +6417,12 @@ const scheduleRows =
     row.scheduled += 1;
 
     const employeeId = String(
-      employee.id ||
-      employee.employee_id ||
-      ""
-    ).trim();
+  employee.supabase_employee_id ||
+  employee.employee_id ||
+  employee.Employee_ID ||
+  employee.id ||
+  ""
+).trim();
 
     const employeeTimeZone =
       getEmployeeTimeZone(employee);
