@@ -2053,12 +2053,25 @@ function formatLogTimeForInput(value, timeEntry, employeesList = []) {
   }
 
   // Locate the employee connected to this time log.
-  const employee =
-    employeesList.find(
-      (item) =>
-        String(item.id || item.employee_id || "") ===
-        String(timeEntry?.employee_id || "")
-    ) || {};
+// Support both application and Supabase employee IDs.
+const employee =
+  employeesList.find((item) => {
+    const employeeIds = [
+      item.id,
+      item.employee_id,
+      item.supabase_employee_id,
+    ]
+      .map((value) =>
+        String(value || "").trim()
+      )
+      .filter(Boolean);
+
+    return employeeIds.includes(
+      String(
+        timeEntry?.employee_id || ""
+      ).trim()
+    );
+  }) || {};
 
   const parsedDate = new Date(value);
 
@@ -13752,11 +13765,16 @@ async function bulkApproveSelectedTimeLogs() {
 
   function editTimeEntryLocal(id, field, value) {
   setTimeEntries((current) =>
-    current.map((entry) =>
-      entry.id === id || entry.app_log_id === id
+    current.map((entry) => {
+      const matchesEntry =
+        String(entry.id || "") === String(id) ||
+        String(entry.app_log_id || "") === String(id) ||
+        String(entry.supabase_id || "") === String(id);
+
+      return matchesEntry
         ? { ...entry, [field]: value }
-        : entry
-    )
+        : entry;
+    })
   );
 }
 
@@ -13795,15 +13813,23 @@ async function bulkApproveSelectedTimeLogs() {
   }
 
   const employee =
-    employees.find(
-      (item) =>
-        String(
-          item.id ||
-            item.employee_id ||
-            ""
-        ) ===
-        String(timeEntry.employee_id || "")
-    ) || {};
+  employees.find((item) => {
+    const employeeIds = [
+      item.id,
+      item.employee_id,
+      item.supabase_employee_id,
+    ]
+      .map((value) =>
+        String(value || "").trim()
+      )
+      .filter(Boolean);
+
+    return employeeIds.includes(
+      String(
+        timeEntry.employee_id || ""
+      ).trim()
+    );
+  }) || {};
 
   const employeeTimeZone =
     getEmployeeTimeZone(employee);
@@ -13944,10 +13970,15 @@ break_end:
         duration_minutes:
           durationMinutes,
 
-        status:
-          timeEntry.category ||
-          timeEntry.status ||
-          "Working",
+        category:
+  timeEntry.category ||
+  timeEntry.status ||
+  "Working",
+
+status:
+  timeEntry.category ||
+  timeEntry.status ||
+  "Working",
 
         approval_status:
           timeEntry.approved ||
