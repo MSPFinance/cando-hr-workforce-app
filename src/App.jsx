@@ -8581,114 +8581,16 @@ const payrollEmployeePeriodSummary = useMemo(() => {
             employee.termination_date
           );
 
-        /*
-  Payroll scheduled target.
+        
+/*
+  Payroll scheduled time is calculated from the
+  actual scheduled dates that fall inside the
+  selected semi-monthly payroll period.
 
-  The payroll target is based on the employee's
-  recurring two-week schedule, not on how many
-  occurrences of a weekday happen to fall inside
-  the semi-monthly calendar dates.
-
-  Example:
-  5 scheduled days/week = 10 days per payroll cycle.
-  6 scheduled days/week = 12 days per payroll cycle.
-
-  Schedule exceptions do not increase the normal
-  payroll scheduled-day target.
+  Do not cap the period at two recurring weeks.
 */
-const rosterScheduleDays =
-  employee?.schedule_days &&
-  typeof employee.schedule_days === "object"
-    ? employee.schedule_days
-    : {};
-
-const fallbackOffDays =
-  normalizeOffDays(
-    employee.off_days
-  ).map((day) =>
-    normalizeDayName(day)
-  );
-
-const scheduledWeekDays =
-  WEEK_DAYS.filter((dayName) => {
-    const dayValue =
-      rosterScheduleDays[dayName];
-
-    /*
-      App_Schedules uses values such as:
-      X   = scheduled
-      OFF = off day
-
-      If schedule_days is unavailable for an older
-      employee record, fall back to off_days.
-    */
-    if (
-      dayValue !== undefined &&
-      dayValue !== null &&
-      String(dayValue).trim() !== ""
-    ) {
-      return (
-        String(dayValue)
-          .trim()
-          .toUpperCase() !== "OFF"
-      );
-    }
-
-    return !fallbackOffDays.includes(
-      dayName
-    );
-  });
-
-const weeklyScheduledMinutes =
-  scheduledWeekDays.reduce(
-    (total, dayName) => {
-      /*
-        Use the employee's normal schedule here.
-
-        Schedule exceptions are intentionally excluded
-        from the payroll baseline because a swap/change
-        should not create additional scheduled payroll
-        hours.
-      */
-      const baseSchedule =
-        getStableSchedule(
-          employee,
-          [],
-          dayName,
-          employeeBreakRows,
-          [],
-          ""
-        );
-
-      const baseRange =
-        buildMinuteRange(
-          baseSchedule.shift_start,
-          baseSchedule.shift_end
-        );
-
-      if (!baseRange) {
-        return total;
-      }
-
-      return (
-        total +
-        Math.max(
-          0,
-          baseRange.end -
-            baseRange.start
-        )
-      );
-    },
-    0
-  );
-
-let scheduledDays =
-  scheduledWeekDays.length * 2;
-
-let scheduledMinutes =
-  weeklyScheduledMinutes * 2;
-
-let payrollScheduledMinutesAllocated = 0;
+let scheduledDays = 0;
+let scheduledMinutes = 0;
         let loggedMinutes = 0;
         let trackedWithinScheduleMinutes =
           0;
@@ -8977,28 +8879,30 @@ const isSwapDayOff =
   approvedLeaveType ===
   "day off due to swap";
 
-const remainingPayrollScheduledMinutes =
-  Math.max(
-    0,
-    scheduledMinutes -
-      payrollScheduledMinutesAllocated
-  );
+/*
+  Use the actual schedule for this calendar date.
 
+  A Day off due to Swap removes the scheduled
+  payroll requirement from the original date.
+*/
 const payrollDayScheduledMinutes =
   isSwapDayOff
     ? 0
-    : Math.min(
-        dayScheduledMinutes,
-        remainingPayrollScheduledMinutes
-      );
-
-if (!isSwapDayOff) {
-  payrollScheduledMinutesAllocated +=
-    payrollDayScheduledMinutes;
-}
+    : dayScheduledMinutes;
 
 const isPayrollScheduledDay =
   payrollDayScheduledMinutes > 0;
+
+/*
+  Build the employee's payroll-period scheduled
+  totals from the actual dates inside the selected
+  semi-monthly period.
+*/
+if (isPayrollScheduledDay) {
+  scheduledDays += 1;
+  scheduledMinutes +=
+    payrollDayScheduledMinutes;
+}
 
             /*
               Get all time logs belonging to the
@@ -9520,11 +9424,7 @@ if (
   dayTrackedWithinSchedule === 0
 ) {
   dayStatus = "Approved Leave";
-} else if (
-  !isPayrollScheduledDay &&
-  dayLoggedMinutes === 0
-) {
-  dayStatus = "Payroll Schedule Fulfilled";
+
 } else if (
   dayScheduledMinutes === 0 &&
   dayLoggedMinutes > 0
