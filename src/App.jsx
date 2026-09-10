@@ -783,6 +783,71 @@ function formatHours(minutes) {
   return `${hours.toFixed(hours % 1 === 0 ? 0 : 2)}h`;
 }
 
+function getTimeLogDurationMinutes(
+  entry,
+  employeesList = []
+) {
+  const startValue =
+    entry.category_start ||
+    entry.clock_in;
+
+  const endValue =
+    entry.category_end ||
+    entry.clock_out;
+
+  if (!startValue || !endValue) {
+    return 0;
+  }
+
+  /*
+    Use the same minute-level employee-local
+    times shown in Magnemite and used by Payroll.
+
+    Do not trust historical duration_minutes
+    because older rows may contain rounding
+    differences from timestamp seconds.
+  */
+  const localStart =
+    formatLogTimeForInput(
+      startValue,
+      entry,
+      employeesList
+    );
+
+  const localEnd =
+    formatLogTimeForInput(
+      endValue,
+      entry,
+      employeesList
+    );
+
+  const startMinutes =
+    timeToMinutes(localStart);
+
+  let endMinutes =
+    timeToMinutes(localEnd);
+
+  if (
+    startMinutes === null ||
+    endMinutes === null
+  ) {
+    return 0;
+  }
+
+  /*
+    Support an overnight log if one ever
+    crosses midnight.
+  */
+  if (endMinutes < startMinutes) {
+    endMinutes += 24 * 60;
+  }
+
+  return Math.max(
+    0,
+    endMinutes - startMinutes
+  );
+}
+
 function getTimeLogDuration(
   entry,
   employeesList = []
@@ -796,76 +861,18 @@ function getTimeLogDuration(
     entry.clock_out;
 
   if (startValue && endValue) {
-    const startIsSimpleTime =
-      /^(\d{1,2}):(\d{2})(?::\d{2})?$/.test(
-        String(startValue)
-      );
-
-    const endIsSimpleTime =
-      /^(\d{1,2}):(\d{2})(?::\d{2})?$/.test(
-        String(endValue)
-      );
-
-    /*
-      When both values are complete timestamps,
-      calculate the exact elapsed duration.
-    */
-    if (
-      !startIsSimpleTime &&
-      !endIsSimpleTime
-    ) {
-      const startTimestamp =
-        new Date(startValue).getTime();
-
-      const endTimestamp =
-        new Date(endValue).getTime();
-
-      if (
-        !Number.isNaN(startTimestamp) &&
-        !Number.isNaN(endTimestamp)
-      ) {
-        return formatHours(
-          Math.max(
-            0,
-            Math.round(
-              (endTimestamp -
-                startTimestamp) /
-                60000
-            )
-          )
-        );
-      }
-    }
-
-    /*
-      During an unsaved edit, one value may be a
-      timestamp and the other may already be HH:mm.
-
-      Convert both to the employee's displayed local
-      time before calculating the preview.
-    */
-    const localStart =
-      formatLogTimeForInput(
-        startValue,
-        entry,
-        employeesList
-      );
-
-    const localEnd =
-      formatLogTimeForInput(
-        endValue,
-        entry,
-        employeesList
-      );
-
     return formatHours(
-      minutesBetween(
-        localStart,
-        localEnd
+      getTimeLogDurationMinutes(
+        entry,
+        employeesList
       )
     );
   }
 
+  /*
+    Preserve the existing live timer behavior
+    for an open time log.
+  */
   if (startValue) {
     const startTimestamp =
       new Date(startValue).getTime();
@@ -875,9 +882,10 @@ function getTimeLogDuration(
         Math.max(
           0,
           Math.floor(
-            (Date.now() -
-              startTimestamp) /
-              60000
+            (
+              Date.now() -
+              startTimestamp
+            ) / 60000
           )
         )
       )} active`;
@@ -965,6 +973,41 @@ function formatDateOnly(value) {
   if (Number.isNaN(date.getTime())) return String(value);
 
   return date.toISOString().slice(0, 10);
+}
+
+/*
+  Returns a YYYY-MM-DD date key shifted by the
+  requested number of days.
+
+  Used for Supabase text timestamp filtering so
+  both "2026-09-09 13:00..." and
+  "2026-09-09T13:00..." are included correctly.
+*/
+function addDaysToDateKey(dateKey, days = 1) {
+  const cleanDate = formatDateOnly(dateKey);
+
+  if (!cleanDate) {
+    return "";
+  }
+
+  const [year, month, day] =
+    cleanDate.split("-").map(Number);
+
+  const date = new Date(
+    Date.UTC(
+      year,
+      month - 1,
+      day
+    )
+  );
+
+  date.setUTCDate(
+    date.getUTCDate() + days
+  );
+
+  return date
+    .toISOString()
+    .slice(0, 10);
 }
 
 function requestDaysInclusive(startDate, endDate, employee = null) {
@@ -3737,6 +3780,13 @@ function mapTimeEntryToSupabaseLog(
       entry.employee_name ||
       employee.full_name ||
       "",
+
+      date: formatDateOnly(
+  entry.date ||
+    entry.clock_in ||
+    entry.category_start ||
+    today
+),
 
     status:
       entry.category ||
@@ -7506,10 +7556,12 @@ const scheduleRows =
     row.scheduled += 1;
 
     const employeeId = String(
-      employee.id ||
-      employee.employee_id ||
-      ""
-    ).trim();
+  employee.supabase_employee_id ||
+  employee.employee_id ||
+  employee.Employee_ID ||
+  employee.id ||
+  ""
+).trim();
 
     const employeeTimeZone =
       getEmployeeTimeZone(employee);
@@ -8241,15 +8293,21 @@ if (filters.startDate) {
   historicalLogsQuery =
     historicalLogsQuery.gte(
       "clock_in",
-      `${filters.startDate}T00:00:00`
+      filters.startDate
     );
 }
 
 if (filters.endDate) {
+  const nextDay =
+    addDaysToDateKey(
+      filters.endDate,
+      1
+    );
+
   historicalLogsQuery =
-    historicalLogsQuery.lte(
+    historicalLogsQuery.lt(
       "clock_in",
-      `${filters.endDate}T23:59:59`
+      nextDay
     );
 }
 
@@ -8526,19 +8584,26 @@ if (
 }
 
 if (filters.startDate) {
-  liveLogsQuery = liveLogsQuery.gte(
-    "clock_in",
-    `${filters.startDate}T00:00:00`
-  );
+  liveLogsQuery =
+    liveLogsQuery.gte(
+      "clock_in",
+      filters.startDate
+    );
 }
 
 if (filters.endDate) {
-  liveLogsQuery = liveLogsQuery.lte(
-    "clock_in",
-    `${filters.endDate}T23:59:59`
-  );
-}
+  const nextDay =
+    addDaysToDateKey(
+      filters.endDate,
+      1
+    );
 
+  liveLogsQuery =
+    liveLogsQuery.lt(
+      "clock_in",
+      nextDay
+    );
+}
 const {
   data: latestLogs,
   error,
@@ -9237,13 +9302,16 @@ useEffect(() => {
           .from("time_logs")
           .select("*")
           .gte(
-            "clock_in",
-            `${payrollDateRange.startDate}T00:00:00`
-          )
-          .lte(
-            "clock_in",
-            `${payrollDateRange.endDate}T23:59:59`
-          )
+  "clock_in",
+  payrollDateRange.startDate
+)
+.lt(
+  "clock_in",
+  addDaysToDateKey(
+    payrollDateRange.endDate,
+    1
+  )
+)
           .order("clock_in", {
             ascending: true,
           })
@@ -9758,114 +9826,16 @@ const payrollEmployeePeriodSummary = useMemo(() => {
             employee.termination_date
           );
 
-        /*
-  Payroll scheduled target.
+        
+/*
+  Payroll scheduled time is calculated from the
+  actual scheduled dates that fall inside the
+  selected semi-monthly payroll period.
 
-  The payroll target is based on the employee's
-  recurring two-week schedule, not on how many
-  occurrences of a weekday happen to fall inside
-  the semi-monthly calendar dates.
-
-  Example:
-  5 scheduled days/week = 10 days per payroll cycle.
-  6 scheduled days/week = 12 days per payroll cycle.
-
-  Schedule exceptions do not increase the normal
-  payroll scheduled-day target.
+  Do not cap the period at two recurring weeks.
 */
-const rosterScheduleDays =
-  employee?.schedule_days &&
-  typeof employee.schedule_days === "object"
-    ? employee.schedule_days
-    : {};
-
-const fallbackOffDays =
-  normalizeOffDays(
-    employee.off_days
-  ).map((day) =>
-    normalizeDayName(day)
-  );
-
-const scheduledWeekDays =
-  WEEK_DAYS.filter((dayName) => {
-    const dayValue =
-      rosterScheduleDays[dayName];
-
-    /*
-      App_Schedules uses values such as:
-      X   = scheduled
-      OFF = off day
-
-      If schedule_days is unavailable for an older
-      employee record, fall back to off_days.
-    */
-    if (
-      dayValue !== undefined &&
-      dayValue !== null &&
-      String(dayValue).trim() !== ""
-    ) {
-      return (
-        String(dayValue)
-          .trim()
-          .toUpperCase() !== "OFF"
-      );
-    }
-
-    return !fallbackOffDays.includes(
-      dayName
-    );
-  });
-
-const weeklyScheduledMinutes =
-  scheduledWeekDays.reduce(
-    (total, dayName) => {
-      /*
-        Use the employee's normal schedule here.
-
-        Schedule exceptions are intentionally excluded
-        from the payroll baseline because a swap/change
-        should not create additional scheduled payroll
-        hours.
-      */
-      const baseSchedule =
-        getStableSchedule(
-          employee,
-          [],
-          dayName,
-          employeeBreakRows,
-          [],
-          ""
-        );
-
-      const baseRange =
-        buildMinuteRange(
-          baseSchedule.shift_start,
-          baseSchedule.shift_end
-        );
-
-      if (!baseRange) {
-        return total;
-      }
-
-      return (
-        total +
-        Math.max(
-          0,
-          baseRange.end -
-            baseRange.start
-        )
-      );
-    },
-    0
-  );
-
-let scheduledDays =
-  scheduledWeekDays.length * 2;
-
-let scheduledMinutes =
-  weeklyScheduledMinutes * 2;
-
-let payrollScheduledMinutesAllocated = 0;
+let scheduledDays = 0;
+let scheduledMinutes = 0;
         let loggedMinutes = 0;
         let trackedWithinScheduleMinutes =
           0;
@@ -10154,28 +10124,30 @@ const isSwapDayOff =
   approvedLeaveType ===
   "day off due to swap";
 
-const remainingPayrollScheduledMinutes =
-  Math.max(
-    0,
-    scheduledMinutes -
-      payrollScheduledMinutesAllocated
-  );
+/*
+  Use the actual schedule for this calendar date.
 
+  A Day off due to Swap removes the scheduled
+  payroll requirement from the original date.
+*/
 const payrollDayScheduledMinutes =
   isSwapDayOff
     ? 0
-    : Math.min(
-        dayScheduledMinutes,
-        remainingPayrollScheduledMinutes
-      );
-
-if (!isSwapDayOff) {
-  payrollScheduledMinutesAllocated +=
-    payrollDayScheduledMinutes;
-}
+    : dayScheduledMinutes;
 
 const isPayrollScheduledDay =
   payrollDayScheduledMinutes > 0;
+
+/*
+  Build the employee's payroll-period scheduled
+  totals from the actual dates inside the selected
+  semi-monthly period.
+*/
+if (isPayrollScheduledDay) {
+  scheduledDays += 1;
+  scheduledMinutes +=
+    payrollDayScheduledMinutes;
+}
 
             /*
               Get all time logs belonging to the
@@ -10697,11 +10669,7 @@ if (
   dayTrackedWithinSchedule === 0
 ) {
   dayStatus = "Approved Leave";
-} else if (
-  !isPayrollScheduledDay &&
-  dayLoggedMinutes === 0
-) {
-  dayStatus = "Payroll Schedule Fulfilled";
+
 } else if (
   dayScheduledMinutes === 0 &&
   dayLoggedMinutes > 0
@@ -18156,55 +18124,49 @@ t.id
                   getTimeLogDuration(t, employees),
 
 formatHours(
-  filteredTime
-    .filter(
-      (entry) =>
-        String(entry.employee_id || "") ===
-          String(t.employee_id || "") &&
+  timeEntries
+    .filter((entry) => {
+      const sameEmployee =
+        String(
+          entry.employee_id || ""
+        ) ===
+        String(
+          t.employee_id || ""
+        );
+
+      const entryDate =
         normalizeDateForFilter(
           entry.date ||
             entry.clock_in ||
             entry.category_start ||
             entry.created_at
-        ) ===
-          normalizeDateForFilter(
-            t.date ||
-              t.clock_in ||
-              t.category_start ||
-              t.created_at
-          )
-    )
-    .reduce((total, entry) => {
-      const savedDuration = Number(
-        entry.duration_minutes
-      );
+        );
 
-      if (
-        Number.isFinite(savedDuration) &&
-        savedDuration > 0
-      ) {
-        return total + savedDuration;
-      }
+      const rowDate =
+        normalizeDateForFilter(
+          t.date ||
+            t.clock_in ||
+            t.category_start ||
+            t.created_at
+        );
 
       return (
-        total +
-        minutesBetween(
-          formatLogTimeForInput(
-            entry.category_start ||
-              entry.clock_in,
-            entry,
-            employees
-          ),
-          formatLogTimeForInput(
-            entry.category_end ||
-              entry.clock_out,
-            entry,
-            employees
-          )
-        )
+        sameEmployee &&
+        entryDate === rowDate
       );
-    }, 0)
+    })
+    .reduce(
+      (total, entry) =>
+        total +
+        getTimeLogDurationMinutes(
+          entry,
+          employees
+        ),
+      0
+    )
 ),
+
+  
 
 <select value={t.approved || "Pending"} onChange={(event) => editTimeEntryLocal(t.id, "approved", event.target.value)}>
                     {["Pending", "Pending Approval", "Approved", "Denied", "Auto Logged"].map((status) => <option key={status}>{status}</option>)}
