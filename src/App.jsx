@@ -758,6 +758,71 @@ function formatHours(minutes) {
   return `${hours.toFixed(hours % 1 === 0 ? 0 : 2)}h`;
 }
 
+function getTimeLogDurationMinutes(
+  entry,
+  employeesList = []
+) {
+  const startValue =
+    entry.category_start ||
+    entry.clock_in;
+
+  const endValue =
+    entry.category_end ||
+    entry.clock_out;
+
+  if (!startValue || !endValue) {
+    return 0;
+  }
+
+  /*
+    Use the same minute-level employee-local
+    times shown in Magnemite and used by Payroll.
+
+    Do not trust historical duration_minutes
+    because older rows may contain rounding
+    differences from timestamp seconds.
+  */
+  const localStart =
+    formatLogTimeForInput(
+      startValue,
+      entry,
+      employeesList
+    );
+
+  const localEnd =
+    formatLogTimeForInput(
+      endValue,
+      entry,
+      employeesList
+    );
+
+  const startMinutes =
+    timeToMinutes(localStart);
+
+  let endMinutes =
+    timeToMinutes(localEnd);
+
+  if (
+    startMinutes === null ||
+    endMinutes === null
+  ) {
+    return 0;
+  }
+
+  /*
+    Support an overnight log if one ever
+    crosses midnight.
+  */
+  if (endMinutes < startMinutes) {
+    endMinutes += 24 * 60;
+  }
+
+  return Math.max(
+    0,
+    endMinutes - startMinutes
+  );
+}
+
 function getTimeLogDuration(
   entry,
   employeesList = []
@@ -771,76 +836,18 @@ function getTimeLogDuration(
     entry.clock_out;
 
   if (startValue && endValue) {
-    const startIsSimpleTime =
-      /^(\d{1,2}):(\d{2})(?::\d{2})?$/.test(
-        String(startValue)
-      );
-
-    const endIsSimpleTime =
-      /^(\d{1,2}):(\d{2})(?::\d{2})?$/.test(
-        String(endValue)
-      );
-
-    /*
-      When both values are complete timestamps,
-      calculate the exact elapsed duration.
-    */
-    if (
-      !startIsSimpleTime &&
-      !endIsSimpleTime
-    ) {
-      const startTimestamp =
-        new Date(startValue).getTime();
-
-      const endTimestamp =
-        new Date(endValue).getTime();
-
-      if (
-        !Number.isNaN(startTimestamp) &&
-        !Number.isNaN(endTimestamp)
-      ) {
-        return formatHours(
-          Math.max(
-            0,
-            Math.round(
-              (endTimestamp -
-                startTimestamp) /
-                60000
-            )
-          )
-        );
-      }
-    }
-
-    /*
-      During an unsaved edit, one value may be a
-      timestamp and the other may already be HH:mm.
-
-      Convert both to the employee's displayed local
-      time before calculating the preview.
-    */
-    const localStart =
-      formatLogTimeForInput(
-        startValue,
-        entry,
-        employeesList
-      );
-
-    const localEnd =
-      formatLogTimeForInput(
-        endValue,
-        entry,
-        employeesList
-      );
-
     return formatHours(
-      minutesBetween(
-        localStart,
-        localEnd
+      getTimeLogDurationMinutes(
+        entry,
+        employeesList
       )
     );
   }
 
+  /*
+    Preserve the existing live timer behavior
+    for an open time log.
+  */
   if (startValue) {
     const startTimestamp =
       new Date(startValue).getTime();
@@ -850,9 +857,10 @@ function getTimeLogDuration(
         Math.max(
           0,
           Math.floor(
-            (Date.now() -
-              startTimestamp) /
-              60000
+            (
+              Date.now() -
+              startTimestamp
+            ) / 60000
           )
         )
       )} active`;
@@ -16502,55 +16510,49 @@ t.id
                   getTimeLogDuration(t, employees),
 
 formatHours(
-  filteredTime
-    .filter(
-      (entry) =>
-        String(entry.employee_id || "") ===
-          String(t.employee_id || "") &&
+  timeEntries
+    .filter((entry) => {
+      const sameEmployee =
+        String(
+          entry.employee_id || ""
+        ) ===
+        String(
+          t.employee_id || ""
+        );
+
+      const entryDate =
         normalizeDateForFilter(
           entry.date ||
             entry.clock_in ||
             entry.category_start ||
             entry.created_at
-        ) ===
-          normalizeDateForFilter(
-            t.date ||
-              t.clock_in ||
-              t.category_start ||
-              t.created_at
-          )
-    )
-    .reduce((total, entry) => {
-      const savedDuration = Number(
-        entry.duration_minutes
-      );
+        );
 
-      if (
-        Number.isFinite(savedDuration) &&
-        savedDuration > 0
-      ) {
-        return total + savedDuration;
-      }
+      const rowDate =
+        normalizeDateForFilter(
+          t.date ||
+            t.clock_in ||
+            t.category_start ||
+            t.created_at
+        );
 
       return (
-        total +
-        minutesBetween(
-          formatLogTimeForInput(
-            entry.category_start ||
-              entry.clock_in,
-            entry,
-            employees
-          ),
-          formatLogTimeForInput(
-            entry.category_end ||
-              entry.clock_out,
-            entry,
-            employees
-          )
-        )
+        sameEmployee &&
+        entryDate === rowDate
       );
-    }, 0)
+    })
+    .reduce(
+      (total, entry) =>
+        total +
+        getTimeLogDurationMinutes(
+          entry,
+          employees
+        ),
+      0
+    )
 ),
+
+  
 
 <select value={t.approved || "Pending"} onChange={(event) => editTimeEntryLocal(t.id, "approved", event.target.value)}>
                     {["Pending", "Pending Approval", "Approved", "Denied", "Auto Logged"].map((status) => <option key={status}>{status}</option>)}
