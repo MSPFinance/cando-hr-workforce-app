@@ -950,6 +950,41 @@ function formatDateOnly(value) {
   return date.toISOString().slice(0, 10);
 }
 
+/*
+  Returns a YYYY-MM-DD date key shifted by the
+  requested number of days.
+
+  Used for Supabase text timestamp filtering so
+  both "2026-09-09 13:00..." and
+  "2026-09-09T13:00..." are included correctly.
+*/
+function addDaysToDateKey(dateKey, days = 1) {
+  const cleanDate = formatDateOnly(dateKey);
+
+  if (!cleanDate) {
+    return "";
+  }
+
+  const [year, month, day] =
+    cleanDate.split("-").map(Number);
+
+  const date = new Date(
+    Date.UTC(
+      year,
+      month - 1,
+      day
+    )
+  );
+
+  date.setUTCDate(
+    date.getUTCDate() + days
+  );
+
+  return date
+    .toISOString()
+    .slice(0, 10);
+}
+
 function requestDaysInclusive(startDate, endDate, employee = null) {
   if (!startDate || !endDate) return 0;
 
@@ -3696,14 +3731,39 @@ function localDateTimeToUtcIso(
 function mapTimeEntryToSupabaseLog(entry, employee = {}) {
   return {
     app_log_id: String(
-  entry.app_log_id ||
-  entry.id ||
-  ""
-),
-    employee_id: String(entry.employee_id || employee.id || ""),
-    employee_email: entry.employee_email || employee.email || employee.auth_email || "",
-    employee_name: entry.employee_name || employee.full_name || "",
-    status: entry.category || entry.status || "Working",
+      entry.app_log_id ||
+      entry.id ||
+      ""
+    ),
+
+    employee_id: String(
+      entry.employee_id ||
+      employee.id ||
+      ""
+    ),
+
+    employee_email:
+      entry.employee_email ||
+      employee.email ||
+      employee.auth_email ||
+      "",
+
+    employee_name:
+      entry.employee_name ||
+      employee.full_name ||
+      "",
+
+    date: formatDateOnly(
+      entry.date ||
+      entry.clock_in ||
+      entry.category_start ||
+      today
+    ),
+
+    status:
+      entry.category ||
+      entry.status ||
+      "Working",
     clock_in: toSupabaseTimestamp(
   entry.date,
   entry.category_start || entry.clock_in
@@ -7148,15 +7208,21 @@ if (filters.startDate) {
   historicalLogsQuery =
     historicalLogsQuery.gte(
       "clock_in",
-      `${filters.startDate}T00:00:00`
+      filters.startDate
     );
 }
 
 if (filters.endDate) {
+  const nextDay =
+    addDaysToDateKey(
+      filters.endDate,
+      1
+    );
+
   historicalLogsQuery =
-    historicalLogsQuery.lte(
+    historicalLogsQuery.lt(
       "clock_in",
-      `${filters.endDate}T23:59:59`
+      nextDay
     );
 }
 
@@ -7433,19 +7499,26 @@ if (
 }
 
 if (filters.startDate) {
-  liveLogsQuery = liveLogsQuery.gte(
-    "clock_in",
-    `${filters.startDate}T00:00:00`
-  );
+  liveLogsQuery =
+    liveLogsQuery.gte(
+      "clock_in",
+      filters.startDate
+    );
 }
 
 if (filters.endDate) {
-  liveLogsQuery = liveLogsQuery.lte(
-    "clock_in",
-    `${filters.endDate}T23:59:59`
-  );
-}
+  const nextDay =
+    addDaysToDateKey(
+      filters.endDate,
+      1
+    );
 
+  liveLogsQuery =
+    liveLogsQuery.lt(
+      "clock_in",
+      nextDay
+    );
+}
 const {
   data: latestLogs,
   error,
@@ -7984,13 +8057,16 @@ useEffect(() => {
           .from("time_logs")
           .select("*")
           .gte(
-            "clock_in",
-            `${payrollDateRange.startDate}T00:00:00`
-          )
-          .lte(
-            "clock_in",
-            `${payrollDateRange.endDate}T23:59:59`
-          )
+  "clock_in",
+  payrollDateRange.startDate
+)
+.lt(
+  "clock_in",
+  addDaysToDateKey(
+    payrollDateRange.endDate,
+    1
+  )
+)
           .order("clock_in", {
             ascending: true,
           })
