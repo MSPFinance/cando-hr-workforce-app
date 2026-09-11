@@ -5084,18 +5084,28 @@ function CurrentStatusTimer({ openStatusLog }) {
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
-    if (!openStatusLog) {
-      return undefined;
-    }
+  /*
+    Immediately recalculate elapsed time whenever
+    Magnemite switches to a different open status.
+  */
+  setNow(Date.now());
 
-    const timer = window.setInterval(() => {
-      setNow(Date.now());
-    }, 1000);
+  if (!openStatusLog) {
+    return undefined;
+  }
 
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [openStatusLog]);
+  const timer = window.setInterval(() => {
+    setNow(Date.now());
+  }, 1000);
+
+  return () => {
+    window.clearInterval(timer);
+  };
+}, [
+  openStatusLog?.id,
+  openStatusLog?.clock_in,
+  openStatusLog?.category_start,
+]);
 
   const startValue =
     openStatusLog?.clock_in ||
@@ -7083,6 +7093,107 @@ const agentEmployeeTimeLogId =
   selectedEmployee?.Employee_ID ||
   selectedEmployee?.id ||
   "";
+/*
+  AUTHORITATIVE AGENT TIME-LOG REFRESH
+
+  Supabase is the source of truth.
+
+  We call this after every successful Agent action so
+  the timer, My Activity Today and attendance cards do
+  not depend only on a Realtime event arriving.
+*/
+async function refreshAgentTimeLogs() {
+  if (
+    !supabase ||
+    !agentEmployeeTimeLogId
+  ) {
+    setAgentTimeLogs([]);
+    return [];
+  }
+
+  const {
+    data,
+    error,
+  } = await supabase
+    .from("time_logs")
+    .select(
+      [
+        "id",
+        "app_log_id",
+        "employee_id",
+        "employee_name",
+        "date",
+        "status",
+        "sub_status",
+        "disposition_note",
+        "clock_in",
+        "clock_out",
+        "category_start",
+        "category_end",
+        "duration_minutes",
+        "approval_status",
+        "payable_status",
+        "notes",
+        "created_at",
+      ].join(",")
+    )
+    .eq(
+      "employee_id",
+      String(agentEmployeeTimeLogId)
+    )
+    .order("clock_in", {
+      ascending: false,
+    })
+    .limit(250);
+
+  if (error) {
+    console.error(
+      "Unable to refresh agent time logs:",
+      error
+    );
+
+    return [];
+  }
+
+  const normalizedLogs =
+    (data || []).map((log) => ({
+      ...log,
+
+      /*
+        Keep Agent Portal compatible with the
+        application's existing category property.
+      */
+      category:
+        log.status ||
+        log.category ||
+        "Working",
+
+      /*
+        Some historical/RPC-created rows currently
+        have date = NULL. Derive it from the timestamp
+        until the database RPC is normalized later.
+      */
+      date:
+        log.date ||
+        String(
+          log.clock_in ||
+          log.category_start ||
+          log.created_at ||
+          ""
+        ).slice(0, 10),
+    }));
+
+  setAgentTimeLogs(
+    normalizedLogs
+  );
+
+  console.log(
+    "Agent time logs refreshed:",
+    normalizedLogs.length
+  );
+
+  return normalizedLogs;
+}
 
 const currentOpenStatusLog = useMemo(() => {
   if (!selectedEmployee || !agentEmployeeTimeLogId) {
@@ -7096,9 +7207,9 @@ const currentOpenStatusLog = useMemo(() => {
     Management views continue using timeEntries.
   */
   const sourceLogs =
-    isAgentOnly
-      ? agentTimeLogs
-      : timeEntries;
+  tab === "agent"
+    ? agentTimeLogs
+    : timeEntries;
 
   return (
     sourceLogs
@@ -7154,73 +7265,140 @@ const currentOpenStatusLog = useMemo(() => {
   timeEntries,
   agentTimeLogs,
   isAgentOnly,
+  tab,
 ]);
-
 useEffect(() => {
+  /*
+    Agent Portal realtime time-log synchronization.
+
+    Initial load retrieves recent time_logs.
+    Realtime keeps the open Agent Portal updated
+    when INSERT / UPDATE / DELETE events occur.
+  */
   if (
-    !isAgentOnly ||
+    tab !== "agent" ||
     !agentEmployeeTimeLogId ||
     !supabase
   ) {
     setAgentTimeLogs([]);
-    return;
+    return undefined;
   }
 
   let cancelled = false;
 
-  async function loadAgentTimeLogs() {
-    const { data, error } = await supabase
-      .from("time_logs")
-      .select(
-        [
-          "id",
-          "app_log_id",
-          "employee_id",
-          "employee_name",
-          "status",
-          "sub_status",
-          "disposition_note",
-          "clock_in",
-          "clock_out",
-          "category_start",
-          "category_end",
-          "duration_minutes",
-          "created_at",
-        ].join(",")
-      )
-      .eq(
-        "employee_id",
-        String(agentEmployeeTimeLogId)
-      )
-      .order("clock_in", {
-        ascending: false,
-      })
-      .limit(250);
+  const agentTimeLogChannel = supabase
+    .channel(
+      `magnemite-agent-time-logs-${String(
+        agentEmployeeTimeLogId
+      )}`
+    )
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "time_logs",
+        filter:
+          `employee_id=eq.${String(
+            agentEmployeeTimeLogId
+          )}`,
+      },
+      (payload) => {
+        if (cancelled) {
+          return;
+        }
 
-    if (error) {
-      console.error(
-        "Unable to load agent time logs:",
-        error
+        const eventType =
+          payload?.eventType || "";
+
+        const changedRow =
+          eventType === "DELETE"
+            ? payload?.old
+            : payload?.new;
+
+        if (!changedRow?.id) {
+          return;
+        }
+
+        console.log(
+          "Agent realtime time-log event:",
+          eventType,
+          changedRow
+        );
+
+        setAgentTimeLogs((currentLogs) => {
+          const remainingLogs =
+            currentLogs.filter(
+              (log) =>
+                String(log.id || "") !==
+                String(changedRow.id)
+            );
+
+          if (eventType === "DELETE") {
+            return remainingLogs;
+          }
+
+          return [
+            changedRow,
+            ...remainingLogs,
+          ]
+            .sort((a, b) => {
+              const aTime = new Date(
+                a.clock_in ||
+                  a.category_start ||
+                  a.created_at ||
+                  0
+              ).getTime();
+
+              const bTime = new Date(
+                b.clock_in ||
+                  b.category_start ||
+                  b.created_at ||
+                  0
+              ).getTime();
+
+              return bTime - aTime;
+            })
+            .slice(0, 250);
+        });
+      }
+    )
+    .subscribe((status) => {
+      console.log(
+        "Agent realtime subscription:",
+        status
       );
-      return;
-    }
 
-    if (!cancelled) {
-      setAgentTimeLogs(data || []);
-    }
-  }
+      if (
+  status === "SUBSCRIBED" &&
+  !cancelled
+) {
+  void refreshAgentTimeLogs();
+}
+    });
 
-  loadAgentTimeLogs();
+  /*
+    Initial load does not wait for the
+    realtime subscription to connect.
+  */
+  void refreshAgentTimeLogs();
 
+  /*
+    Remove the channel when leaving Agent Portal
+    or changing employee.
+  */
   return () => {
     cancelled = true;
+
+    supabase.removeChannel(
+      agentTimeLogChannel
+    );
   };
 }, [
-  isAgentOnly,
+  tab,
   agentEmployeeTimeLogId,
   supabase,
 ]);
-
 const visibleActivity = useMemo(() => {
     if (!selectedEmployee) {
     return [];
@@ -7246,7 +7424,7 @@ const visibleActivity = useMemo(() => {
     Supabase time_logs instead of browser memory.
   */
   const activitySource =
-  isAgentOnly && agentTimeLogs.length
+  tab === "agent"
     ? agentTimeLogs
     : timeEntries;
 
@@ -7425,6 +7603,7 @@ const todaysLogs = activitySource
   employees,
   agentTimeLogs,
   isAgentOnly,
+  tab,
 ]);
 
   
@@ -13407,9 +13586,7 @@ if (
     }
 
     const resolvedStatus =
-  action === "Shift Ended" && shouldSplitAutoOvertime(selectedEmployee, time)
-    ? "Overtime"
-    : approvedScheduleOverride
+  approvedScheduleOverride
     ? status
     : action === "Shift Started" || action === "Status Changed"
     ? autoClass.category === "Working"
@@ -13491,6 +13668,290 @@ disposition_note:
     "Supabase is not configured. The time status was not saved."
   );
 }
+
+/*
+  END SHIFT IS A CLOSE-ONLY ACTION.
+
+  Do not send Shift Ended through process_time_log_status
+  because that RPC is designed for chronological status
+  changes and can create another open time log.
+
+  End Shift must only close the employee's existing
+  open time log(s).
+*/
+if (action === "Shift Ended") {
+  const endedAt = now.toISOString();
+
+  const {
+  data: openLogs,
+  error: openLogsError,
+} = await supabase
+  .from("time_logs")
+  .select(
+    `
+      id,
+      app_log_id,
+      employee_id,
+      employee_name,
+      date,
+      status,
+      sub_status,
+      clock_in,
+      clock_out,
+      category_start,
+      category_end,
+      duration_minutes,
+      notes,
+      created_at
+    `
+  )
+  .eq(
+    "employee_id",
+    String(selectedEmployeeTimeLogId)
+  )
+  .is("clock_out", null)
+  .is("category_end", null)
+  .order("clock_in", {
+    ascending: false,
+  });
+
+  if (openLogsError) {
+    throw new Error(
+      `Unable to locate the active time log: ${openLogsError.message}`
+    );
+  }
+
+  /*
+    If Supabase has no open row, make sure stale
+    browser state does not keep the timer running.
+  */
+  if (!openLogs?.length) {
+    const closeStaleLocalLogs = (
+      currentLogs
+    ) =>
+      currentLogs.map((log) => {
+        const sameEmployee =
+          String(
+            log.employee_id || ""
+          ) ===
+          String(
+            selectedEmployeeTimeLogId ||
+              ""
+          );
+
+        const isOpen =
+          !log.clock_out &&
+          !log.category_end;
+
+        if (
+          sameEmployee &&
+          isOpen
+        ) {
+          return {
+            ...log,
+            clock_out: endedAt,
+            category_end: endedAt,
+          };
+        }
+
+        return log;
+      });
+
+    setAgentTimeLogs(
+      closeStaleLocalLogs
+    );
+
+    setTimeEntries(
+      closeStaleLocalLogs
+    );
+
+    showToast(
+      "No active shift found",
+      "Supabase had no open time log. The local timer was cleared.",
+      "warning"
+    );
+
+    return "silent";
+  }
+
+  const closedRows = [];
+
+  /*
+    Normally there should be one open row.
+
+    Closing every open row for this employee/date
+    also protects us from duplicate open logs left
+    by the previous End Shift behavior.
+  */
+  for (const openLog of openLogs) {
+    const startValue =
+      openLog.clock_in ||
+      openLog.category_start;
+
+    const startTimestamp =
+      startValue
+        ? new Date(
+            startValue
+          ).getTime()
+        : NaN;
+
+    const durationMinutes =
+      Number.isNaN(startTimestamp)
+        ? 0
+        : Math.max(
+            0,
+            Math.round(
+              (
+                now.getTime() -
+                startTimestamp
+              ) / 60000
+            )
+          );
+
+    const existingNotes =
+      String(
+        openLog.notes || ""
+      ).trim();
+
+    const updatedNotes =
+      existingNotes
+        ? existingNotes.includes(
+            "Shift Ended"
+          )
+          ? existingNotes
+          : `${existingNotes} | Shift Ended`
+        : "Shift Ended";
+
+    const {
+      data: updatedRows,
+      error: closeError,
+    } = await supabase
+      .from("time_logs")
+      .update({
+        clock_out: endedAt,
+        category_end: endedAt,
+        duration_minutes:
+          durationMinutes,
+        notes: updatedNotes,
+      })
+      .eq("id", openLog.id)
+      .select();
+
+    if (closeError) {
+      throw new Error(
+        `Unable to close the active time log: ${closeError.message}`
+      );
+    }
+
+    if (updatedRows?.length) {
+      closedRows.push(
+        ...updatedRows
+      );
+    }
+  }
+
+  /*
+    Immediately close the timer in both
+    Agent and Management browser states.
+  */
+  const closeLocalLogs = (
+    currentLogs
+  ) =>
+    currentLogs.map((log) => {
+      const sameEmployee =
+        String(
+          log.employee_id || ""
+        ) ===
+        String(
+          selectedEmployeeTimeLogId ||
+            ""
+        );
+
+      const isOpen =
+        !log.clock_out &&
+        !log.category_end;
+
+      if (
+        sameEmployee &&
+        isOpen
+      ) {
+        const startValue =
+          log.clock_in ||
+          log.category_start;
+
+        const startTimestamp =
+          startValue
+            ? new Date(
+                startValue
+              ).getTime()
+            : NaN;
+
+        const durationMinutes =
+          Number.isNaN(
+            startTimestamp
+          )
+            ? log.duration_minutes ||
+              0
+            : Math.max(
+                0,
+                Math.round(
+                  (
+                    now.getTime() -
+                    startTimestamp
+                  ) / 60000
+                )
+              );
+
+        return {
+          ...log,
+          clock_out: endedAt,
+          category_end: endedAt,
+          duration_minutes:
+            durationMinutes,
+        };
+      }
+
+      return log;
+    });
+
+  setAgentTimeLogs(
+    closeLocalLogs
+  );
+
+  setTimeEntries(
+    closeLocalLogs
+  );
+
+  /*
+  Re-read Supabase after closing the shift.
+
+  This guarantees the Agent Portal timer and
+  My Activity Today reflect the committed
+  database state immediately.
+*/
+await refreshAgentTimeLogs();
+
+  setActivityLog(
+    (current) => [
+      activity,
+      ...current,
+    ]
+  );
+
+  console.log(
+    "Shift ended — closed Supabase rows:",
+    closedRows
+  );
+
+  showToast(
+    "Shift ended",
+    "The active time log was closed successfully.",
+    "success"
+  );
+
+  return "silent";
+}
+
 const { data: statusResults, error: statusError } =
   await supabase.rpc(
     "process_time_log_status",
@@ -13559,6 +14020,18 @@ if (!statusResult) {
     "Supabase completed the request but did not return a time-log result."
   );
 }
+
+/*
+  The RPC transaction has committed.
+
+  Re-read the employee's time logs now so the
+  Agent Portal immediately sees:
+  - the previous status closed
+  - the new status opened
+  - the new timer start
+  - the new My Activity Today row
+*/
+await refreshAgentTimeLogs();
 
 /*
   Keep the agent's local time-log state synchronized with
@@ -17950,7 +18423,11 @@ if (startupLoading) {
                 </div>
                 <DailyAttendanceSummary
   employee={selectedEmployee}
-  timeEntries={timeEntries}
+  timeEntries={
+  tab === "agent"
+    ? agentTimeLogs
+    : timeEntries
+}
   schedule={agentScheduleRow?.schedule}
   employeeDate={selectedEmployeeDate}
 />
