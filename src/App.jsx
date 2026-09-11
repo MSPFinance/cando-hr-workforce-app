@@ -3589,7 +3589,7 @@ async function googleAddRow(tab, data) {
 
 async function googleUpdateRow(tab, idColumn, idValue, data) {
   if (!GOOGLE_API_URL || GOOGLE_API_URL.includes("PASTE_YOUR_WORKING")) {
-    console.warn("Google API URL is missing. Running in local demo mode.");
+    console.warn("Google API URL is missing. Google Sheets mirror skipped.");
     return null;
   }
 
@@ -3605,13 +3605,20 @@ async function googleUpdateRow(tab, idColumn, idValue, data) {
     console.log("Google Sheets updateRow result:", result);
 
     if (!result?.success) {
-      alert(`Google Sheets update failed: ${result?.message || "Unknown error"}`);
+      console.warn(
+        `Google Sheets mirror update failed: ${
+          result?.message || "Unknown error"
+        }`
+      );
     }
 
     return result;
   } catch (error) {
-    console.error("Google Sheets updateRow error:", error);
-    alert(`Google Sheets connection error: ${error.message}`);
+    console.warn(
+      "Google Sheets mirror update skipped:",
+      error?.message || error
+    );
+
     return null;
   }
 }
@@ -7194,7 +7201,7 @@ async function loadCountryHolidays() {
 
   const loadedSupabase = await loadSupabaseReferenceData(
   employees,
-  () => {},
+  setEmployees,
   setDatabaseStatus
 );
 
@@ -13222,7 +13229,7 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
   }
 
   if (updatedEmployee) {
-    await googleUpdateRow(
+    void googleUpdateRow(
       "employees",
       "Employee_ID",
       latestRequest.employee_id,
@@ -13243,7 +13250,7 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
           );
           updatedEmployee = updatedEmployees.find((employee) => employee.id === latestRequest.employee_id);
           if (updatedEmployee) {
-            await googleUpdateRow("employees", "Employee_ID", latestRequest.employee_id, mapEmployeeToSheet(updatedEmployee));
+            void googleUpdateRow("employees", "Employee_ID", latestRequest.employee_id, mapEmployeeToSheet(updatedEmployee));
           }
           showToast(
             "Schedule exception approved",
@@ -13267,8 +13274,13 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
             updatedEmployee = updatedEmployees.find((employee) => employee.id === latestRequest.employee_id);
 
             if (updatedEmployee) {
-              await googleUpdateRow("employees", "Employee_ID", latestRequest.employee_id, mapEmployeeToSheet(updatedEmployee));
-            }
+  void googleUpdateRow(
+    "employees",
+    "Employee_ID",
+    latestRequest.employee_id,
+    mapEmployeeToSheet(updatedEmployee)
+  );
+}
           }
         }
       }
@@ -13301,7 +13313,7 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
         "Approval decision"
       );
 
-      await googleUpdateRow("requests", "Request_ID", id, mapRequestToSheet(updatedRequest));
+      void googleUpdateRow("requests", "Request_ID", id, mapRequestToSheet(updatedRequest));
       await supabaseInsert(
         "email_queue",
         mapEmailToSupabaseQueue({
