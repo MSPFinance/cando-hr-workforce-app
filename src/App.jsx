@@ -6081,6 +6081,20 @@ const [payrollMonth, setPayrollMonth] = useState(
 const [payrollPeriod, setPayrollPeriod] = useState(
   "first"
 );
+
+const initialPayrollRange = getPayrollPeriodRange(
+  today.slice(0, 7),
+  "first"
+);
+
+const [payrollStartDate, setPayrollStartDate] = useState(
+  initialPayrollRange.startDate
+);
+
+const [payrollEndDate, setPayrollEndDate] = useState(
+  initialPayrollRange.endDate
+);
+
 const [
   payrollSourceTimeEntries,
   setPayrollSourceTimeEntries,
@@ -9306,7 +9320,7 @@ const displayedBalanceEmployees =
   );
 });
 
-const payrollDateRange = useMemo(
+const payrollPresetRange = useMemo(
   () =>
     getPayrollPeriodRange(
       payrollMonth,
@@ -9314,6 +9328,47 @@ const payrollDateRange = useMemo(
     ),
   [payrollMonth, payrollPeriod]
 );
+
+useEffect(() => {
+  setPayrollStartDate(
+    payrollPresetRange.startDate
+  );
+
+  setPayrollEndDate(
+    payrollPresetRange.endDate
+  );
+}, [
+  payrollPresetRange.startDate,
+  payrollPresetRange.endDate,
+]);
+
+const payrollDateRange = useMemo(() => {
+  const startDate =
+    payrollStartDate ||
+    payrollPresetRange.startDate;
+
+  const endDate =
+    payrollEndDate ||
+    payrollPresetRange.endDate;
+
+  const isPresetRange =
+    startDate === payrollPresetRange.startDate &&
+    endDate === payrollPresetRange.endDate;
+
+  return {
+    startDate,
+    endDate,
+
+    label: isPresetRange
+      ? payrollPresetRange.label
+      : `Custom · ${startDate} to ${endDate}`,
+  };
+}, [
+  payrollStartDate,
+  payrollEndDate,
+  payrollPresetRange,
+]);
+
 useEffect(() => {
   if (
     !supabase ||
@@ -19190,6 +19245,48 @@ rows={filteredRequests.map((r) => [
       </option>
     </select>
   </label>
+
+  <label>
+  Start Date
+  <input
+    type="date"
+    value={payrollStartDate}
+    max={payrollEndDate || undefined}
+    onChange={(event) => {
+      const value = event.target.value;
+
+      setPayrollStartDate(value);
+
+      if (
+        payrollEndDate &&
+        value > payrollEndDate
+      ) {
+        setPayrollEndDate(value);
+      }
+    }}
+  />
+</label>
+
+<label>
+  End Date
+  <input
+    type="date"
+    value={payrollEndDate}
+    min={payrollStartDate || undefined}
+    onChange={(event) => {
+      const value = event.target.value;
+
+      setPayrollEndDate(value);
+
+      if (
+        payrollStartDate &&
+        value < payrollStartDate
+      ) {
+        setPayrollStartDate(value);
+      }
+    }}
+  />
+</label>
 
   <label>
     LOB
