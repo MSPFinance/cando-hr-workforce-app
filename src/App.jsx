@@ -8599,7 +8599,17 @@ return () => {
 }, [supabase, isAuthenticated]);
 
 useEffect(() => {
-  if (!supabase || !isAuthenticated || isAgentOnly) {
+  if (
+    !supabase ||
+    !isAuthenticated ||
+    isAgentOnly
+  ) {
+    /*
+      Reset the startup lock when the user
+      logs out or is using the Agent portal.
+    */
+    liveAutoSyncRef.current = false;
+
     setStartupLoading(false);
     return;
   }
@@ -8607,23 +8617,64 @@ useEffect(() => {
   let cancelled = false;
 
   const runLiveStartupSync = async () => {
-    if (liveAutoSyncRef.current) return;
+    if (liveAutoSyncRef.current) {
+      return;
+    }
+
     liveAutoSyncRef.current = true;
 
     try {
       setStartupLoading(true);
 
-      await syncWorkforcePlanningSheet({
-        silent: true,
-        automatic: true,
-      });
+      /*
+        Google workforce synchronization is heavy.
 
+        Do NOT run it during every manager login.
+
+        Only run automatically during the configured
+        Saturday synchronization window and only once
+        for that date.
+      */
+      const syncDate =
+        getLocalDateKey(new Date());
+
+      const shouldRunSaturdaySync =
+        isWeeklyWorkforceSyncWindow() &&
+        weeklyWorkforceSyncRef.current !==
+          syncDate;
+
+      if (shouldRunSaturdaySync) {
+        console.log(
+          "Saturday workforce sync starting..."
+        );
+
+        await syncWorkforcePlanningSheet({
+          silent: true,
+          automatic: true,
+        });
+      }
+
+      /*
+        Normal startup uses Supabase.
+
+        Requests, approvals, time logs and live
+        operational information can therefore load
+        without waiting for Google Sheets.
+      */
       if (!cancelled) {
         await refreshLiveData();
-        console.log("Live startup sync completed and data refreshed.");
+
+        console.log(
+          shouldRunSaturdaySync
+            ? "Saturday workforce sync and live refresh completed."
+            : "Fast Supabase startup refresh completed."
+        );
       }
     } catch (error) {
-      console.warn("Live startup sync failed:", error);
+      console.warn(
+        "Live startup refresh failed:",
+        error
+      );
     } finally {
       if (!cancelled) {
         setStartupLoading(false);
@@ -8636,7 +8687,11 @@ useEffect(() => {
   return () => {
     cancelled = true;
   };
-}, [supabase, isAuthenticated, isAgentOnly]);
+}, [
+  supabase,
+  isAuthenticated,
+  isAgentOnly,
+]);
 
 useEffect(() => {
   if (!supabase) return undefined;
