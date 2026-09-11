@@ -2078,12 +2078,25 @@ function formatLogTimeForInput(value, timeEntry, employeesList = []) {
   }
 
   // Locate the employee connected to this time log.
-  const employee =
-    employeesList.find(
-      (item) =>
-        String(item.id || item.employee_id || "") ===
-        String(timeEntry?.employee_id || "")
-    ) || {};
+// Support both application and Supabase employee IDs.
+const employee =
+  employeesList.find((item) => {
+    const employeeIds = [
+      item.id,
+      item.employee_id,
+      item.supabase_employee_id,
+    ]
+      .map((value) =>
+        String(value || "").trim()
+      )
+      .filter(Boolean);
+
+    return employeeIds.includes(
+      String(
+        timeEntry?.employee_id || ""
+      ).trim()
+    );
+  }) || {};
 
   const parsedDate = new Date(value);
 
@@ -3601,7 +3614,7 @@ async function googleAddRow(tab, data) {
 
 async function googleUpdateRow(tab, idColumn, idValue, data) {
   if (!GOOGLE_API_URL || GOOGLE_API_URL.includes("PASTE_YOUR_WORKING")) {
-    console.warn("Google API URL is missing. Running in local demo mode.");
+    console.warn("Google API URL is missing. Google Sheets mirror skipped.");
     return null;
   }
 
@@ -3617,13 +3630,20 @@ async function googleUpdateRow(tab, idColumn, idValue, data) {
     console.log("Google Sheets updateRow result:", result);
 
     if (!result?.success) {
-      alert(`Google Sheets update failed: ${result?.message || "Unknown error"}`);
+      console.warn(
+        `Google Sheets mirror update failed: ${
+          result?.message || "Unknown error"
+        }`
+      );
     }
 
     return result;
   } catch (error) {
-    console.error("Google Sheets updateRow error:", error);
-    alert(`Google Sheets connection error: ${error.message}`);
+    console.warn(
+      "Google Sheets mirror update skipped:",
+      error?.message || error
+    );
+
     return null;
   }
 }
@@ -8265,7 +8285,7 @@ async function loadCountryHolidays() {
 
     loadSupabaseReferenceData(
       employees,
-      () => {},
+      setEmployees,
       setDatabaseStatus
     ),
   ]);
@@ -14740,7 +14760,7 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
   }
 
   if (updatedEmployee) {
-    await googleUpdateRow(
+    void googleUpdateRow(
       "employees",
       "Employee_ID",
       latestRequest.employee_id,
@@ -14761,7 +14781,7 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
           );
           updatedEmployee = updatedEmployees.find((employee) => employee.id === latestRequest.employee_id);
           if (updatedEmployee) {
-            await googleUpdateRow("employees", "Employee_ID", latestRequest.employee_id, mapEmployeeToSheet(updatedEmployee));
+            void googleUpdateRow("employees", "Employee_ID", latestRequest.employee_id, mapEmployeeToSheet(updatedEmployee));
           }
           showToast(
             "Schedule exception approved",
@@ -14785,8 +14805,13 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
             updatedEmployee = updatedEmployees.find((employee) => employee.id === latestRequest.employee_id);
 
             if (updatedEmployee) {
-              await googleUpdateRow("employees", "Employee_ID", latestRequest.employee_id, mapEmployeeToSheet(updatedEmployee));
-            }
+  void googleUpdateRow(
+    "employees",
+    "Employee_ID",
+    latestRequest.employee_id,
+    mapEmployeeToSheet(updatedEmployee)
+  );
+}
           }
         }
       }
@@ -14819,7 +14844,7 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
         "Approval decision"
       );
 
-      await googleUpdateRow("requests", "Request_ID", id, mapRequestToSheet(updatedRequest));
+      void googleUpdateRow("requests", "Request_ID", id, mapRequestToSheet(updatedRequest));
       await supabaseInsert(
         "email_queue",
         mapEmailToSupabaseQueue({
@@ -15283,11 +15308,16 @@ async function bulkApproveSelectedTimeLogs() {
 
   function editTimeEntryLocal(id, field, value) {
   setTimeEntries((current) =>
-    current.map((entry) =>
-      entry.id === id || entry.app_log_id === id
+    current.map((entry) => {
+      const matchesEntry =
+        String(entry.id || "") === String(id) ||
+        String(entry.app_log_id || "") === String(id) ||
+        String(entry.supabase_id || "") === String(id);
+
+      return matchesEntry
         ? { ...entry, [field]: value }
-        : entry
-    )
+        : entry;
+    })
   );
 }
 
@@ -15326,15 +15356,23 @@ async function bulkApproveSelectedTimeLogs() {
   }
 
   const employee =
-    employees.find(
-      (item) =>
-        String(
-          item.id ||
-            item.employee_id ||
-            ""
-        ) ===
-        String(timeEntry.employee_id || "")
-    ) || {};
+  employees.find((item) => {
+    const employeeIds = [
+      item.id,
+      item.employee_id,
+      item.supabase_employee_id,
+    ]
+      .map((value) =>
+        String(value || "").trim()
+      )
+      .filter(Boolean);
+
+    return employeeIds.includes(
+      String(
+        timeEntry.employee_id || ""
+      ).trim()
+    );
+  }) || {};
 
   const employeeTimeZone =
     getEmployeeTimeZone(employee);
@@ -15475,10 +15513,15 @@ break_end:
         duration_minutes:
           durationMinutes,
 
-        status:
-          timeEntry.category ||
-          timeEntry.status ||
-          "Working",
+        category:
+  timeEntry.category ||
+  timeEntry.status ||
+  "Working",
+
+status:
+  timeEntry.category ||
+  timeEntry.status ||
+  "Working",
 
         approval_status:
           timeEntry.approved ||
