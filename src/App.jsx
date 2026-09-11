@@ -16,6 +16,13 @@ import {
   XCircle,
   Settings,
 } from "lucide-react";
+import {
+  getAvailablePrimaryStatuses,
+  getAvailableSubStatuses,
+  getDefaultSubStatus,
+  isSecondaryRequired,
+  shouldShowDispositionNote,
+} from "./lib/dispositions";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -612,7 +619,25 @@ function TimeCategoryOptions() {
     </option>
   ));
 }
+function AgentTimeCategoryOptions({
+  accessRole,
+}) {
+  const categories =
+    getAvailablePrimaryStatuses(
+      accessRole
+    );
 
+  return categories.map(
+    (category) => (
+      <option
+        key={category}
+        value={category}
+      >
+        {category}
+      </option>
+    )
+  );
+}
 const timeSeed = [
   {
     id: "TIME-001",
@@ -3748,18 +3773,21 @@ function localDateTimeToUtcIso(
   ).toISOString();
 }
 
-function mapTimeEntryToSupabaseLog(entry, employee = {}) {
+function mapTimeEntryToSupabaseLog(
+  entry,
+  employee = {}
+) {
   return {
     app_log_id: String(
       entry.app_log_id ||
-      entry.id ||
-      ""
+        entry.id ||
+        ""
     ),
 
     employee_id: String(
       entry.employee_id ||
-      employee.id ||
-      ""
+        employee.id ||
+        ""
     ),
 
     employee_email:
@@ -3773,39 +3801,109 @@ function mapTimeEntryToSupabaseLog(entry, employee = {}) {
       employee.full_name ||
       "",
 
-    date: formatDateOnly(
-      entry.date ||
-      entry.clock_in ||
-      entry.category_start ||
-      today
-    ),
+      date: formatDateOnly(
+  entry.date ||
+    entry.clock_in ||
+    entry.category_start ||
+    today
+),
 
     status:
       entry.category ||
       entry.status ||
       "Working",
-    clock_in: toSupabaseTimestamp(
-  entry.date,
-  entry.category_start || entry.clock_in
-),
 
-clock_out: entry.category_end || entry.clock_out
-  ? toSupabaseTimestamp(
+    sub_status:
+      entry.sub_status ||
+      entry.subStatus ||
+      "",
+
+    disposition_note:
+      entry.disposition_note ||
+      entry.dispositionNote ||
+      "",
+
+    clock_in: toSupabaseTimestamp(
       entry.date,
-      entry.category_end || entry.clock_out
-    )
-  : null,
-    break_start: entry.category === "Break" ? toSupabaseTimestamp(entry.date, entry.category_start) : null,
-    break_end: entry.category === "Break" ? toSupabaseTimestamp(entry.date, entry.category_end) : null,
-    category_start: entry.category_start ? toSupabaseTimestamp(entry.date, entry.category_start) : null,
-    category_end: entry.category_end ? toSupabaseTimestamp(entry.date, entry.category_end) : null,
-    duration_minutes: minutesBetween(entry.category_start, entry.category_end),
-    approval_status: entry.approved || "Pending",
-    payable_status: entry.payable_status || "",
-    notes: entry.notes || "",
-    lob: entry.lob || employee.lob || "",
-    department: entry.department || employee.department || "",
-    sub_department: entry.sub_department || employee.sub_department || "",
+      entry.category_start ||
+        entry.clock_in
+    ),
+
+    clock_out:
+      entry.category_end ||
+      entry.clock_out
+        ? toSupabaseTimestamp(
+            entry.date,
+            entry.category_end ||
+              entry.clock_out
+          )
+        : null,
+
+    break_start:
+      entry.category === "Break"
+        ? toSupabaseTimestamp(
+            entry.date,
+            entry.category_start
+          )
+        : null,
+
+    break_end:
+      entry.category === "Break" &&
+      entry.category_end
+        ? toSupabaseTimestamp(
+            entry.date,
+            entry.category_end
+          )
+        : null,
+
+    category_start:
+      entry.category_start
+        ? toSupabaseTimestamp(
+            entry.date,
+            entry.category_start
+          )
+        : null,
+
+    category_end:
+      entry.category_end
+        ? toSupabaseTimestamp(
+            entry.date,
+            entry.category_end
+          )
+        : null,
+
+    duration_minutes:
+      minutesBetween(
+        entry.category_start,
+        entry.category_end
+      ),
+
+    approval_status:
+      entry.approved ||
+      "Pending",
+
+    payable_status:
+      entry.payable_status ||
+      "",
+
+    notes:
+      entry.notes ||
+      "",
+
+    lob:
+      entry.lob ||
+      employee.lob ||
+      "",
+
+    department:
+      entry.department ||
+      employee.department ||
+      "",
+
+    sub_department:
+      entry.sub_department ||
+      employee.sub_department ||
+      "",
   };
 }
 
@@ -4986,18 +5084,28 @@ function CurrentStatusTimer({ openStatusLog }) {
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
-    if (!openStatusLog) {
-      return undefined;
-    }
+  /*
+    Immediately recalculate elapsed time whenever
+    Magnemite switches to a different open status.
+  */
+  setNow(Date.now());
 
-    const timer = window.setInterval(() => {
-      setNow(Date.now());
-    }, 1000);
+  if (!openStatusLog) {
+    return undefined;
+  }
 
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [openStatusLog]);
+  const timer = window.setInterval(() => {
+    setNow(Date.now());
+  }, 1000);
+
+  return () => {
+    window.clearInterval(timer);
+  };
+}, [
+  openStatusLog?.id,
+  openStatusLog?.clock_in,
+  openStatusLog?.category_start,
+]);
 
   const startValue =
     openStatusLog?.clock_in ||
@@ -5450,6 +5558,527 @@ function HRWorkforceApp() {
   const [adminMode, setAdminMode] = useState(false);
   const [search, setSearch] = useState("");
   const [reportView, setReportView] = useState("LOB");
+  const [productivityRows, setProductivityRows] = useState([]);
+  
+const [productivityLoading, setProductivityLoading] = useState(false);
+const [productivityError, setProductivityError] = useState("");
+
+const [productivityFilters, setProductivityFilters] = useState({
+  startDate: getAppDateKey(),
+  endDate: getAppDateKey(),
+  lob: "ALL",
+  department: "ALL",
+  subDepartment: "ALL",
+  managerTl: "ALL",
+  employeeName: "ALL",
+  country: "ALL",
+  category: "ALL",
+});
+const [productivityDetailOpen, setProductivityDetailOpen] = useState(false);
+const [productivityDetailRow, setProductivityDetailRow] = useState(null);
+const [productivityDetailRows, setProductivityDetailRows] = useState([]);
+const [productivityDetailLoading, setProductivityDetailLoading] = useState(false);
+const [productivityDetailError, setProductivityDetailError] = useState("");
+
+const openProductivityDetail = async (row) => {
+  if (!supabase || !row) return;
+
+  setProductivityDetailOpen(true);
+  setProductivityDetailRow(row);
+  setProductivityDetailRows([]);
+  setProductivityDetailError("");
+  setProductivityDetailLoading(true);
+
+  try {
+    const { data, error } = await supabase
+      .from("productivity_time_log_detail")
+      .select(`
+        activity_date,
+        employee_id,
+        employee_name,
+        lob,
+        department,
+        sub_department,
+        status,
+        sub_status,
+        duration_minutes,
+        duration_hours,
+        productivity_classification,
+        is_auxiliary,
+        is_business_utilized,
+        is_open
+      `)
+      .eq("employee_id", String(row.employee_id))
+      .eq("activity_date", row.activity_date);
+
+    if (error) throw error;
+
+    setProductivityDetailRows(data || []);
+  } catch (error) {
+    console.error("Productivity detail load failed:", error);
+    setProductivityDetailError(
+      error?.message || "Unable to load employee productivity details."
+    );
+  } finally {
+    setProductivityDetailLoading(false);
+  }
+};
+
+const productivityDetailStats = useMemo(() => {
+  const logs = productivityDetailRows || [];
+
+  const grouped = new Map();
+
+  let bathroomCount = 0;
+  let breakCount = 0;
+  let meetingCount = 0;
+  let trainingCount = 0;
+  let coachingCount = 0;
+  let systemIssueCount = 0;
+
+  logs.forEach((log) => {
+    const status = String(log.status || "Unclassified");
+    const subStatus = String(
+      log.sub_status || "No sub-category"
+    );
+
+    const minutes = Number(log.duration_minutes || 0);
+
+    if (status === "Bathroom") bathroomCount += 1;
+    if (status === "Break") breakCount += 1;
+    if (status === "Meeting") meetingCount += 1;
+    if (status === "Training") trainingCount += 1;
+    if (status === "Coaching") coachingCount += 1;
+    if (status === "System Issue") systemIssueCount += 1;
+
+    const key = `${status}|||${subStatus}`;
+
+    if (!grouped.has(key)) {
+      grouped.set(key, {
+        status,
+        subStatus,
+        count: 0,
+        minutes: 0,
+      });
+    }
+
+    const item = grouped.get(key);
+
+    item.count += 1;
+    item.minutes += minutes;
+  });
+
+  const breakdown = Array.from(grouped.values()).sort(
+    (a, b) =>
+      b.minutes - a.minutes ||
+      b.count - a.count
+  );
+
+  return {
+    totalEvents: logs.length,
+    bathroomCount,
+    breakCount,
+    meetingCount,
+    trainingCount,
+    coachingCount,
+    systemIssueCount,
+    breakdown,
+  };
+}, [productivityDetailRows]);
+
+const loadProductivityReporting = async () => {
+  if (!supabase) return;
+
+  try {
+    setProductivityLoading(true);
+    setProductivityError("");
+
+    let query = supabase
+      .from("productivity_employee_daily_summary")
+      .select(`
+        activity_date,
+        employee_id,
+        employee_name,
+        lob,
+        department,
+        sub_department,
+        total_logged_hours,
+        productive_hours,
+        unproductive_hours,
+        auxiliary_hours,
+        business_utilized_hours,
+        productivity_percentage,
+        business_utilization_percentage,
+        break_hours,
+        bathroom_hours,
+        meeting_hours,
+        training_hours,
+        coaching_hours,
+        system_issue_hours
+      `)
+      .gte(
+        "activity_date",
+        productivityFilters.startDate
+      )
+      .lte(
+        "activity_date",
+        productivityFilters.endDate
+      )
+      .order("activity_date", {
+        ascending: false,
+      })
+      .order("employee_name", {
+        ascending: true,
+      });
+
+    if (
+      productivityFilters.lob !== "ALL"
+    ) {
+      query = query.eq(
+        "lob",
+        productivityFilters.lob
+      );
+    }
+
+    if (
+      productivityFilters.department !== "ALL"
+    ) {
+      query = query.eq(
+        "department",
+        productivityFilters.department
+      );
+    }
+
+    if (
+      productivityFilters.subDepartment !== "ALL"
+    ) {
+      query = query.eq(
+        "sub_department",
+        productivityFilters.subDepartment
+      );
+    }
+
+    if (
+      productivityFilters.employeeName !== "ALL"
+    ) {
+      query = query.eq(
+        "employee_name",
+        productivityFilters.employeeName
+      );
+    }
+
+    const {
+      data,
+      error,
+    } = await query;
+
+    if (error) {
+      throw error;
+    }
+
+    let resolvedRows =
+      Array.isArray(data)
+        ? data
+        : [];
+
+    /*
+      TYPE FILTER
+
+      The daily summary does not contain a single
+      status field because it aggregates the whole day.
+
+      When Type is selected, use the detailed
+      productivity view to identify the exact
+      employee/date combinations containing that
+      status.
+    */
+    if (
+      productivityFilters.category !== "ALL"
+    ) {
+      const selectedCategory =
+        productivityFilters.category;
+
+      if (
+        timeCategories.includes(
+          selectedCategory
+        )
+      ) {
+        let detailQuery = supabase
+          .from("productivity_time_log_detail")
+          .select(`
+            activity_date,
+            employee_id,
+            employee_name,
+            lob,
+            department,
+            sub_department,
+            status
+          `)
+          .gte(
+            "activity_date",
+            productivityFilters.startDate
+          )
+          .lte(
+            "activity_date",
+            productivityFilters.endDate
+          )
+          .eq(
+            "status",
+            selectedCategory
+          );
+
+        if (
+          productivityFilters.lob !== "ALL"
+        ) {
+          detailQuery = detailQuery.eq(
+            "lob",
+            productivityFilters.lob
+          );
+        }
+
+        if (
+          productivityFilters.department !== "ALL"
+        ) {
+          detailQuery = detailQuery.eq(
+            "department",
+            productivityFilters.department
+          );
+        }
+
+        if (
+          productivityFilters.subDepartment !== "ALL"
+        ) {
+          detailQuery = detailQuery.eq(
+            "sub_department",
+            productivityFilters.subDepartment
+          );
+        }
+
+        if (
+          productivityFilters.employeeName !== "ALL"
+        ) {
+          detailQuery = detailQuery.eq(
+            "employee_name",
+            productivityFilters.employeeName
+          );
+        }
+
+        const {
+          data: detailData,
+          error: detailError,
+        } = await detailQuery;
+
+        if (detailError) {
+          throw detailError;
+        }
+
+        const matchingKeys = new Set(
+          (detailData || []).map(
+            (row) =>
+              `${row.activity_date}|${row.employee_id}`
+          )
+        );
+
+        resolvedRows =
+          resolvedRows.filter(
+            (row) =>
+              matchingKeys.has(
+                `${row.activity_date}|${row.employee_id}`
+              )
+          );
+      } else {
+        /*
+          Request-only types such as Sick Leave,
+          Paid Leave, Unpaid Leave and Schedule Change
+          are not productivity time-log statuses.
+        */
+        resolvedRows = [];
+      }
+    }
+
+    /*
+      COUNTRY + MANAGER/TL
+
+      These values live in the employee roster rather
+      than the productivity summary view, so apply
+      them using the employee master data.
+    */
+    resolvedRows =
+      resolvedRows.filter((row) => {
+        const rowEmployeeId =
+          String(
+            row.employee_id || ""
+          ).trim();
+
+        const rowEmployeeName =
+          normalizeNameKey(
+            row.employee_name
+          );
+
+        const employee =
+          employees.find((item) => {
+            const employeeIds = [
+              item.id,
+              item.employee_id,
+              item.supabase_employee_id,
+              item.Employee_ID,
+            ]
+              .map((value) =>
+                String(
+                  value || ""
+                ).trim()
+              )
+              .filter(Boolean);
+
+            return (
+              employeeIds.includes(
+                rowEmployeeId
+              ) ||
+              normalizeNameKey(
+                item.full_name
+              ) === rowEmployeeName
+            );
+          }) || null;
+
+        if (
+          productivityFilters.country !== "ALL"
+        ) {
+          if (
+            !employee ||
+            String(
+              employee.country || ""
+            ).trim() !==
+              productivityFilters.country
+          ) {
+            return false;
+          }
+        }
+
+        if (
+          productivityFilters.managerTl !== "ALL"
+        ) {
+          const leader =
+            String(
+              employee?.team_leader ||
+              employee?.supervisor ||
+              employee?.manager ||
+              ""
+            ).trim();
+
+          if (
+            leader !==
+            productivityFilters.managerTl
+          ) {
+            return false;
+          }
+        }
+
+        return true;
+      });
+
+    setProductivityRows(
+      resolvedRows
+    );
+
+    console.log(
+      "Productivity reporting rows loaded:",
+      resolvedRows.length,
+      resolvedRows
+    );
+  } catch (error) {
+    console.error(
+      "Productivity reporting load failed:",
+      error
+    );
+
+    setProductivityRows([]);
+
+    setProductivityError(
+      error?.message ||
+        "Unable to load productivity reporting."
+    );
+    } finally {
+    setProductivityLoading(false);
+  }
+};
+
+
+useEffect(() => {
+  if (tab !== "reporting") {
+    return;
+  }
+
+  loadProductivityReporting();
+}, [
+  tab,
+  productivityFilters.startDate,
+  productivityFilters.endDate,
+  productivityFilters.lob,
+  productivityFilters.department,
+  productivityFilters.subDepartment,
+  productivityFilters.managerTl,
+  productivityFilters.employeeName,
+  productivityFilters.country,
+  productivityFilters.category,
+  employees,
+]);
+
+const productivitySummary = useMemo(() => {
+  const totals = productivityRows.reduce(
+    (summary, row) => {
+      summary.totalLoggedHours += Number(
+        row.total_logged_hours || 0
+      );
+
+      summary.productiveHours += Number(
+        row.productive_hours || 0
+      );
+
+      summary.unproductiveHours += Number(
+        row.unproductive_hours || 0
+      );
+
+      summary.auxiliaryHours += Number(
+        row.auxiliary_hours || 0
+      );
+
+      summary.businessUtilizedHours += Number(
+        row.business_utilized_hours || 0
+      );
+
+      return summary;
+    },
+    {
+      totalLoggedHours: 0,
+      productiveHours: 0,
+      unproductiveHours: 0,
+      auxiliaryHours: 0,
+      businessUtilizedHours: 0,
+    }
+  );
+
+  const productivityPercentage =
+    totals.totalLoggedHours > 0
+      ? (
+          totals.productiveHours /
+          totals.totalLoggedHours
+        ) * 100
+      : 0;
+
+  const businessUtilizationPercentage =
+    totals.totalLoggedHours > 0
+      ? (
+          totals.businessUtilizedHours /
+          totals.totalLoggedHours
+        ) * 100
+      : 0;
+
+  return {
+    ...totals,
+    productivityPercentage,
+    businessUtilizationPercentage,
+  };
+}, [productivityRows]);
 
 const [reportingNow, setReportingNow] = useState(
   Date.now()
@@ -5462,6 +6091,20 @@ const [payrollMonth, setPayrollMonth] = useState(
 const [payrollPeriod, setPayrollPeriod] = useState(
   "first"
 );
+
+const initialPayrollRange = getPayrollPeriodRange(
+  today.slice(0, 7),
+  "first"
+);
+
+const [payrollStartDate, setPayrollStartDate] = useState(
+  initialPayrollRange.startDate
+);
+
+const [payrollEndDate, setPayrollEndDate] = useState(
+  initialPayrollRange.endDate
+);
+
 const [
   payrollSourceTimeEntries,
   setPayrollSourceTimeEntries,
@@ -5498,7 +6141,92 @@ const [filters, setFilters] = useState({
   startDate: "",
   endDate: "",
 });
-  const [agentStatus, setAgentStatus] = useState("Working");
+useEffect(() => {
+  /*
+    The top Reporting filters are the single
+    source of truth for Productivity Reporting.
+  */
+
+  const resolvedStartDate =
+    filters.startDate ||
+    filters.endDate ||
+    getAppDateKey();
+
+  const resolvedEndDate =
+    filters.endDate ||
+    filters.startDate ||
+    getAppDateKey();
+
+  setProductivityFilters({
+    startDate:
+      resolvedStartDate,
+
+    endDate:
+      resolvedEndDate,
+
+    lob:
+      filters.lob === "All"
+        ? "ALL"
+        : filters.lob,
+
+    department:
+      filters.department === "All"
+        ? "ALL"
+        : filters.department,
+
+    subDepartment:
+      filters.subDepartment === "All"
+        ? "ALL"
+        : filters.subDepartment,
+
+    managerTl:
+      filters.teamLeader === "All"
+        ? "ALL"
+        : filters.teamLeader,
+
+    employeeName:
+      filters.employee === "All"
+        ? "ALL"
+        : filters.employee,
+
+    country:
+      filters.country === "All"
+        ? "ALL"
+        : filters.country,
+
+    category:
+      filters.category === "All"
+        ? "ALL"
+        : filters.category,
+  });
+}, [
+  filters.lob,
+  filters.department,
+  filters.subDepartment,
+  filters.teamLeader,
+  filters.employee,
+  filters.country,
+  filters.category,
+  filters.startDate,
+  filters.endDate,
+]);
+  const [
+  agentStatus,
+  setAgentStatus,
+] = useState("Working");
+
+const [
+  agentSubStatus,
+  setAgentSubStatus,
+] = useState(
+  getDefaultSubStatus("Working") || ""
+);
+
+const [
+  agentDispositionNote,
+  setAgentDispositionNote,
+] = useState("");
+
   const [newTime, setNewTime] = useState({
   date: today,
   category: "Working",
@@ -6105,17 +6833,153 @@ useEffect(() => {
 ]);
   const [selectedEmployeeId, setSelectedEmployeeId] =
   useState("");
+  const [requestEmployeeId, setRequestEmployeeId] =
+  useState("");
   const [
   selectedBalanceEmployeeIds,
   setSelectedBalanceEmployeeIds
 ] = useState([]);
-const selectedEmployee = isAgentOnly
-  ? currentUser
-  : employees.find(
+const selectedEmployee =
+  isAgentOnly
+    ? currentUser
+    : employees.find(
+        (employee) =>
+          String(
+            employee.id ||
+              employee.employee_id ||
+              ""
+          ) ===
+          String(
+            selectedEmployeeId || ""
+          )
+      ) ||
+      currentUser ||
+      null;
+      const requestEmployee =
+  isAgentOnly
+    ? currentUser
+    : employees.find(
+        (employee) =>
+          String(
+            employee.id ||
+              employee.employee_id ||
+              ""
+          ) ===
+          String(
+            requestEmployeeId || ""
+          )
+      ) ||
+      null;
+
+useEffect(() => {
+  if (isAgentOnly) {
+    setRequestEmployeeId(
+      currentUser?.id ||
+      currentUser?.employee_id ||
+      ""
+    );
+    return;
+  }
+
+  if (filters.employee === "All") {
+    setRequestEmployeeId("");
+    return;
+  }
+
+  const matchedEmployee =
+    employees.find(
       (employee) =>
-        String(employee.id || employee.employee_id || "") ===
-        String(selectedEmployeeId || "")
-    ) || currentUser || null;
+        String(
+          employee.full_name || ""
+        ).trim() ===
+        String(
+          filters.employee || ""
+        ).trim()
+    );
+
+  setRequestEmployeeId(
+    matchedEmployee?.id ||
+      matchedEmployee?.employee_id ||
+      ""
+  );
+}, [
+  isAgentOnly,
+  currentUser?.id,
+  currentUser?.employee_id,
+  filters.employee,
+  employees,
+]);
+
+/*
+  The app currently uses "Approvals" as the
+  management profile in some records.
+
+  For disposition visibility, treat it as
+  Manager so TL / Manager users receive all
+  approved disposition choices.
+*/
+const dispositionAccessRole =
+  userRole === "Approvals"
+    ? "Manager"
+    : userRole;
+
+/*
+  Operational teams such as CS, LO, RET,
+  Collector, CLS, Emails and Documents are
+  normally stored in sub_department.
+
+  Fall back to department when needed.
+*/
+const dispositionDepartment =
+  selectedEmployee?.sub_department ||
+  selectedEmployee?.department ||
+  "";
+
+const agentSubStatusOptions =
+  useMemo(
+    () =>
+      getAvailableSubStatuses({
+        status: agentStatus,
+
+        lob:
+          selectedEmployee?.lob ||
+          "",
+
+        department:
+          dispositionDepartment,
+
+        accessLevel:
+          dispositionAccessRole,
+      }),
+    [
+      agentStatus,
+      selectedEmployee?.lob,
+      dispositionDepartment,
+      dispositionAccessRole,
+    ]
+  );
+
+const agentDefaultSubStatus =
+  getDefaultSubStatus(
+    agentStatus
+  ) || "";
+
+useEffect(() => {
+  setAgentSubStatus(
+    getDefaultSubStatus(
+      agentStatus
+    ) || ""
+  );
+
+  if (
+    agentStatus !==
+    "System Issue"
+  ) {
+    setAgentDispositionNote("");
+  }
+}, [agentStatus]);
+
+  
     const filteredLeaveEmployee =
   filters.employee !== "All"
     ? employees.find(
@@ -6213,31 +7077,381 @@ const visibleRequests = isAgentOnly && currentUser?.id
 const selectedEmployeeDate = selectedEmployee
   ? getEmployeeDateKey(selectedEmployee)
   : getAppDateKey();
-  const currentOpenStatusLog = useMemo(() => {
-  if (!selectedEmployee?.id) return null;
 
-  return timeEntries
+  const [agentTimeLogs, setAgentTimeLogs] = useState([]);
+
+/*
+  Use one consistent employee ID for all agent
+  time-log reads and timer calculations.
+
+  Supabase employee_id is preferred because
+  process_time_log_status uses the same identifier.
+*/
+const agentEmployeeTimeLogId =
+  selectedEmployee?.supabase_employee_id ||
+  selectedEmployee?.employee_id ||
+  selectedEmployee?.Employee_ID ||
+  selectedEmployee?.id ||
+  "";
+/*
+  AUTHORITATIVE AGENT TIME-LOG REFRESH
+
+  Supabase is the source of truth.
+
+  We call this after every successful Agent action so
+  the timer, My Activity Today and attendance cards do
+  not depend only on a Realtime event arriving.
+*/
+async function refreshAgentTimeLogs() {
+  if (
+    !supabase ||
+    !agentEmployeeTimeLogId
+  ) {
+    setAgentTimeLogs([]);
+    return [];
+  }
+
+  const {
+    data,
+    error,
+  } = await supabase
+    .from("time_logs")
+    .select(
+      [
+        "id",
+        "app_log_id",
+        "employee_id",
+        "employee_name",
+        "date",
+        "status",
+        "sub_status",
+        "disposition_note",
+        "clock_in",
+        "clock_out",
+        "category_start",
+        "category_end",
+        "duration_minutes",
+        "approval_status",
+        "payable_status",
+        "notes",
+        "created_at",
+      ].join(",")
+    )
+    .eq(
+      "employee_id",
+      String(agentEmployeeTimeLogId)
+    )
+    .order("clock_in", {
+      ascending: false,
+    })
+    .limit(250);
+
+  if (error) {
+    console.error(
+      "Unable to refresh agent time logs:",
+      error
+    );
+
+    return [];
+  }
+
+  const normalizedLogs =
+    (data || []).map((log) => ({
+      ...log,
+
+      /*
+        Keep Agent Portal compatible with the
+        application's existing category property.
+      */
+      category:
+        log.status ||
+        log.category ||
+        "Working",
+
+      /*
+        Some historical/RPC-created rows currently
+        have date = NULL. Derive it from the timestamp
+        until the database RPC is normalized later.
+      */
+      date:
+        log.date ||
+        String(
+          log.clock_in ||
+          log.category_start ||
+          log.created_at ||
+          ""
+        ).slice(0, 10),
+    }));
+
+  setAgentTimeLogs(
+    normalizedLogs
+  );
+
+  console.log(
+    "Agent time logs refreshed:",
+    normalizedLogs.length
+  );
+
+  return normalizedLogs;
+}
+
+const currentOpenStatusLog = useMemo(() => {
+  if (!selectedEmployee || !agentEmployeeTimeLogId) {
+    return null;
+  }
+
+  /*
+    Agent Portal uses the dedicated Supabase-backed
+    agentTimeLogs state.
+
+    Management views continue using timeEntries.
+  */
+  const sourceLogs =
+  tab === "agent"
+    ? agentTimeLogs
+    : timeEntries;
+
+  return (
+    sourceLogs
+      .filter((entry) => {
+        const sameEmployee =
+          String(entry.employee_id || "") ===
+          String(agentEmployeeTimeLogId);
+
+        const entryDate = String(
+          entry.date ||
+          entry.clock_in ||
+          entry.category_start ||
+          entry.created_at ||
+          ""
+        ).slice(0, 10);
+
+        /*
+          A timer can only run from a genuinely
+          open database time log.
+        */
+        const isOpen =
+          !entry.clock_out &&
+          !entry.category_end;
+
+        return (
+          sameEmployee &&
+          entryDate === selectedEmployeeDate &&
+          isOpen
+        );
+      })
+      .sort((a, b) => {
+        const aTime = new Date(
+          a.clock_in ||
+          a.category_start ||
+          a.created_at ||
+          0
+        ).getTime();
+
+        const bTime = new Date(
+          b.clock_in ||
+          b.category_start ||
+          b.created_at ||
+          0
+        ).getTime();
+
+        return bTime - aTime;
+      })[0] || null
+  );
+}, [
+  selectedEmployee,
+  selectedEmployeeDate,
+  agentEmployeeTimeLogId,
+  timeEntries,
+  agentTimeLogs,
+  isAgentOnly,
+  tab,
+]);
+useEffect(() => {
+  /*
+    Agent Portal realtime time-log synchronization.
+
+    Initial load retrieves recent time_logs.
+    Realtime keeps the open Agent Portal updated
+    when INSERT / UPDATE / DELETE events occur.
+  */
+  if (
+    tab !== "agent" ||
+    !agentEmployeeTimeLogId ||
+    !supabase
+  ) {
+    setAgentTimeLogs([]);
+    return undefined;
+  }
+
+  let cancelled = false;
+
+  const agentTimeLogChannel = supabase
+    .channel(
+      `magnemite-agent-time-logs-${String(
+        agentEmployeeTimeLogId
+      )}`
+    )
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "time_logs",
+        filter:
+          `employee_id=eq.${String(
+            agentEmployeeTimeLogId
+          )}`,
+      },
+      (payload) => {
+        if (cancelled) {
+          return;
+        }
+
+        const eventType =
+          payload?.eventType || "";
+
+        const changedRow =
+          eventType === "DELETE"
+            ? payload?.old
+            : payload?.new;
+
+        if (!changedRow?.id) {
+          return;
+        }
+
+        console.log(
+          "Agent realtime time-log event:",
+          eventType,
+          changedRow
+        );
+
+        setAgentTimeLogs((currentLogs) => {
+          const remainingLogs =
+            currentLogs.filter(
+              (log) =>
+                String(log.id || "") !==
+                String(changedRow.id)
+            );
+
+          if (eventType === "DELETE") {
+            return remainingLogs;
+          }
+
+          return [
+            changedRow,
+            ...remainingLogs,
+          ]
+            .sort((a, b) => {
+              const aTime = new Date(
+                a.clock_in ||
+                  a.category_start ||
+                  a.created_at ||
+                  0
+              ).getTime();
+
+              const bTime = new Date(
+                b.clock_in ||
+                  b.category_start ||
+                  b.created_at ||
+                  0
+              ).getTime();
+
+              return bTime - aTime;
+            })
+            .slice(0, 250);
+        });
+      }
+    )
+    .subscribe((status) => {
+      console.log(
+        "Agent realtime subscription:",
+        status
+      );
+
+      if (
+  status === "SUBSCRIBED" &&
+  !cancelled
+) {
+  void refreshAgentTimeLogs();
+}
+    });
+
+  /*
+    Initial load does not wait for the
+    realtime subscription to connect.
+  */
+  void refreshAgentTimeLogs();
+
+  /*
+    Remove the channel when leaving Agent Portal
+    or changing employee.
+  */
+  return () => {
+    cancelled = true;
+
+    supabase.removeChannel(
+      agentTimeLogChannel
+    );
+  };
+}, [
+  tab,
+  agentEmployeeTimeLogId,
+  supabase,
+]);
+const visibleActivity = useMemo(() => {
+    if (!selectedEmployee) {
+    return [];
+  }
+
+  /*
+    Match every possible employee ID used by
+    Magnemite / Supabase.
+  */
+  const employeeIds = [
+    selectedEmployee.id,
+    selectedEmployee.employee_id,
+    selectedEmployee.supabase_employee_id,
+    selectedEmployee.Employee_ID,
+  ]
+    .map((value) =>
+      String(value || "").trim()
+    )
+    .filter(Boolean);
+
+  /*
+    Rebuild My Activity Today directly from
+    Supabase time_logs instead of browser memory.
+  */
+  const activitySource =
+  tab === "agent"
+    ? agentTimeLogs
+    : timeEntries;
+
+const todaysLogs = activitySource
     .filter((entry) => {
+      const entryEmployeeId =
+        String(
+          entry.employee_id || ""
+        ).trim();
+
       const sameEmployee =
-        String(entry.employee_id || "") ===
-        String(selectedEmployee.id || selectedEmployee.employee_id || "");
+        employeeIds.includes(
+          entryEmployeeId
+        );
 
-      const entryDate = String(
-        entry.date ||
-        entry.clock_in ||
-        entry.category_start ||
-        entry.created_at ||
-        ""
-      ).slice(0, 10);
-
-      const isOpen =
-        !entry.clock_out &&
-        !entry.category_end;
+      const entryDate =
+        String(
+          entry.date ||
+          entry.clock_in ||
+          entry.category_start ||
+          entry.created_at ||
+          ""
+        ).slice(0, 10);
 
       return (
         sameEmployee &&
-        entryDate === selectedEmployeeDate &&
-        isOpen
+        entryDate === selectedEmployeeDate
       );
     })
     .sort((a, b) => {
@@ -6255,36 +7469,142 @@ const selectedEmployeeDate = selectedEmployee
         0
       ).getTime();
 
-      return bTime - aTime;
-    })[0] || null;
+      return aTime - bTime;
+    });
+
+  /*
+    Convert time_logs into the format expected
+    by the existing ActivityList component.
+  */
+  const activities = todaysLogs.map(
+    (entry, index) => ({
+      id:
+        `ACT-${
+          entry.supabase_id ||
+          entry.id ||
+          entry.app_log_id ||
+          index
+        }`,
+
+      employee_id:
+        entry.employee_id,
+
+      employee_name:
+        entry.employee_name ||
+        selectedEmployee.full_name ||
+        "",
+
+      date:
+        selectedEmployeeDate,
+
+      action:
+        index === 0
+          ? "Shift Started"
+          : "Status Changed",
+
+      time:
+        formatLogTimeForInput(
+          entry.clock_in ||
+          entry.category_start ||
+          entry.created_at,
+          entry,
+          employees
+        ),
+
+      status:
+        entry.category ||
+        entry.status ||
+        "Working",
+
+      sub_status:
+        entry.sub_status || "",
+
+      disposition_note:
+        entry.disposition_note || "",
+    })
+  );
+
+  /*
+    If today's final time log is closed and
+    there is no active/open log, show Shift Ended.
+  */
+  const lastLog =
+    todaysLogs[
+      todaysLogs.length - 1
+    ];
+
+  const hasOpenLog =
+    todaysLogs.some(
+      (entry) =>
+        !entry.clock_out &&
+        !entry.category_end
+    );
+
+  if (
+    lastLog &&
+    !hasOpenLog &&
+    (
+      lastLog.clock_out ||
+      lastLog.category_end
+    )
+  ) {
+    activities.push({
+      id:
+        `ACT-END-${
+          lastLog.supabase_id ||
+          lastLog.id ||
+          lastLog.app_log_id ||
+          "today"
+        }`,
+
+      employee_id:
+        lastLog.employee_id,
+
+      employee_name:
+        lastLog.employee_name ||
+        selectedEmployee.full_name ||
+        "",
+
+      date:
+        selectedEmployeeDate,
+
+      action:
+        "Shift Ended",
+
+      time:
+        formatLogTimeForInput(
+          lastLog.clock_out ||
+          lastLog.category_end,
+          lastLog,
+          employees
+        ),
+
+      status:
+        lastLog.category ||
+        lastLog.status ||
+        "Working",
+
+      sub_status:
+        lastLog.sub_status || "",
+
+      disposition_note:
+        lastLog.disposition_note || "",
+    });
+  }
+
+  /*
+    Display most recent activity first.
+  */
+  return activities.reverse();
 }, [
   selectedEmployee,
   selectedEmployeeDate,
   timeEntries,
+  employees,
+  agentTimeLogs,
+  isAgentOnly,
+  tab,
 ]);
-
-
-
-const visibleActivity = isAgentOnly && currentUser?.id
-  ? activityLog.filter(
-      (activity) =>
-        String(activity.employee_id) === String(currentUser.id) &&
-        String(activity.date || "").slice(0, 10) === selectedEmployeeDate
-    )
-  : activityLog.filter((activity) => {
-      const activityEmployee = employees.find(
-        (employee) =>
-          String(employee.id) === String(activity.employee_id)
-      );
-
-      const activityDate = activityEmployee
-        ? getEmployeeDateKey(activityEmployee)
-        : getAppDateKey();
-
-      return (
-        String(activity.date || "").slice(0, 10) === activityDate
-      );
-    });
 
   
   const filteredVisibleEmployees = visibleEmployees.filter((employee) => {
@@ -7196,103 +8516,31 @@ async function loadCountryHolidays() {
 }
 
   async function refreshLiveData() {
-  await loadScheduleExceptions();
-  await loadCountryHolidays();
+  /*
+  Load independent reference data in parallel.
 
-  const loadedSupabase = await loadSupabaseReferenceData(
-  employees,
-  setEmployees,
-  setDatabaseStatus
-);
+  Time logs are handled separately by the
+  manager realtime loader to avoid duplicate
+  historical time-log queries.
+*/
+  const [
+    loadedExceptions,
+    loadedHolidays,
+    loadedSupabase,
+  ] = await Promise.all([
+    loadScheduleExceptions(),
+
+    loadCountryHolidays(),
+
+    loadSupabaseReferenceData(
+      employees,
+      setEmployees,
+      setDatabaseStatus
+    ),
+  ]);
 
   if (supabase) {
-  let historicalLogsQuery = supabase
-  .from("time_logs")
-  .select("*")
-  .order("clock_in", {
-    ascending: false,
-  });
-
-if (
-  filters.employee !== "All" &&
-  filteredTimeLogEmployeeId
-) {
-  historicalLogsQuery =
-    historicalLogsQuery.eq(
-      "employee_id",
-      String(filteredTimeLogEmployeeId)
-    );
-}
-
-if (filters.startDate) {
-  historicalLogsQuery =
-    historicalLogsQuery.gte(
-      "clock_in",
-      filters.startDate
-    );
-}
-
-if (filters.endDate) {
-  const nextDay =
-    addDaysToDateKey(
-      filters.endDate,
-      1
-    );
-
-  historicalLogsQuery =
-    historicalLogsQuery.lt(
-      "clock_in",
-      nextDay
-    );
-}
-
-const {
-  data: latestLogs,
-  error: logsError,
-} = await historicalLogsQuery.limit(5000);
-console.log("FIRST LOG", latestLogs?.[0]);
-console.log("FIRST DATE", latestLogs?.[0]?.date);
-
-
-  if (!logsError) {
-    setTimeEntries(
-  (latestLogs || [])
-    .map((log) => ({
-  ...log,
-
-  supabase_id: log.id,
-
-  id:
-    log.app_log_id ||
-    log.id,
-
-  category:
-    log.category ||
-    log.status ||
-    "Working",
-
-  approved:
-    log.approval_status ||
-    "Pending",
-
-  date:
-        log.date ||
-        String(
-          log.clock_in ||
-          log.category_start ||
-          log.created_at ||
-          ""
-        ).slice(0, 10),
-    }))
-    .sort((a, b) => {
-      const aStamp = `${a.date || ""} ${a.time || ""} ${a.created_at || ""}`;
-      const bStamp = `${b.date || ""} ${b.time || ""} ${b.created_at || ""}`;
-      return bStamp.localeCompare(aStamp);
-    })
-);
-  } else {
-    console.warn("Time logs refresh failed:", logsError);
-  }
+  
 
   const { data: latestRequests, error: requestsError } = await supabase
     .from("requests")
@@ -7390,7 +8638,7 @@ if (breakRowsError) {
   if (loadedSupabase) {
     showToast(
   "Live data refreshed",
-  "Latest Supabase authentication, request, approval, and time log data loaded. Schedules and balances remain sourced from Google Sheets.",
+  "Latest Supabase authentication, request, approval, and reference data loaded. Time logs remain synchronized through the realtime manager loader. Schedules and balances remain sourced from Google Sheets.",
   "success"
 );
     return;
@@ -7458,7 +8706,17 @@ return () => {
 }, [supabase, isAuthenticated]);
 
 useEffect(() => {
-  if (!supabase || !isAuthenticated || isAgentOnly) {
+  if (
+    !supabase ||
+    !isAuthenticated ||
+    isAgentOnly
+  ) {
+    /*
+      Reset the startup lock when the user
+      logs out or is using the Agent portal.
+    */
+    liveAutoSyncRef.current = false;
+
     setStartupLoading(false);
     return;
   }
@@ -7466,23 +8724,64 @@ useEffect(() => {
   let cancelled = false;
 
   const runLiveStartupSync = async () => {
-    if (liveAutoSyncRef.current) return;
+    if (liveAutoSyncRef.current) {
+      return;
+    }
+
     liveAutoSyncRef.current = true;
 
     try {
       setStartupLoading(true);
 
-      await syncWorkforcePlanningSheet({
-        silent: true,
-        automatic: true,
-      });
+      /*
+        Google workforce synchronization is heavy.
 
+        Do NOT run it during every manager login.
+
+        Only run automatically during the configured
+        Saturday synchronization window and only once
+        for that date.
+      */
+      const syncDate =
+        getLocalDateKey(new Date());
+
+      const shouldRunSaturdaySync =
+        isWeeklyWorkforceSyncWindow() &&
+        weeklyWorkforceSyncRef.current !==
+          syncDate;
+
+      if (shouldRunSaturdaySync) {
+        console.log(
+          "Saturday workforce sync starting..."
+        );
+
+        await syncWorkforcePlanningSheet({
+          silent: true,
+          automatic: true,
+        });
+      }
+
+      /*
+        Normal startup uses Supabase.
+
+        Requests, approvals, time logs and live
+        operational information can therefore load
+        without waiting for Google Sheets.
+      */
       if (!cancelled) {
         await refreshLiveData();
-        console.log("Live startup sync completed and data refreshed.");
+
+        console.log(
+          shouldRunSaturdaySync
+            ? "Saturday workforce sync and live refresh completed."
+            : "Fast Supabase startup refresh completed."
+        );
       }
     } catch (error) {
-      console.warn("Live startup sync failed:", error);
+      console.warn(
+        "Live startup refresh failed:",
+        error
+      );
     } finally {
       if (!cancelled) {
         setStartupLoading(false);
@@ -7495,10 +8794,20 @@ useEffect(() => {
   return () => {
     cancelled = true;
   };
-}, [supabase, isAuthenticated, isAgentOnly]);
+}, [
+  supabase,
+  isAuthenticated,
+  isAgentOnly,
+]);
 
 useEffect(() => {
-  if (!supabase) return undefined;
+  if (
+  !supabase ||
+  !isAuthenticated ||
+  isAgentOnly
+) {
+  return undefined;
+}
 
   const reloadLiveLogsOnly = async () => {
     let liveLogsQuery = supabase
@@ -7617,24 +8926,186 @@ const {
 
   reloadLiveLogsOnly();
 
-  const channel = supabase
-    .channel("magnemite-live-dashboard")
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "time_logs" },
-      reloadLiveLogsOnly
-    )
-    .subscribe((status) => {
-  console.log(
-    "Live dashboard subscription:",
-    status
-  );
-});
+  const normalizeRealtimeLog = (log) => {
+  if (!log) {
+    return null;
+  }
 
-  return () => {
+  return {
+    ...log,
+
+    supabase_id: log.id,
+
+    id:
+      log.app_log_id ||
+      log.id,
+
+    date:
+      log.date ||
+      String(
+        log.clock_in ||
+        log.category_start ||
+        log.created_at ||
+        ""
+      ).slice(0, 10),
+
+    category:
+      log.category ||
+      log.status ||
+      "Working",
+
+    approved:
+      log.approval_status ||
+      "Pending",
+  };
+};
+
+const logMatchesCurrentFilters = (log) => {
+  if (!log) {
+    return false;
+  }
+
+  const logDate =
+    String(
+      log.date ||
+      log.clock_in ||
+      log.category_start ||
+      log.created_at ||
+      ""
+    ).slice(0, 10);
+
+  if (
+    filters.employee !== "All" &&
+    filteredTimeLogEmployeeId &&
+    String(log.employee_id || "") !==
+      String(filteredTimeLogEmployeeId)
+  ) {
+    return false;
+  }
+
+  if (
+    filters.startDate &&
+    logDate < filters.startDate
+  ) {
+    return false;
+  }
+
+  if (
+    filters.endDate &&
+    logDate > filters.endDate
+  ) {
+    return false;
+  }
+
+  return true;
+};
+
+const channel = supabase
+  .channel("magnemite-live-dashboard")
+  .on(
+    "postgres_changes",
+    {
+      event: "*",
+      schema: "public",
+      table: "time_logs",
+    },
+    (payload) => {
+      const eventType =
+        payload?.eventType || "";
+
+      const rawLog =
+        eventType === "DELETE"
+          ? payload?.old
+          : payload?.new;
+
+      if (!rawLog?.id) {
+        return;
+      }
+
+      const normalizedLog =
+        normalizeRealtimeLog(rawLog);
+
+      setTimeEntries((currentLogs) => {
+        /*
+          Remove the previous copy of this same
+          Supabase row first.
+
+          This handles UPDATE without creating
+          duplicates.
+        */
+        const remainingLogs =
+          currentLogs.filter((log) => {
+            const existingSupabaseId =
+              log.supabase_id ||
+              log.id;
+
+            return (
+              String(existingSupabaseId) !==
+              String(rawLog.id)
+            );
+          });
+
+        /*
+          DELETE:
+          the existing row has already been removed.
+        */
+        if (eventType === "DELETE") {
+          return remainingLogs;
+        }
+
+        /*
+          If an INSERT/UPDATE does not belong to
+          the currently selected employee/date
+          filters, do not add it to this view.
+        */
+        if (
+          !logMatchesCurrentFilters(
+            normalizedLog
+          )
+        ) {
+          return remainingLogs;
+        }
+
+        /*
+          Add the changed log without re-querying
+          the other 5,000 records.
+        */
+        return [
+          normalizedLog,
+          ...remainingLogs,
+        ].sort((a, b) => {
+          const aTime = new Date(
+            a.clock_in ||
+            a.category_start ||
+            a.created_at ||
+            0
+          ).getTime();
+
+          const bTime = new Date(
+            b.clock_in ||
+            b.category_start ||
+            b.created_at ||
+            0
+          ).getTime();
+
+          return bTime - aTime;
+        });
+      });
+    }
+  )
+  .subscribe((status) => {
+    console.log(
+      "Live dashboard subscription:",
+      status
+    );
+  });
+
+return () => {
   supabase.removeChannel(channel);
 };
 }, [
+  isAuthenticated,
+  isAgentOnly,
   filters.employee,
   filters.startDate,
   filters.endDate,
@@ -8028,7 +9499,7 @@ const displayedBalanceEmployees =
   );
 });
 
-const payrollDateRange = useMemo(
+const payrollPresetRange = useMemo(
   () =>
     getPayrollPeriodRange(
       payrollMonth,
@@ -8036,6 +9507,47 @@ const payrollDateRange = useMemo(
     ),
   [payrollMonth, payrollPeriod]
 );
+
+useEffect(() => {
+  setPayrollStartDate(
+    payrollPresetRange.startDate
+  );
+
+  setPayrollEndDate(
+    payrollPresetRange.endDate
+  );
+}, [
+  payrollPresetRange.startDate,
+  payrollPresetRange.endDate,
+]);
+
+const payrollDateRange = useMemo(() => {
+  const startDate =
+    payrollStartDate ||
+    payrollPresetRange.startDate;
+
+  const endDate =
+    payrollEndDate ||
+    payrollPresetRange.endDate;
+
+  const isPresetRange =
+    startDate === payrollPresetRange.startDate &&
+    endDate === payrollPresetRange.endDate;
+
+  return {
+    startDate,
+    endDate,
+
+    label: isPresetRange
+      ? payrollPresetRange.label
+      : `Custom · ${startDate} to ${endDate}`,
+  };
+}, [
+  payrollStartDate,
+  payrollEndDate,
+  payrollPresetRange,
+]);
+
 useEffect(() => {
   if (
     !supabase ||
@@ -9899,19 +11411,141 @@ const sortedEditableTimeLogs = [...editableTimeLogs].sort((a, b) => {
 const displayedTimeLogs =
   sortedEditableTimeLogs.slice(0, 100);
 
-  const filteredRequests = visibleRequests.filter((r) => {
-    const employee = employees.find((e) => e.id === r.employee_id);
-    const dateOk = (!filters.startDate || r.start_date >= filters.startDate) && (!filters.endDate || r.end_date <= filters.endDate);
-    return (
-      dateOk &&
-      (filters.lob === "All" || employee?.lob === filters.lob) &&
-      (filters.department === "All" || employee?.department === filters.department) &&
-      (filters.subDepartment === "All" || employee?.sub_department === filters.subDepartment) &&
-      (filters.employee === "All" || r.employee_name === filters.employee) &&
-      (filters.country === "All" || employee?.country === filters.country) &&
-      (filters.category === "All" || r.type === filters.category)
+  const filteredRequests = visibleRequests.filter((request) => {
+  /*
+    Find the employee connected to this request.
+
+    Match all employee ID versions because Supabase
+    employee_id and the Magnemite employee id can differ.
+  */
+  const requestEmployeeId = String(
+    request.employee_id ||
+    request.Employee_ID ||
+    ""
+  ).trim();
+
+  const employee =
+    employees.find((item) => {
+      const employeeIds = [
+        item.id,
+        item.employee_id,
+        item.supabase_employee_id,
+        item.Employee_ID,
+      ]
+        .map((value) =>
+          String(value || "").trim()
+        )
+        .filter(Boolean);
+
+      return employeeIds.includes(
+        requestEmployeeId
+      );
+    }) || null;
+
+  /*
+    Request dates.
+
+    This allows a request spanning several days
+    to remain visible when any part of it overlaps
+    the selected reporting date range.
+  */
+  const requestStart = formatDateOnly(
+    request.start_date ||
+    request.Start_Date ||
+    request.created_at ||
+    ""
+  );
+
+  const requestEnd = formatDateOnly(
+    request.end_date ||
+    request.End_Date ||
+    request.start_date ||
+    request.Start_Date ||
+    request.created_at ||
+    ""
+  );
+
+  const dateOk =
+    (
+      !filters.startDate ||
+      !requestEnd ||
+      requestEnd >= filters.startDate
+    ) &&
+    (
+      !filters.endDate ||
+      !requestStart ||
+      requestStart <= filters.endDate
     );
-  });
+
+  /*
+    Manager / TL source.
+
+    Magnemite may store the leader as team_leader,
+    supervisor, or manager depending on the employee.
+  */
+  const assignedLeader = String(
+    employee?.team_leader ||
+    employee?.supervisor ||
+    employee?.manager ||
+    ""
+  ).trim();
+
+  const requestType =
+    request.type ||
+    request.request_type ||
+    request.Request_Type ||
+    "";
+
+  const requestEmployeeName =
+    request.employee_name ||
+    employee?.full_name ||
+    "";
+
+  return (
+    dateOk &&
+
+    (
+      filters.lob === "All" ||
+      employee?.lob === filters.lob
+    ) &&
+
+    (
+      filters.department === "All" ||
+      employee?.department ===
+        filters.department
+    ) &&
+
+    (
+      filters.subDepartment === "All" ||
+      employee?.sub_department ===
+        filters.subDepartment
+    ) &&
+
+    (
+      filters.teamLeader === "All" ||
+      assignedLeader ===
+        filters.teamLeader
+    ) &&
+
+    (
+      filters.employee === "All" ||
+      requestEmployeeName ===
+        filters.employee
+    ) &&
+
+    (
+      filters.country === "All" ||
+      employee?.country ===
+        filters.country
+    ) &&
+
+    (
+      filters.category === "All" ||
+      requestType ===
+        filters.category
+    )
+  );
+});
 
   const filteredEmployees = filteredVisibleEmployees.filter((e) =>
     [e.full_name, e.email, e.lob, e.department, e.sub_department, e.role, e.country, e.supervisor, e.manager]
@@ -9921,19 +11555,30 @@ const displayedTimeLogs =
   );
 
   const requestPreview = useMemo(() => {
-    const requestedDays = calculateRequestHours(
-  newRequest,
-  selectedEmployee
-);
-    const currentBalance = getBalance(selectedEmployee, newRequest.type);
-    return {
-      requestedHours: requestedDays,
-      requestedDays,
-      currentBalance,
-      projectedBalance: currentBalance === null ? null : Math.max(0, currentBalance - requestedDays),
-      impactsBalance: currentBalance !== null,
-    };
-  }, [newRequest, selectedEmployee]);
+  const requestedDays = calculateRequestHours(
+    newRequest,
+    requestEmployee
+  );
+
+  const currentBalance = getBalance(
+    requestEmployee,
+    newRequest.type
+  );
+
+  return {
+    requestedHours: requestedDays,
+    requestedDays,
+    currentBalance,
+    projectedBalance:
+      currentBalance === null
+        ? null
+        : Math.max(
+            0,
+            currentBalance - requestedDays
+          ),
+    impactsBalance: currentBalance !== null,
+  };
+}, [newRequest, requestEmployee]);
 
   const stats = useMemo(() => {
     const total = filteredTime.reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
@@ -11672,7 +13317,11 @@ User can now log into the Agent Portal.`
     });
   }
 
-  async function agentAction(action, status = agentStatus) {
+  async function agentAction(
+  action,
+  status = agentStatus,
+  subStatusOverride = null
+) {
     if (status === "Overtime" && action !== "Shift Ended") {
       showToast("Manual overtime disabled", "Overtime is created automatically after the scheduled shift end.", "warning");
       return null;
@@ -11683,6 +13332,62 @@ User can now log into the Agent Portal.`
     console.warn("No selected employee. Agent action stopped.");
     return;
   }
+  /*
+  Capture the secondary disposition before
+  the time-log transaction is processed.
+
+  Start Shift defaults to the configured
+  Working sub-status.
+
+  Status Changed uses the employee's
+  selected secondary classification.
+*/
+const isDispositionChange =
+  action === "Status Changed";
+
+const selectedSubStatus =
+  isDispositionChange
+    ? String(
+        agentSubStatus ||
+          getDefaultSubStatus(status) ||
+          ""
+      ).trim()
+    : action === "Shift Started" &&
+      status === "Working"
+    ? String(
+        getDefaultSubStatus(
+          "Working"
+        ) || ""
+      ).trim()
+    : "";
+
+const selectedDispositionNote =
+  isDispositionChange &&
+  shouldShowDispositionNote(status)
+    ? String(
+        agentDispositionNote ||
+          ""
+      ).trim()
+    : "";
+
+/*
+  Meeting, Training, Coaching, System Issue,
+  and any other configured required-secondary
+  statuses cannot be submitted without a reason.
+*/
+if (
+  isDispositionChange &&
+  isSecondaryRequired(status) &&
+  !selectedSubStatus
+) {
+  showToast(
+    "Reason required",
+    "Please select a reason / sub-classification before logging this status.",
+    "warning"
+  );
+
+  return null;
+}
 
     const now = new Date();
 
@@ -11881,9 +13586,7 @@ if (
     }
 
     const resolvedStatus =
-  action === "Shift Ended" && shouldSplitAutoOvertime(selectedEmployee, time)
-    ? "Overtime"
-    : approvedScheduleOverride
+  approvedScheduleOverride
     ? status
     : action === "Shift Started" || action === "Status Changed"
     ? autoClass.category === "Working"
@@ -11912,17 +13615,21 @@ if (
 
       
       const activity = {
-        id: `ACT-${Date.now().toString().slice(-6)}`,
-        employee_id: selectedEmployee.id,
-        employee_name: selectedEmployee.full_name,
-        date: employeeDate,
-        action,
-        time,
-        status: resolvedStatus,
-        lob: selectedEmployee.lob,
-        department: selectedEmployee.department,
-        sub_department: selectedEmployee.sub_department || "",
-      };
+  id: `ACT-${Date.now().toString().slice(-6)}`,
+  employee_id: selectedEmployee.id,
+  employee_name: selectedEmployee.full_name,
+  date: employeeDate,
+  action,
+  time,
+  status: resolvedStatus,
+
+  sub_status: selectedSubStatus || "",
+  disposition_note: selectedDispositionNote || "",
+
+  lob: selectedEmployee.lob,
+  department: selectedEmployee.department,
+  sub_department: selectedEmployee.sub_department || "",
+};
 
       const baseTimeEntry = {
         id: `TIME-${Date.now().toString().slice(-6)}`,
@@ -11939,6 +13646,11 @@ if (
         clock_in: new Date().toISOString(),
         clock_out: null,
         category: resolvedStatus,
+        sub_status:
+  selectedSubStatus,
+
+disposition_note:
+  selectedDispositionNote,
         category_start: time,
         category_end: null,
         duration_minutes: 0,
@@ -11956,6 +13668,290 @@ if (
     "Supabase is not configured. The time status was not saved."
   );
 }
+
+/*
+  END SHIFT IS A CLOSE-ONLY ACTION.
+
+  Do not send Shift Ended through process_time_log_status
+  because that RPC is designed for chronological status
+  changes and can create another open time log.
+
+  End Shift must only close the employee's existing
+  open time log(s).
+*/
+if (action === "Shift Ended") {
+  const endedAt = now.toISOString();
+
+  const {
+  data: openLogs,
+  error: openLogsError,
+} = await supabase
+  .from("time_logs")
+  .select(
+    `
+      id,
+      app_log_id,
+      employee_id,
+      employee_name,
+      date,
+      status,
+      sub_status,
+      clock_in,
+      clock_out,
+      category_start,
+      category_end,
+      duration_minutes,
+      notes,
+      created_at
+    `
+  )
+  .eq(
+    "employee_id",
+    String(selectedEmployeeTimeLogId)
+  )
+  .is("clock_out", null)
+  .is("category_end", null)
+  .order("clock_in", {
+    ascending: false,
+  });
+
+  if (openLogsError) {
+    throw new Error(
+      `Unable to locate the active time log: ${openLogsError.message}`
+    );
+  }
+
+  /*
+    If Supabase has no open row, make sure stale
+    browser state does not keep the timer running.
+  */
+  if (!openLogs?.length) {
+    const closeStaleLocalLogs = (
+      currentLogs
+    ) =>
+      currentLogs.map((log) => {
+        const sameEmployee =
+          String(
+            log.employee_id || ""
+          ) ===
+          String(
+            selectedEmployeeTimeLogId ||
+              ""
+          );
+
+        const isOpen =
+          !log.clock_out &&
+          !log.category_end;
+
+        if (
+          sameEmployee &&
+          isOpen
+        ) {
+          return {
+            ...log,
+            clock_out: endedAt,
+            category_end: endedAt,
+          };
+        }
+
+        return log;
+      });
+
+    setAgentTimeLogs(
+      closeStaleLocalLogs
+    );
+
+    setTimeEntries(
+      closeStaleLocalLogs
+    );
+
+    showToast(
+      "No active shift found",
+      "Supabase had no open time log. The local timer was cleared.",
+      "warning"
+    );
+
+    return "silent";
+  }
+
+  const closedRows = [];
+
+  /*
+    Normally there should be one open row.
+
+    Closing every open row for this employee/date
+    also protects us from duplicate open logs left
+    by the previous End Shift behavior.
+  */
+  for (const openLog of openLogs) {
+    const startValue =
+      openLog.clock_in ||
+      openLog.category_start;
+
+    const startTimestamp =
+      startValue
+        ? new Date(
+            startValue
+          ).getTime()
+        : NaN;
+
+    const durationMinutes =
+      Number.isNaN(startTimestamp)
+        ? 0
+        : Math.max(
+            0,
+            Math.round(
+              (
+                now.getTime() -
+                startTimestamp
+              ) / 60000
+            )
+          );
+
+    const existingNotes =
+      String(
+        openLog.notes || ""
+      ).trim();
+
+    const updatedNotes =
+      existingNotes
+        ? existingNotes.includes(
+            "Shift Ended"
+          )
+          ? existingNotes
+          : `${existingNotes} | Shift Ended`
+        : "Shift Ended";
+
+    const {
+      data: updatedRows,
+      error: closeError,
+    } = await supabase
+      .from("time_logs")
+      .update({
+        clock_out: endedAt,
+        category_end: endedAt,
+        duration_minutes:
+          durationMinutes,
+        notes: updatedNotes,
+      })
+      .eq("id", openLog.id)
+      .select();
+
+    if (closeError) {
+      throw new Error(
+        `Unable to close the active time log: ${closeError.message}`
+      );
+    }
+
+    if (updatedRows?.length) {
+      closedRows.push(
+        ...updatedRows
+      );
+    }
+  }
+
+  /*
+    Immediately close the timer in both
+    Agent and Management browser states.
+  */
+  const closeLocalLogs = (
+    currentLogs
+  ) =>
+    currentLogs.map((log) => {
+      const sameEmployee =
+        String(
+          log.employee_id || ""
+        ) ===
+        String(
+          selectedEmployeeTimeLogId ||
+            ""
+        );
+
+      const isOpen =
+        !log.clock_out &&
+        !log.category_end;
+
+      if (
+        sameEmployee &&
+        isOpen
+      ) {
+        const startValue =
+          log.clock_in ||
+          log.category_start;
+
+        const startTimestamp =
+          startValue
+            ? new Date(
+                startValue
+              ).getTime()
+            : NaN;
+
+        const durationMinutes =
+          Number.isNaN(
+            startTimestamp
+          )
+            ? log.duration_minutes ||
+              0
+            : Math.max(
+                0,
+                Math.round(
+                  (
+                    now.getTime() -
+                    startTimestamp
+                  ) / 60000
+                )
+              );
+
+        return {
+          ...log,
+          clock_out: endedAt,
+          category_end: endedAt,
+          duration_minutes:
+            durationMinutes,
+        };
+      }
+
+      return log;
+    });
+
+  setAgentTimeLogs(
+    closeLocalLogs
+  );
+
+  setTimeEntries(
+    closeLocalLogs
+  );
+
+  /*
+  Re-read Supabase after closing the shift.
+
+  This guarantees the Agent Portal timer and
+  My Activity Today reflect the committed
+  database state immediately.
+*/
+await refreshAgentTimeLogs();
+
+  setActivityLog(
+    (current) => [
+      activity,
+      ...current,
+    ]
+  );
+
+  console.log(
+    "Shift ended — closed Supabase rows:",
+    closedRows
+  );
+
+  showToast(
+    "Shift ended",
+    "The active time log was closed successfully.",
+    "success"
+  );
+
+  return "silent";
+}
+
 const { data: statusResults, error: statusError } =
   await supabase.rpc(
     "process_time_log_status",
@@ -11999,7 +13995,13 @@ const { data: statusResults, error: statusError } =
         selectedEmployee.department || "",
 
       p_sub_department:
-        selectedEmployee.sub_department || "",
+  selectedEmployee.sub_department || "",
+
+p_sub_status:
+  subStatusOverride ?? selectedSubStatus ?? "",
+
+p_disposition_note:
+  selectedDispositionNote || "",
     }
   );
 
@@ -12018,6 +14020,91 @@ if (!statusResult) {
     "Supabase completed the request but did not return a time-log result."
   );
 }
+
+/*
+  The RPC transaction has committed.
+
+  Re-read the employee's time logs now so the
+  Agent Portal immediately sees:
+  - the previous status closed
+  - the new status opened
+  - the new timer start
+  - the new My Activity Today row
+*/
+await refreshAgentTimeLogs();
+
+/*
+  Keep the agent's local time-log state synchronized with
+  the database transaction.
+
+  This is especially important for End Shift because the
+  timer reads currentOpenStatusLog from agentTimeLogs.
+*/
+if (isAgentOnly && action === "Shift Ended") {
+  const endedAt =
+    statusResult.clock_out ||
+    new Date().toISOString();
+
+  setAgentTimeLogs((currentLogs) =>
+    currentLogs.map((log) => {
+      const sameEmployee =
+        String(log.employee_id || "") ===
+        String(
+          statusResult.employee_id ||
+          selectedEmployeeTimeLogId ||
+          ""
+        );
+
+      const isOpen =
+        !log.clock_out &&
+        !log.category_end;
+
+      if (sameEmployee && isOpen) {
+        return {
+          ...log,
+          clock_out: endedAt,
+          category_end: endedAt,
+          duration_minutes:
+            statusResult.duration_minutes ??
+            log.duration_minutes ??
+            0,
+        };
+      }
+
+      return log;
+    })
+  );
+}
+setTimeEntries((currentLogs) =>
+  currentLogs.map((log) => {
+    const sameEmployee =
+      String(log.employee_id || "") ===
+      String(selectedEmployeeTimeLogId || "");
+
+    const isOpen =
+      !log.clock_out &&
+      !log.category_end;
+
+    if (sameEmployee && isOpen) {
+      const resolvedEndAt =
+        statusResult.clock_out ||
+        statusResult.category_end ||
+        new Date().toISOString();
+
+      return {
+        ...log,
+        clock_out: resolvedEndAt,
+        category_end: resolvedEndAt,
+        duration_minutes:
+          statusResult.duration_minutes ??
+          log.duration_minutes ??
+          0,
+      };
+    }
+
+    return log;
+  })
+);
 
 console.log(
   "Time-log transaction result:",
@@ -12070,10 +14157,13 @@ if (
 
   return "silent";
 }
-
 /*
-  Shift Started and Status Changed still create a new open
-  chronological time log.
+  The existing process_time_log_status RPC owns
+  the chronological status transaction.
+
+  Once it creates the new time_logs record,
+  enrich that exact database row with the
+  selected secondary disposition information.
 */
 const savedTimeEntry = {
   ...baseTimeEntry,
@@ -12097,11 +14187,24 @@ const savedTimeEntry = {
     statusResult?.status ||
     resolvedStatus,
 
+  sub_status:
+    selectedSubStatus || "",
+
+  disposition_note:
+    selectedDispositionNote || "",
+
   clock_in:
     statusResult?.clock_in ||
     baseTimeEntry.clock_in,
 };
 
+/*
+  Shift Started and Status Changed still create a new open
+  chronological time log.
+*/
+
+
+  
 const entriesToSave = [savedTimeEntry];
 
 for (const entry of entriesToSave) {
@@ -12916,50 +15019,179 @@ setTimeEntries((current) => [
 }
 
   async function saveRequest() {
-    const key = `request-${selectedEmployee.id}-${newRequest.type}-${newRequest.start_date}-${newRequest.end_date}-${newRequest.hours}-${newRequest.reason}`;
-    return runProtectedAction(key, "Request submission", async () => {
+  if (!requestEmployee) {
+    showToast(
+      "Select an employee",
+      "Please select the employee before submitting the request.",
+      "warning"
+    );
+    return null;
+  }
+
+  /*
+    Capture the employee at the moment Submit is clicked.
+
+    This prevents a filter/state refresh from changing
+    the employee while the request is being saved.
+  */
+  const requestEmployeeRecord =
+    requestEmployee;
+
+  const employeeId =
+    requestEmployeeRecord.id ||
+    requestEmployeeRecord.employee_id ||
+    "";
+
+  if (!employeeId) {
+    showToast(
+      "Employee ID missing",
+      "The selected employee does not have a valid employee ID.",
+      "danger"
+    );
+    return null;
+  }
+
+  const key =
+    `request-${employeeId}-` +
+    `${newRequest.type}-` +
+    `${newRequest.start_date}-` +
+    `${newRequest.end_date}-` +
+    `${newRequest.reason}`;
+
+  return runProtectedAction(
+    key,
+    "Request submission",
+    async () => {
       const duplicate = requests.some(
         (request) =>
-          request.employee_id === selectedEmployee.id &&
+          String(request.employee_id || "") ===
+            String(employeeId) &&
           request.type === newRequest.type &&
-          request.start_date === newRequest.start_date &&
-          request.end_date === newRequest.end_date &&
+          request.start_date ===
+            newRequest.start_date &&
+          request.end_date ===
+            newRequest.end_date &&
           request.status === "Pending" &&
-          String(request.reason || "").trim() === String(newRequest.reason || "").trim()
+          String(
+            request.reason || ""
+          ).trim() ===
+            String(
+              newRequest.reason || ""
+            ).trim()
       );
 
       if (duplicate) {
-        showToast("Duplicate request prevented", "A matching pending request already exists and was not submitted again.", "warning");
+        showToast(
+          "Duplicate request prevented",
+          "A matching pending request already exists and was not submitted again.",
+          "warning"
+        );
+
         return "silent";
       }
 
       const item = {
-        id: `REQ-${Date.now().toString().slice(-6)}`,
-        employee_id: selectedEmployee.id,
-        employee_name: selectedEmployee.full_name,
-        manager: selectedEmployee.supervisor || selectedEmployee.manager,
+        id: `REQ-${Date.now()
+          .toString()
+          .slice(-6)}`,
+
+        employee_id: employeeId,
+
+        employee_name:
+          requestEmployeeRecord.full_name,
+
+        manager:
+          requestEmployeeRecord.supervisor ||
+          requestEmployeeRecord.manager,
+
         status: "Pending",
+
         ...newRequest,
-        hours: requestPreview.requestedHours,
-        requested_days: requestPreview.requestedDays,
-        current_balance: requestPreview.currentBalance,
-        projected_balance: requestPreview.projectedBalance,
+
+        hours:
+          requestPreview.requestedHours,
+
+        requested_days:
+          requestPreview.requestedDays,
+
+        current_balance:
+          requestPreview.currentBalance,
+
+        projected_balance:
+          requestPreview.projectedBalance,
       };
-      await supabaseInsert("requests", mapRequestToSupabaseRequest(item, selectedEmployee), "Time-off request");
-      await googleAddRow("requests", mapRequestToSheet(item));
+
+      await supabaseInsert(
+        "requests",
+        mapRequestToSupabaseRequest(
+          item,
+          requestEmployeeRecord
+        ),
+        "Time-off request"
+      );
+
+      await googleAddRow(
+        "requests",
+        mapRequestToSheet(item)
+      );
+
       await supabaseInsert(
         "email_queue",
         mapEmailToSupabaseQueue({
-          recipient: selectedEmployee.manager || selectedEmployee.supervisor || "Manager",
-          subject: `Pending ${item.type} request approval`,
-          body: `${selectedEmployee.full_name} submitted a ${item.type} request from ${formatDateOnly(item.start_date)} to ${formatDateOnly(item.end_date)}. Reason: ${item.reason || "N/A"}`,
+          recipient:
+            requestEmployeeRecord.manager ||
+            requestEmployeeRecord.supervisor ||
+            "Manager",
+
+          subject:
+            `Pending ${item.type} request approval`,
+
+          body:
+            `${requestEmployeeRecord.full_name} submitted a ${item.type} request ` +
+            `from ${formatDateOnly(item.start_date)} ` +
+            `to ${formatDateOnly(item.end_date)}. ` +
+            `Reason: ${item.reason || "N/A"}`,
         }),
         "Request approval email queue"
       );
-      await googleAddRow("emailQueue", { Email_ID: cleanId("EMAIL"), Event_Type: "Request Pending Approval", To_Email: selectedEmployee.manager || selectedEmployee.supervisor || "", Employee_Email: selectedEmployee.email, Employee_Name: selectedEmployee.full_name, Request_ID: item.id, Subject: `Pending ${item.type} request approval`, Status: "Pending Send", Created_At: new Date() });
-      setRequests((current) => [item, ...current]);
-    });
-  }
+
+      await googleAddRow(
+        "emailQueue",
+        {
+          Email_ID: cleanId("EMAIL"),
+          Event_Type:
+            "Request Pending Approval",
+
+          To_Email:
+            requestEmployeeRecord.manager ||
+            requestEmployeeRecord.supervisor ||
+            "",
+
+          Employee_Email:
+            requestEmployeeRecord.email,
+
+          Employee_Name:
+            requestEmployeeRecord.full_name,
+
+          Request_ID: item.id,
+
+          Subject:
+            `Pending ${item.type} request approval`,
+
+          Status: "Pending Send",
+          Created_At: new Date(),
+        }
+      );
+
+      setRequests((current) => [
+        item,
+        ...current,
+      ]);
+
+      return item;
+    }
+  );
+}
 
   function getApprovalRiskMessage(request) {
     const requestEmployeeId = String(
@@ -16041,34 +18273,141 @@ if (startupLoading) {
               <div className="agentActions">
                 <button
                   className="primary"
-                  onClick={() => agentAction("Shift Started", "Working")}
+                  onClick={() =>
+  agentAction(
+    "Shift Started",
+    "Working",
+    "Customer / Production Work"
+  )
+}
                 >
                   Start Shift
                 </button>
 
-                <button onClick={() => agentAction("Shift Ended", "Working")}>
+                <button onClick={() => agentAction("End Shift", "Working")}>
                   End Shift
                 </button>
               </div>
 
               <div className="currentStatus">
-                <label>
-                  <span>Current Status / Disposition</span>
-                  <select value={agentStatus} onChange={(e) => setAgentStatus(e.target.value)}>
-                    <TimeCategoryOptions />
-                  </select>
-                </label>
-                <button className="primary" onClick={() => agentAction("Status Changed", agentStatus)}>
-                  Log Status
-                </button>
-                <button
-                  disabled
-                  className="disabledBtn otDisabledBtn"
-                  title="Manual overtime is disabled. Overtime is created automatically after the scheduled shift end."
-                >
-                  Automatic OT Only
-                </button>
-              </div>
+  <label>
+    <span>
+      Current Status / Disposition
+    </span>
+
+    <select
+      value={agentStatus}
+      onChange={(event) =>
+        setAgentStatus(
+          event.target.value
+        )
+      }
+    >
+      <AgentTimeCategoryOptions
+        accessRole={
+          dispositionAccessRole
+        }
+      />
+    </select>
+  </label>
+
+  {agentSubStatusOptions.length > 0 && (
+    <label>
+      <span>
+        {isSecondaryRequired(
+          agentStatus
+        )
+          ? "Reason / Sub-Classification *"
+          : "Work Type / Sub-Classification"}
+      </span>
+
+      <select
+        value={agentSubStatus}
+        onChange={(event) =>
+          setAgentSubStatus(
+            event.target.value
+          )
+        }
+      >
+        {!agentDefaultSubStatus && (
+          <option value="">
+            Select reason
+          </option>
+        )}
+
+        {agentDefaultSubStatus &&
+          !agentSubStatusOptions.includes(
+            agentDefaultSubStatus
+          ) && (
+            <option
+              value={
+                agentDefaultSubStatus
+              }
+            >
+              {
+                agentDefaultSubStatus
+              }
+              {" (Default)"}
+            </option>
+          )}
+
+        {agentSubStatusOptions.map(
+          (option) => (
+            <option
+              key={option}
+              value={option}
+            >
+              {option}
+            </option>
+          )
+        )}
+      </select>
+    </label>
+  )}
+
+  {shouldShowDispositionNote(
+    agentStatus
+  ) && (
+    <label>
+      <span>
+        Ticket / Note
+      </span>
+
+      <input
+        type="text"
+        value={
+          agentDispositionNote
+        }
+        onChange={(event) =>
+          setAgentDispositionNote(
+            event.target.value
+          )
+        }
+        placeholder="Optional ticket or system issue note"
+      />
+    </label>
+  )}
+
+  <button
+    className="primary"
+    onClick={() =>
+      agentAction(
+        "Status Changed",
+        agentStatus
+      )
+    }
+  >
+    Log Status
+  </button>
+
+  <button
+    disabled
+    className="disabledBtn otDisabledBtn"
+    title="Manual overtime is disabled. Overtime is created automatically after the scheduled shift end."
+  >
+    Automatic OT Only
+  </button>
+</div>
               <CurrentStatusTimer
   openStatusLog={currentOpenStatusLog}
 />
@@ -16084,7 +18423,11 @@ if (startupLoading) {
                 </div>
                 <DailyAttendanceSummary
   employee={selectedEmployee}
-  timeEntries={timeEntries}
+  timeEntries={
+  tab === "agent"
+    ? agentTimeLogs
+    : timeEntries
+}
   schedule={agentScheduleRow?.schedule}
   employeeDate={selectedEmployeeDate}
 />
@@ -16590,7 +18933,57 @@ formatHours(
         {!isAgentOnly && tab === "requests" && (
           <section className="requestsPage">
             <div className="grid split reverse">
-              <Card title="Submit PTO / VTO / leave"><p className="helperText">PTO, VTO, and sick requests are approved in full days. Select the start and end dates and the app calculates the number of requested days automatically.</p><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{filteredVisibleEmployees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{REQUEST_TYPE_OPTIONS.map((x) => <option key={x}>{x}</option>)}</select><input type="date" value={newRequest.start_date} onChange={(e) => setNewRequest({ ...newRequest, start_date: e.target.value, end_date: e.target.value })} /><input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} /><input type="number" min="0" step="0.25" title="Requests are now approved in full days." value={newRequest.start_date !== newRequest.end_date ? calculateRequestHours(newRequest) : newRequest.hours} disabled={true} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} /><input placeholder="Reason" value={newRequest.reason} onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })} /><button className="primary wide" onClick={saveRequest}>Submit request</button></FormGrid></Card>
+              <Card title="Submit PTO / VTO / leave"><p className="helperText">PTO, VTO, and sick requests are approved in full days. Select the start and end dates and the app calculates the number of requested days automatically.</p><FormGrid><select
+  value={requestEmployeeId}
+  onChange={(e) => {
+    const employeeId =
+      e.target.value;
+
+    setRequestEmployeeId(
+      employeeId
+    );
+
+    const employee =
+      employees.find(
+        (item) =>
+          String(
+            item.id ||
+            item.employee_id ||
+            ""
+          ) ===
+          String(employeeId)
+      );
+
+    if (employee) {
+      setFilters((current) => ({
+        ...current,
+        employee:
+          employee.full_name,
+      }));
+    }
+  }}
+>
+  <option value="">
+    Select employee
+  </option>
+
+  {visibleEmployees.map(
+    (employee) => (
+      <option
+        key={
+          employee.id ||
+          employee.employee_id
+        }
+        value={
+          employee.id ||
+          employee.employee_id
+        }
+      >
+        {employee.full_name}
+      </option>
+    )
+  )}
+</select><select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{REQUEST_TYPE_OPTIONS.map((x) => <option key={x}>{x}</option>)}</select><input type="date" value={newRequest.start_date} onChange={(e) => setNewRequest({ ...newRequest, start_date: e.target.value, end_date: e.target.value })} /><input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} /><input type="number" min="0" step="0.25" title="Requests are now approved in full days." value={requestPreview.requestedDays}disabled={true} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} /><input placeholder="Reason" value={newRequest.reason} onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })} /><button className="primary wide" onClick={saveRequest}>Submit request</button></FormGrid></Card>
 <div>
   <Card title="Employee Vacation Balance">
   <p className="helperText">
@@ -17331,6 +19724,48 @@ rows={filteredRequests.map((r) => [
   </label>
 
   <label>
+  Start Date
+  <input
+    type="date"
+    value={payrollStartDate}
+    max={payrollEndDate || undefined}
+    onChange={(event) => {
+      const value = event.target.value;
+
+      setPayrollStartDate(value);
+
+      if (
+        payrollEndDate &&
+        value > payrollEndDate
+      ) {
+        setPayrollEndDate(value);
+      }
+    }}
+  />
+</label>
+
+<label>
+  End Date
+  <input
+    type="date"
+    value={payrollEndDate}
+    min={payrollStartDate || undefined}
+    onChange={(event) => {
+      const value = event.target.value;
+
+      setPayrollEndDate(value);
+
+      if (
+        payrollStartDate &&
+        value < payrollStartDate
+      ) {
+        setPayrollStartDate(value);
+      }
+    }}
+  />
+</label>
+
+  <label>
     LOB
     <select
       value={filters.lob}
@@ -17644,6 +20079,440 @@ rows={filteredRequests.map((r) => [
                 <button onClick={exportReportingCsv}><Download size={16} /> Export Summary CSV</button>
               </div>
             </div>
+            <Card title="Productivity & Business Utilization">
+  <p className="helperText">
+    Productivity reporting from{" "}
+    {productivityFilters.startDate} through{" "}
+    {productivityFilters.endDate}.
+    Productive time includes Working and approved
+    productive activity. Business Utilization also
+    recognizes approved auxiliary business time.
+  </p>
+
+  <div
+    style={{
+      display: "grid",
+      gridTemplateColumns:
+        "repeat(auto-fit, minmax(150px, 1fr))",
+      gap: "12px",
+      marginBottom: "18px",
+    }}
+  >
+    <Info
+      label="Total Logged"
+      value={`${productivitySummary.totalLoggedHours.toFixed(
+        2
+      )}h`}
+    />
+
+    <Info
+      label="Productive"
+      value={`${productivitySummary.productiveHours.toFixed(
+        2
+      )}h`}
+    />
+
+    <Info
+      label="Unproductive"
+      value={`${productivitySummary.unproductiveHours.toFixed(
+        2
+      )}h`}
+    />
+
+    <Info
+      label="Auxiliary"
+      value={`${productivitySummary.auxiliaryHours.toFixed(
+        2
+      )}h`}
+    />
+
+    <Info
+      label="Productivity %"
+      value={`${productivitySummary.productivityPercentage.toFixed(
+        2
+      )}%`}
+    />
+
+    <Info
+      label="Business Utilization %"
+      value={`${productivitySummary.businessUtilizationPercentage.toFixed(
+        2
+      )}%`}
+    />
+
+    <Info
+      label="Business Utilized"
+      value={`${productivitySummary.businessUtilizedHours.toFixed(
+        2
+      )}h`}
+    />
+  </div>
+
+  {productivityLoading && (
+    <p className="helperText">
+      Loading productivity reporting...
+    </p>
+  )}
+
+  {productivityError && (
+    <p
+      className="helperText"
+      style={{
+        color: "#b42318",
+        fontWeight: 600,
+      }}
+    >
+      {productivityError}
+    </p>
+  )}
+
+  {!productivityLoading &&
+    !productivityError && (
+      <Table
+        headers={[
+          "Date",
+          "Employee",
+          "LOB",
+          "Department",
+          "Logged",
+          "Productive",
+          "Unproductive",
+          "Auxiliary",
+          "Productivity %",
+          "Business Utilization %",
+          "Break",
+          "Bathroom",
+          "Meeting",
+          "Training",
+          "Coaching",
+"System Issue",
+"Details",
+]}
+        rows={productivityRows.map((row) => [
+          row.activity_date || "—",
+
+          row.employee_name || "—",
+
+          row.lob || "—",
+
+          row.department || "—",
+
+          `${Number(
+            row.total_logged_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.productive_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.unproductive_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.auxiliary_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.productivity_percentage || 0
+          ).toFixed(2)}%`,
+
+          `${Number(
+            row.business_utilization_percentage ||
+              0
+          ).toFixed(2)}%`,
+
+          `${Number(
+            row.break_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.bathroom_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.meeting_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+            row.training_hours || 0
+          ).toFixed(2)}h`,
+
+          `${Number(
+  row.coaching_hours || 0
+).toFixed(2)}h`,
+
+`${Number(
+  row.system_issue_hours || 0
+).toFixed(2)}h`,
+
+<button
+  type="button"
+  className="btn"
+  onClick={() =>
+    openProductivityDetail(row)
+  }
+>
+  View More
+</button>,
+])}
+      />
+    )}
+</Card>
+{productivityDetailOpen && (
+  <div
+    style={{
+      position: "fixed",
+      inset: 0,
+      background: "rgba(0,0,0,0.45)",
+      zIndex: 9999,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      padding: "24px",
+    }}
+    onClick={() => setProductivityDetailOpen(false)}
+  >
+    <div
+      style={{
+        background: "#ffffff",
+        borderRadius: "16px",
+        width: "min(1200px, 96vw)",
+        maxHeight: "90vh",
+        overflowY: "auto",
+        padding: "24px",
+        boxShadow: "0 20px 60px rgba(0,0,0,0.25)",
+      }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          gap: "16px",
+          alignItems: "flex-start",
+          marginBottom: "20px",
+        }}
+      >
+        <div>
+          <h2 style={{ margin: 0 }}>
+            Employee Productivity Deep Dive
+          </h2>
+
+          <p style={{ marginTop: "6px" }}>
+            <strong>
+              {productivityDetailRow?.employee_name || "Employee"}
+            </strong>
+            {" · "}
+            {productivityDetailRow?.activity_date || "—"}
+            {" · "}
+            {productivityDetailRow?.lob || "—"}
+            {" · "}
+            {productivityDetailRow?.department || "—"}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setProductivityDetailOpen(false)}
+        >
+          Close
+        </button>
+      </div>
+
+      {productivityDetailLoading && (
+        <p>Loading employee details...</p>
+      )}
+
+      {productivityDetailError && (
+        <p style={{ color: "#b42318" }}>
+          {productivityDetailError}
+        </p>
+      )}
+
+      {!productivityDetailLoading &&
+        !productivityDetailError && (
+          <>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(auto-fit, minmax(150px, 1fr))",
+                gap: "10px",
+                marginBottom: "18px",
+              }}
+            >
+              <div className="metricCard">
+                <strong>Total Logged</strong>
+                <div>
+                  {Number(
+                    productivityDetailRow?.total_logged_hours || 0
+                  ).toFixed(2)}
+                  h
+                </div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Productive</strong>
+                <div>
+                  {Number(
+                    productivityDetailRow?.productive_hours || 0
+                  ).toFixed(2)}
+                  h
+                </div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Unproductive</strong>
+                <div>
+                  {Number(
+                    productivityDetailRow?.unproductive_hours || 0
+                  ).toFixed(2)}
+                  h
+                </div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Auxiliary</strong>
+                <div>
+                  {Number(
+                    productivityDetailRow?.auxiliary_hours || 0
+                  ).toFixed(2)}
+                  h
+                </div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Productivity</strong>
+                <div>
+                  {Number(
+                    productivityDetailRow?.productivity_percentage || 0
+                  ).toFixed(2)}
+                  %
+                </div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Business Utilization</strong>
+                <div>
+                  {Number(
+                    productivityDetailRow
+                      ?.business_utilization_percentage || 0
+                  ).toFixed(2)}
+                  %
+                </div>
+              </div>
+            </div>
+
+            <h3>Disposition Counts</h3>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(auto-fit, minmax(140px, 1fr))",
+                gap: "10px",
+                marginBottom: "22px",
+              }}
+            >
+              <div className="metricCard">
+                <strong>All Events</strong>
+                <div>{productivityDetailStats.totalEvents}</div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Bathroom</strong>
+                <div>{productivityDetailStats.bathroomCount}</div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Break</strong>
+                <div>{productivityDetailStats.breakCount}</div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Meeting</strong>
+                <div>{productivityDetailStats.meetingCount}</div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Training</strong>
+                <div>{productivityDetailStats.trainingCount}</div>
+              </div>
+
+              <div className="metricCard">
+                <strong>Coaching</strong>
+                <div>{productivityDetailStats.coachingCount}</div>
+              </div>
+
+              <div className="metricCard">
+                <strong>System Issue</strong>
+                <div>{productivityDetailStats.systemIssueCount}</div>
+              </div>
+            </div>
+
+            <h3>Disposition & Sub-Category Usage</h3>
+
+            <Table
+              headers={[
+                "Disposition",
+                "Sub-Category",
+                "Count",
+                "Total Time",
+                "% of Logged Time",
+              ]}
+              rows={productivityDetailStats.breakdown.map(
+                (item) => {
+                  const hours = item.minutes / 60;
+
+                  const totalLogged = Number(
+                    productivityDetailRow?.total_logged_hours || 0
+                  );
+
+                  const percentage =
+                    totalLogged > 0
+                      ? (hours / totalLogged) * 100
+                      : 0;
+
+                  return [
+                    item.status,
+                    item.subStatus,
+                    item.count,
+                    `${hours.toFixed(2)}h`,
+                    `${percentage.toFixed(2)}%`,
+                  ];
+                }
+              )}
+            />
+
+            <h3 style={{ marginTop: "24px" }}>
+              Individual Disposition Entries
+            </h3>
+
+            <Table
+              headers={[
+                "Disposition",
+                "Sub-Category",
+                "Minutes",
+                "Hours",
+                "Classification",
+                "Auxiliary",
+              ]}
+              rows={productivityDetailRows.map((log) => [
+                log.status || "—",
+                log.sub_status || "No sub-category",
+                Number(log.duration_minutes || 0).toFixed(0),
+                Number(log.duration_hours || 0).toFixed(2),
+                log.productivity_classification || "—",
+                log.is_auxiliary ? "Yes" : "No",
+              ])}
+            />
+          </>
+        )}
+    </div>
+  </div>
+)}
             <Card title="Workforce Adherence & Activity">
   <p className="helperText">
     Live operational reporting for{" "}
@@ -18853,9 +21722,20 @@ function ActivityList({ activities }) {
             <strong>{a.action}</strong>
           </div>
           <div>
-            <span>Status</span>
-            <Badge muted>{a.status}</Badge>
-          </div>
+  <span>Status</span>
+  <Badge muted>{a.status}</Badge>
+
+  {a.sub_status && (
+    <small
+      style={{
+        display: "block",
+        marginTop: "4px",
+      }}
+    >
+      {a.sub_status}
+    </small>
+  )}
+</div>
           <div>
             <span>Time</span>
             <strong>{formatMilitaryTime(a.time)}</strong>
