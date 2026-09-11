@@ -6809,6 +6809,8 @@ useEffect(() => {
 ]);
   const [selectedEmployeeId, setSelectedEmployeeId] =
   useState("");
+  const [requestEmployeeId, setRequestEmployeeId] =
+  useState("");
   const [
   selectedBalanceEmployeeIds,
   setSelectedBalanceEmployeeIds
@@ -6829,6 +6831,60 @@ const selectedEmployee =
       ) ||
       currentUser ||
       null;
+      const requestEmployee =
+  isAgentOnly
+    ? currentUser
+    : employees.find(
+        (employee) =>
+          String(
+            employee.id ||
+              employee.employee_id ||
+              ""
+          ) ===
+          String(
+            requestEmployeeId || ""
+          )
+      ) ||
+      null;
+
+useEffect(() => {
+  if (isAgentOnly) {
+    setRequestEmployeeId(
+      currentUser?.id ||
+      currentUser?.employee_id ||
+      ""
+    );
+    return;
+  }
+
+  if (filters.employee === "All") {
+    setRequestEmployeeId("");
+    return;
+  }
+
+  const matchedEmployee =
+    employees.find(
+      (employee) =>
+        String(
+          employee.full_name || ""
+        ).trim() ===
+        String(
+          filters.employee || ""
+        ).trim()
+    );
+
+  setRequestEmployeeId(
+    matchedEmployee?.id ||
+      matchedEmployee?.employee_id ||
+      ""
+  );
+}, [
+  isAgentOnly,
+  currentUser?.id,
+  currentUser?.employee_id,
+  filters.employee,
+  employees,
+]);
 
 /*
   The app currently uses "Approvals" as the
@@ -11288,19 +11344,30 @@ const displayedTimeLogs =
   );
 
   const requestPreview = useMemo(() => {
-    const requestedDays = calculateRequestHours(
-  newRequest,
-  selectedEmployee
-);
-    const currentBalance = getBalance(selectedEmployee, newRequest.type);
-    return {
-      requestedHours: requestedDays,
-      requestedDays,
-      currentBalance,
-      projectedBalance: currentBalance === null ? null : Math.max(0, currentBalance - requestedDays),
-      impactsBalance: currentBalance !== null,
-    };
-  }, [newRequest, selectedEmployee]);
+  const requestedDays = calculateRequestHours(
+    newRequest,
+    requestEmployee
+  );
+
+  const currentBalance = getBalance(
+    requestEmployee,
+    newRequest.type
+  );
+
+  return {
+    requestedHours: requestedDays,
+    requestedDays,
+    currentBalance,
+    projectedBalance:
+      currentBalance === null
+        ? null
+        : Math.max(
+            0,
+            currentBalance - requestedDays
+          ),
+    impactsBalance: currentBalance !== null,
+  };
+}, [newRequest, requestEmployee]);
 
   const stats = useMemo(() => {
     const total = filteredTime.reduce((sum, t) => sum + minutesBetween(t.category_start, t.category_end), 0);
@@ -14447,50 +14514,179 @@ setTimeEntries((current) => [
 }
 
   async function saveRequest() {
-    const key = `request-${selectedEmployee.id}-${newRequest.type}-${newRequest.start_date}-${newRequest.end_date}-${newRequest.hours}-${newRequest.reason}`;
-    return runProtectedAction(key, "Request submission", async () => {
+  if (!requestEmployee) {
+    showToast(
+      "Select an employee",
+      "Please select the employee before submitting the request.",
+      "warning"
+    );
+    return null;
+  }
+
+  /*
+    Capture the employee at the moment Submit is clicked.
+
+    This prevents a filter/state refresh from changing
+    the employee while the request is being saved.
+  */
+  const requestEmployeeRecord =
+    requestEmployee;
+
+  const employeeId =
+    requestEmployeeRecord.id ||
+    requestEmployeeRecord.employee_id ||
+    "";
+
+  if (!employeeId) {
+    showToast(
+      "Employee ID missing",
+      "The selected employee does not have a valid employee ID.",
+      "danger"
+    );
+    return null;
+  }
+
+  const key =
+    `request-${employeeId}-` +
+    `${newRequest.type}-` +
+    `${newRequest.start_date}-` +
+    `${newRequest.end_date}-` +
+    `${newRequest.reason}`;
+
+  return runProtectedAction(
+    key,
+    "Request submission",
+    async () => {
       const duplicate = requests.some(
         (request) =>
-          request.employee_id === selectedEmployee.id &&
+          String(request.employee_id || "") ===
+            String(employeeId) &&
           request.type === newRequest.type &&
-          request.start_date === newRequest.start_date &&
-          request.end_date === newRequest.end_date &&
+          request.start_date ===
+            newRequest.start_date &&
+          request.end_date ===
+            newRequest.end_date &&
           request.status === "Pending" &&
-          String(request.reason || "").trim() === String(newRequest.reason || "").trim()
+          String(
+            request.reason || ""
+          ).trim() ===
+            String(
+              newRequest.reason || ""
+            ).trim()
       );
 
       if (duplicate) {
-        showToast("Duplicate request prevented", "A matching pending request already exists and was not submitted again.", "warning");
+        showToast(
+          "Duplicate request prevented",
+          "A matching pending request already exists and was not submitted again.",
+          "warning"
+        );
+
         return "silent";
       }
 
       const item = {
-        id: `REQ-${Date.now().toString().slice(-6)}`,
-        employee_id: selectedEmployee.id,
-        employee_name: selectedEmployee.full_name,
-        manager: selectedEmployee.supervisor || selectedEmployee.manager,
+        id: `REQ-${Date.now()
+          .toString()
+          .slice(-6)}`,
+
+        employee_id: employeeId,
+
+        employee_name:
+          requestEmployeeRecord.full_name,
+
+        manager:
+          requestEmployeeRecord.supervisor ||
+          requestEmployeeRecord.manager,
+
         status: "Pending",
+
         ...newRequest,
-        hours: requestPreview.requestedHours,
-        requested_days: requestPreview.requestedDays,
-        current_balance: requestPreview.currentBalance,
-        projected_balance: requestPreview.projectedBalance,
+
+        hours:
+          requestPreview.requestedHours,
+
+        requested_days:
+          requestPreview.requestedDays,
+
+        current_balance:
+          requestPreview.currentBalance,
+
+        projected_balance:
+          requestPreview.projectedBalance,
       };
-      await supabaseInsert("requests", mapRequestToSupabaseRequest(item, selectedEmployee), "Time-off request");
-      await googleAddRow("requests", mapRequestToSheet(item));
+
+      await supabaseInsert(
+        "requests",
+        mapRequestToSupabaseRequest(
+          item,
+          requestEmployeeRecord
+        ),
+        "Time-off request"
+      );
+
+      await googleAddRow(
+        "requests",
+        mapRequestToSheet(item)
+      );
+
       await supabaseInsert(
         "email_queue",
         mapEmailToSupabaseQueue({
-          recipient: selectedEmployee.manager || selectedEmployee.supervisor || "Manager",
-          subject: `Pending ${item.type} request approval`,
-          body: `${selectedEmployee.full_name} submitted a ${item.type} request from ${formatDateOnly(item.start_date)} to ${formatDateOnly(item.end_date)}. Reason: ${item.reason || "N/A"}`,
+          recipient:
+            requestEmployeeRecord.manager ||
+            requestEmployeeRecord.supervisor ||
+            "Manager",
+
+          subject:
+            `Pending ${item.type} request approval`,
+
+          body:
+            `${requestEmployeeRecord.full_name} submitted a ${item.type} request ` +
+            `from ${formatDateOnly(item.start_date)} ` +
+            `to ${formatDateOnly(item.end_date)}. ` +
+            `Reason: ${item.reason || "N/A"}`,
         }),
         "Request approval email queue"
       );
-      await googleAddRow("emailQueue", { Email_ID: cleanId("EMAIL"), Event_Type: "Request Pending Approval", To_Email: selectedEmployee.manager || selectedEmployee.supervisor || "", Employee_Email: selectedEmployee.email, Employee_Name: selectedEmployee.full_name, Request_ID: item.id, Subject: `Pending ${item.type} request approval`, Status: "Pending Send", Created_At: new Date() });
-      setRequests((current) => [item, ...current]);
-    });
-  }
+
+      await googleAddRow(
+        "emailQueue",
+        {
+          Email_ID: cleanId("EMAIL"),
+          Event_Type:
+            "Request Pending Approval",
+
+          To_Email:
+            requestEmployeeRecord.manager ||
+            requestEmployeeRecord.supervisor ||
+            "",
+
+          Employee_Email:
+            requestEmployeeRecord.email,
+
+          Employee_Name:
+            requestEmployeeRecord.full_name,
+
+          Request_ID: item.id,
+
+          Subject:
+            `Pending ${item.type} request approval`,
+
+          Status: "Pending Send",
+          Created_At: new Date(),
+        }
+      );
+
+      setRequests((current) => [
+        item,
+        ...current,
+      ]);
+
+      return item;
+    }
+  );
+}
 
   function getApprovalRiskMessage(request) {
     const requestEmployeeId = String(
@@ -18228,7 +18424,57 @@ formatHours(
         {!isAgentOnly && tab === "requests" && (
           <section className="requestsPage">
             <div className="grid split reverse">
-              <Card title="Submit PTO / VTO / leave"><p className="helperText">PTO, VTO, and sick requests are approved in full days. Select the start and end dates and the app calculates the number of requested days automatically.</p><FormGrid><select value={selectedEmployeeId} onChange={(e) => setSelectedEmployeeId(e.target.value)}>{filteredVisibleEmployees.map((e) => <option key={e.id} value={e.id}>{e.full_name}</option>)}</select><select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{REQUEST_TYPE_OPTIONS.map((x) => <option key={x}>{x}</option>)}</select><input type="date" value={newRequest.start_date} onChange={(e) => setNewRequest({ ...newRequest, start_date: e.target.value, end_date: e.target.value })} /><input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} /><input type="number" min="0" step="0.25" title="Requests are now approved in full days." value={newRequest.start_date !== newRequest.end_date ? calculateRequestHours(newRequest) : newRequest.hours} disabled={true} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} /><input placeholder="Reason" value={newRequest.reason} onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })} /><button className="primary wide" onClick={saveRequest}>Submit request</button></FormGrid></Card>
+              <Card title="Submit PTO / VTO / leave"><p className="helperText">PTO, VTO, and sick requests are approved in full days. Select the start and end dates and the app calculates the number of requested days automatically.</p><FormGrid><select
+  value={requestEmployeeId}
+  onChange={(e) => {
+    const employeeId =
+      e.target.value;
+
+    setRequestEmployeeId(
+      employeeId
+    );
+
+    const employee =
+      employees.find(
+        (item) =>
+          String(
+            item.id ||
+            item.employee_id ||
+            ""
+          ) ===
+          String(employeeId)
+      );
+
+    if (employee) {
+      setFilters((current) => ({
+        ...current,
+        employee:
+          employee.full_name,
+      }));
+    }
+  }}
+>
+  <option value="">
+    Select employee
+  </option>
+
+  {visibleEmployees.map(
+    (employee) => (
+      <option
+        key={
+          employee.id ||
+          employee.employee_id
+        }
+        value={
+          employee.id ||
+          employee.employee_id
+        }
+      >
+        {employee.full_name}
+      </option>
+    )
+  )}
+</select><select value={newRequest.type} onChange={(e) => setNewRequest({ ...newRequest, type: e.target.value })}>{REQUEST_TYPE_OPTIONS.map((x) => <option key={x}>{x}</option>)}</select><input type="date" value={newRequest.start_date} onChange={(e) => setNewRequest({ ...newRequest, start_date: e.target.value, end_date: e.target.value })} /><input type="date" value={newRequest.end_date} onChange={(e) => setNewRequest({ ...newRequest, end_date: e.target.value })} /><input type="number" min="0" step="0.25" title="Requests are now approved in full days." value={requestPreview.requestedDays}disabled={true} onChange={(e) => setNewRequest({ ...newRequest, hours: e.target.value })} /><input placeholder="Reason" value={newRequest.reason} onChange={(e) => setNewRequest({ ...newRequest, reason: e.target.value })} /><button className="primary wide" onClick={saveRequest}>Submit request</button></FormGrid></Card>
 <div>
   <Card title="Employee Vacation Balance">
   <p className="helperText">
