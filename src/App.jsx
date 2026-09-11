@@ -8324,12 +8324,12 @@ async function loadCountryHolidays() {
 
   async function refreshLiveData() {
   /*
-    Load independent reference data in parallel.
+  Load independent reference data in parallel.
 
-    This keeps the same data and same historical
-    time-log requirements, but avoids waiting for
-    each request one after another.
-  */
+  Time logs are handled separately by the
+  manager realtime loader to avoid duplicate
+  historical time-log queries.
+*/
   const [
     loadedExceptions,
     loadedHolidays,
@@ -8347,93 +8347,7 @@ async function loadCountryHolidays() {
   ]);
 
   if (supabase) {
-  let historicalLogsQuery = supabase
-  .from("time_logs")
-  .select("*")
-  .order("clock_in", {
-    ascending: false,
-  });
-
-if (
-  filters.employee !== "All" &&
-  filteredTimeLogEmployeeId
-) {
-  historicalLogsQuery =
-    historicalLogsQuery.eq(
-      "employee_id",
-      String(filteredTimeLogEmployeeId)
-    );
-}
-
-if (filters.startDate) {
-  historicalLogsQuery =
-    historicalLogsQuery.gte(
-      "clock_in",
-      filters.startDate
-    );
-}
-
-if (filters.endDate) {
-  const nextDay =
-    addDaysToDateKey(
-      filters.endDate,
-      1
-    );
-
-  historicalLogsQuery =
-    historicalLogsQuery.lt(
-      "clock_in",
-      nextDay
-    );
-}
-
-const {
-  data: latestLogs,
-  error: logsError,
-} = await historicalLogsQuery.limit(5000);
-console.log("FIRST LOG", latestLogs?.[0]);
-console.log("FIRST DATE", latestLogs?.[0]?.date);
-
-
-  if (!logsError) {
-    setTimeEntries(
-  (latestLogs || [])
-    .map((log) => ({
-  ...log,
-
-  supabase_id: log.id,
-
-  id:
-    log.app_log_id ||
-    log.id,
-
-  category:
-    log.category ||
-    log.status ||
-    "Working",
-
-  approved:
-    log.approval_status ||
-    "Pending",
-
-  date:
-        log.date ||
-        String(
-          log.clock_in ||
-          log.category_start ||
-          log.created_at ||
-          ""
-        ).slice(0, 10),
-    }))
-    .sort((a, b) => {
-      const aStamp = `${a.date || ""} ${a.time || ""} ${a.created_at || ""}`;
-      const bStamp = `${b.date || ""} ${b.time || ""} ${b.created_at || ""}`;
-      return bStamp.localeCompare(aStamp);
-    })
-);
-  } else {
-    console.warn("Time logs refresh failed:", logsError);
-  }
+  
 
   const { data: latestRequests, error: requestsError } = await supabase
     .from("requests")
@@ -8531,7 +8445,7 @@ if (breakRowsError) {
   if (loadedSupabase) {
     showToast(
   "Live data refreshed",
-  "Latest Supabase authentication, request, approval, and time log data loaded. Schedules and balances remain sourced from Google Sheets.",
+  "Latest Supabase authentication, request, approval, and reference data loaded. Time logs remain synchronized through the realtime manager loader. Schedules and balances remain sourced from Google Sheets.",
   "success"
 );
     return;
