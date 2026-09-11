@@ -6814,18 +6814,29 @@ useEffect(() => {
 
   setAdminMode(hasManagementAccess);
 
-  if (effectiveAccess === "Executive") {
-    setTab("dashboard");
-    return;
-  }
+ if (effectiveAccess === "Executive") {
+  setTab("dashboard");
+  return;
+}
 
-  if (hasManagementAccess) {
-    setTab((currentTab) =>
-      currentTab === "agent"
-        ? "dashboard"
-        : currentTab
-    );
-  }
+if (hasManagementAccess) {
+  setTab((currentTab) =>
+    currentTab === "agent"
+      ? "dashboard"
+      : currentTab
+  );
+  return;
+}
+
+/*
+  If the user resolves as an employee / agent,
+  always return them to their Agent Portal.
+
+  This prevents a temporary management role during
+  startup or HMR from leaving them on an inaccessible
+  dashboard tab with a blank screen.
+*/
+setTab("agent");
 }, [
   isAuthenticated,
   currentUser?.access_level,

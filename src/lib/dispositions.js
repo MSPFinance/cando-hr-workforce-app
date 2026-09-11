@@ -62,6 +62,7 @@ export const LEADERSHIP_ROLES = [
   "Business Director",
   "Executive",
   "COO",
+  "Admin",
 ];
 
 export function isDispositionLeadership(
@@ -94,13 +95,14 @@ export function isDispositionLeadership(
   }
 
   return (
-    role.includes("team leader") ||
-    role.includes("manager") ||
-    role.includes("supervisor") ||
-    role.includes("executive") ||
-    role.includes("director") ||
-    role === "coo"
-  );
+  role.includes("team leader") ||
+  role.includes("manager") ||
+  role.includes("supervisor") ||
+  role.includes("executive") ||
+  role.includes("director") ||
+  role === "coo" ||
+  role === "admin"
+);
 }
 
 
@@ -400,7 +402,7 @@ export const DISPOSITION_RULES = [
   // ==========================================================
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
     departments: [ALL],
 
     status: "Meeting",
@@ -421,7 +423,7 @@ export const DISPOSITION_RULES = [
   }),
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
     departments: [ALL],
 
     status: "Meeting",
@@ -442,7 +444,7 @@ export const DISPOSITION_RULES = [
   }),
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
     departments: [ALL],
 
     status: "Meeting",
@@ -463,7 +465,7 @@ export const DISPOSITION_RULES = [
   }),
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
     departments: [ALL],
 
     status: "Meeting",
@@ -484,7 +486,7 @@ export const DISPOSITION_RULES = [
   }),
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
     departments: [ALL],
 
     status: "Meeting",
@@ -510,7 +512,7 @@ export const DISPOSITION_RULES = [
   // ==========================================================
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
     departments: [ALL],
 
     status: "Training",
@@ -536,7 +538,7 @@ export const DISPOSITION_RULES = [
   // ==========================================================
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
     departments: [ALL],
 
     status: "Coaching",
@@ -557,7 +559,7 @@ export const DISPOSITION_RULES = [
   }),
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
     departments: [ALL],
 
     status: "Coaching",
@@ -578,7 +580,7 @@ export const DISPOSITION_RULES = [
   }),
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
     departments: [ALL],
 
     status: "Coaching",
@@ -604,7 +606,7 @@ export const DISPOSITION_RULES = [
   // ==========================================================
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
     departments: [ALL],
 
     status: "System Issue",
@@ -625,7 +627,7 @@ export const DISPOSITION_RULES = [
   }),
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
     departments: [ALL],
 
     status: "System Issue",
@@ -646,7 +648,7 @@ export const DISPOSITION_RULES = [
   }),
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
     departments: [ALL],
 
     status: "System Issue",
@@ -667,7 +669,7 @@ export const DISPOSITION_RULES = [
   }),
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
     departments: [ALL],
 
     status: "System Issue",
@@ -688,7 +690,7 @@ export const DISPOSITION_RULES = [
   }),
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
     departments: [ALL],
 
     status: "System Issue",
@@ -714,7 +716,7 @@ export const DISPOSITION_RULES = [
   // ==========================================================
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
 
     departments: [
       "Documents",
@@ -822,7 +824,7 @@ export const DISPOSITION_RULES = [
   // ==========================================================
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
 
     departments: [
       "Emails",
@@ -1030,7 +1032,7 @@ export const DISPOSITION_RULES = [
   // ==========================================================
 
   disposition({
-    lobs: GODAY_LC,
+    lobs: [ALL],
     departments: [ALL],
 
     status: "Working",
