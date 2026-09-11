@@ -8694,7 +8694,13 @@ useEffect(() => {
 ]);
 
 useEffect(() => {
-  if (!supabase) return undefined;
+  if (
+  !supabase ||
+  !isAuthenticated ||
+  isAgentOnly
+) {
+  return undefined;
+}
 
   const reloadLiveLogsOnly = async () => {
     let liveLogsQuery = supabase
@@ -8991,6 +8997,8 @@ return () => {
   supabase.removeChannel(channel);
 };
 }, [
+  isAuthenticated,
+  isAgentOnly,
   filters.employee,
   filters.startDate,
   filters.endDate,
