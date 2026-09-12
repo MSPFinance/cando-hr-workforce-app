@@ -2263,6 +2263,11 @@ function getStableSchedule(
       second_break_end: "Not Available",
       off_days: "",
       sub_department: "",
+      is_scheduled: false,
+      schedule_version_id: "",
+      schedule_effective_from: "",
+      schedule_effective_to: "",
+      schedule_source: "",
     };
   }
 
@@ -2275,85 +2280,112 @@ function getStableSchedule(
         todayDayName(employeeTimeZone)
     );
 
+  const targetScheduleDate =
+    formatDateOnly(scheduleDate) ||
+    getEmployeeDateKey(employee);
+
+    const targetScheduleDateObject =
+  new Date(
+    `${targetScheduleDate}T12:00:00Z`
+  );
+
   const employeeIdentifierCandidates = [
-  employee?.employee_id,
-  employee?.Employee_ID,
-  employee?.id,
-  employee?.supabase_employee_id,
-]
-  .map((value) =>
-    String(value || "").trim().toLowerCase()
-  )
-  .filter(Boolean);
+    employee?.employee_id,
+    employee?.Employee_ID,
+    employee?.id,
+    employee?.supabase_employee_id,
+  ]
+    .map((value) =>
+      String(value || "")
+        .trim()
+        .toLowerCase()
+    )
+    .filter(Boolean);
 
   const normalizedEmployeeId =
-  employeeIdentifierCandidates[0] || "";
+    employeeIdentifierCandidates[0] || "";
 
-const matchingScheduleException =
-  Array.isArray(scheduleExceptions)
-    ? scheduleExceptions.find((exceptionRow) => {
-        const exceptionEmployeeId = String(
-          exceptionRow?.employee_id ||
-            exceptionRow?.Employee_ID ||
-            ""
-        ).trim();
-
-        const exceptionDay = normalizeDayName(
-          exceptionRow?.weekday ||
-            exceptionRow?.Weekday ||
-            ""
-        );
-        const targetDate =
-  formatDateOnly(scheduleDate) ||
-  getEmployeeDateKey(employee);
-
-const exceptionStartDate =
-  formatDateOnly(
-    exceptionRow?.start_date ||
-      exceptionRow?.Start_Date ||
-      ""
-  );
-
-const exceptionEndDate =
-  formatDateOnly(
-    exceptionRow?.end_date ||
-      exceptionRow?.End_Date ||
-      ""
-  );
-
-const dateIsValid =
-  (!exceptionStartDate ||
-    targetDate >= exceptionStartDate) &&
-  (!exceptionEndDate ||
-    targetDate <= exceptionEndDate);
-
-        return (
-  employeeIdentifierCandidates.includes(
-  exceptionEmployeeId.toLowerCase()
-) &&
-  exceptionDay === normalizedDay &&
-  dateIsValid &&
-  normalizeBoolean(
-    exceptionRow?.enabled ??
-      exceptionRow?.Enabled
-  )
-);
-      })
-    : null;
-
-    
   /*
-    Supabase employee_breaks is the primary source
-    for daily first and second break schedules.
+    Schedule exception has highest priority.
+    It applies only when:
+    - employee matches
+    - weekday matches
+    - selected date falls inside the exception
+    - exception is enabled
+  */
+  const matchingScheduleException =
+    Array.isArray(scheduleExceptions)
+      ? scheduleExceptions.find(
+          (exceptionRow) => {
+            const exceptionEmployeeId =
+              String(
+                exceptionRow?.employee_id ||
+                  exceptionRow?.Employee_ID ||
+                  ""
+              )
+                .trim()
+                .toLowerCase();
+
+            const exceptionDay =
+              normalizeDayName(
+                exceptionRow?.weekday ||
+                  exceptionRow?.Weekday ||
+                  ""
+              );
+
+            const exceptionStartDate =
+              formatDateOnly(
+                exceptionRow?.start_date ||
+                  exceptionRow?.Start_Date ||
+                  ""
+              );
+
+            const exceptionEndDate =
+              formatDateOnly(
+                exceptionRow?.end_date ||
+                  exceptionRow?.End_Date ||
+                  ""
+              );
+
+            const dateIsValid =
+              (!exceptionStartDate ||
+                targetScheduleDate >=
+                  exceptionStartDate) &&
+              (!exceptionEndDate ||
+                targetScheduleDate <=
+                  exceptionEndDate);
+
+            return (
+              employeeIdentifierCandidates.includes(
+                exceptionEmployeeId
+              ) &&
+              exceptionDay ===
+                normalizedDay &&
+              dateIsValid &&
+              normalizeBoolean(
+                exceptionRow?.enabled ??
+                  exceptionRow?.Enabled
+              )
+            );
+          }
+        )
+      : null;
+
+  /*
+    Supabase employee_breaks remains the
+    primary source for daily break times.
   */
   const matchingBreakRow =
     Array.isArray(employeeBreakRows)
       ? employeeBreakRows.find((row) => {
-          const rowEmployeeId = String(
-            row?.employee_id ||
-              row?.Employee_ID ||
-              ""
-          ).trim();
+          const rowEmployeeId =
+            String(
+              row?.employee_id ||
+                row?.Employee_ID ||
+                ""
+            )
+              .trim()
+              .toLowerCase();
 
           const rowDay =
             normalizeDayName(
@@ -2365,152 +2397,368 @@ const dateIsValid =
             );
 
           return (
-            rowEmployeeId ===
-              normalizedEmployeeId &&
+            employeeIdentifierCandidates.includes(
+              rowEmployeeId
+            ) &&
             rowDay === normalizedDay
           );
         })
       : null;
 
+  const dayBreaks =
+    matchingBreakRow || {};
+
   /*
-    Legacy Google Sheets break information remains
-    as a fallback while the new Supabase source is tested.
+    Find ALL schedule versions belonging
+    to this employee + weekday.
+
+    They are sorted oldest → newest.
   */
- const dayBreaks = matchingBreakRow || {};
-
-  const matchingDailySchedule =
+  const scheduleCandidates =
     Array.isArray(schedules)
-      ? schedules.find((scheduleRow) => {
-          const scheduleEmployeeId =
-            String(
-              scheduleRow?.employee_id ||
-                scheduleRow?.Employee_ID ||
-                scheduleRow?.employeeId ||
-                ""
-            ).trim();
+      ? schedules
+          .filter((scheduleRow) => {
+            const scheduleEmployeeId =
+              String(
+                scheduleRow?.employee_id ||
+                  scheduleRow?.Employee_ID ||
+                  scheduleRow?.employeeId ||
+                  ""
+              )
+                .trim()
+                .toLowerCase();
 
-          const scheduleDay =
-            normalizeDayName(
-              scheduleRow?.day_name ||
-                scheduleRow?.day ||
-                scheduleRow?.Day ||
-                ""
+            const scheduleDay =
+              normalizeDayName(
+                scheduleRow?.day_name ||
+                  scheduleRow?.day ||
+                  scheduleRow?.Day ||
+                  ""
+              );
+
+            return (
+              employeeIdentifierCandidates.includes(
+                scheduleEmployeeId
+              ) &&
+              scheduleDay === normalizedDay
             );
+          })
+          .sort((a, b) =>
+            String(
+              a?.effective_from || ""
+            ).localeCompare(
+              String(
+                b?.effective_from || ""
+              )
+            )
+          )
+      : [];
 
-          return (
-            scheduleEmployeeId ===
-              normalizedEmployeeId &&
-            scheduleDay === normalizedDay
+  /*
+    Select the schedule version that was
+    actually effective on targetScheduleDate.
+  */
+  let matchingDailySchedule =
+    scheduleCandidates.find(
+      (scheduleRow) => {
+        const effectiveFrom =
+          formatDateOnly(
+            scheduleRow?.effective_from
           );
-        })
-      : null;
 
+        const effectiveTo =
+          formatDateOnly(
+            scheduleRow?.effective_to
+          );
+
+        return (
+          (!effectiveFrom ||
+            targetScheduleDate >=
+              effectiveFrom) &&
+          (!effectiveTo ||
+            targetScheduleDate <=
+              effectiveTo)
+        );
+      }
+    ) || null;
+
+  /*
+    Historical dates before 2026-09-12:
+
+    We do not have older version history yet.
+
+    Use the earliest frozen baseline instead
+    of the employee's live/current schedule.
+
+    This is important because future changes
+    must not rewrite historical reporting.
+  */
+  if (
+    !matchingDailySchedule &&
+    scheduleCandidates.length
+  ) {
+    const earliestSchedule =
+      scheduleCandidates[0];
+
+    const earliestEffectiveFrom =
+      formatDateOnly(
+        earliestSchedule?.effective_from
+      );
+
+    if (
+      earliestEffectiveFrom &&
+      targetScheduleDate <
+        earliestEffectiveFrom
+    ) {
+      matchingDailySchedule =
+        earliestSchedule;
+    }
+  }
+
+  const versionExplicitlyOff =
+    Boolean(matchingDailySchedule) &&
+    matchingDailySchedule
+      ?.is_scheduled === false;
+
+  /*
+    Schedule exception overrides the
+    normal/versioned schedule.
+
+    An OFF version must NOT fall through
+    to employee.shift_start / shift_end.
+  */
   const rawShiftStart =
-  matchingScheduleException?.shift_start_est ??
-  matchingScheduleException?.Shift_Start_EST ??
-  matchingDailySchedule?.shift_start ??
-  matchingDailySchedule?.start_time_est ??
-  employee.start_time_est ??
-  employee.Start_Time_EST ??
-  employee.shift_start ??
-  employee.Shift_Start ??
-  "";
+    matchingScheduleException
+      ? (
+          matchingScheduleException
+            ?.shift_start_est ??
+          matchingScheduleException
+            ?.Shift_Start_EST ??
+          ""
+        )
+      : versionExplicitlyOff
+      ? ""
+      : (
+          matchingDailySchedule
+            ?.shift_start ??
+          matchingDailySchedule
+            ?.start_time_est ??
+          employee.start_time_est ??
+          employee.Start_Time_EST ??
+          employee.shift_start ??
+          employee.Shift_Start ??
+          ""
+        );
 
   const rawShiftEnd =
-  matchingScheduleException?.shift_end_est ??
-  matchingScheduleException?.Shift_End_EST ??
-  matchingDailySchedule?.shift_end ??
-  matchingDailySchedule?.end_time_est ??
-  employee.end_time_est ??
-  employee.End_Time_EST ??
-  employee.shift_end ??
-  employee.Shift_End ??
-  "";
+    matchingScheduleException
+      ? (
+          matchingScheduleException
+            ?.shift_end_est ??
+          matchingScheduleException
+            ?.Shift_End_EST ??
+          ""
+        )
+      : versionExplicitlyOff
+      ? ""
+      : (
+          matchingDailySchedule
+            ?.shift_end ??
+          matchingDailySchedule
+            ?.end_time_est ??
+          employee.end_time_est ??
+          employee.End_Time_EST ??
+          employee.shift_end ??
+          employee.Shift_End ??
+          ""
+        );
 
   const rawFirstBreakStart =
-  (
-    matchingScheduleException?.break_1_start_est ??
-    matchingScheduleException?.Break_1_Start_EST
-  ) ||
-  matchingBreakRow?.first_break_start ||
-  dayBreaks.first_break_start ||
-  matchingDailySchedule?.first_break_start ||
-  matchingDailySchedule?.break_start ||
-  employee.break_start ||
-  "Not Available";
+    versionExplicitlyOff &&
+    !matchingScheduleException
+      ? "Not Available"
+      : (
+          (
+            matchingScheduleException
+              ?.break_1_start_est ??
+            matchingScheduleException
+              ?.Break_1_Start_EST
+          ) ||
+          matchingBreakRow
+            ?.first_break_start ||
+          dayBreaks.first_break_start ||
+          matchingDailySchedule
+            ?.first_break_start ||
+          matchingDailySchedule
+            ?.break_start ||
+          employee.break_start ||
+          "Not Available"
+        );
 
-const rawFirstBreakEnd =
-  (
-    matchingScheduleException?.break_1_end_est ??
-    matchingScheduleException?.Break_1_End_EST
-  ) ||
-  matchingBreakRow?.first_break_end ||
-  dayBreaks.first_break_end ||
-  matchingDailySchedule?.first_break_end ||
-  matchingDailySchedule?.break_end ||
-  employee.break_end ||
-  "Not Available";
+  const rawFirstBreakEnd =
+    versionExplicitlyOff &&
+    !matchingScheduleException
+      ? "Not Available"
+      : (
+          (
+            matchingScheduleException
+              ?.break_1_end_est ??
+            matchingScheduleException
+              ?.Break_1_End_EST
+          ) ||
+          matchingBreakRow
+            ?.first_break_end ||
+          dayBreaks.first_break_end ||
+          matchingDailySchedule
+            ?.first_break_end ||
+          matchingDailySchedule
+            ?.break_end ||
+          employee.break_end ||
+          "Not Available"
+        );
 
-const rawSecondBreakStart =
-  (
-    matchingScheduleException?.break_2_start_est ??
-    matchingScheduleException?.Break_2_Start_EST
-  ) ||
-  matchingBreakRow?.second_break_start ||
-  dayBreaks.second_break_start ||
-  matchingDailySchedule?.second_break_start ||
-  employee.second_break_start ||
-  "Not Available";
+  const rawSecondBreakStart =
+    versionExplicitlyOff &&
+    !matchingScheduleException
+      ? "Not Available"
+      : (
+          (
+            matchingScheduleException
+              ?.break_2_start_est ??
+            matchingScheduleException
+              ?.Break_2_Start_EST
+          ) ||
+          matchingBreakRow
+            ?.second_break_start ||
+          dayBreaks.second_break_start ||
+          matchingDailySchedule
+            ?.second_break_start ||
+          employee.second_break_start ||
+          "Not Available"
+        );
 
-const rawSecondBreakEnd =
-  (
-    matchingScheduleException?.break_2_end_est ??
-    matchingScheduleException?.Break_2_End_EST
-  ) ||
-  matchingBreakRow?.second_break_end ||
-  dayBreaks.second_break_end ||
-  matchingDailySchedule?.second_break_end ||
-  employee.second_break_end ||
-  "Not Available";
+  const rawSecondBreakEnd =
+    versionExplicitlyOff &&
+    !matchingScheduleException
+      ? "Not Available"
+      : (
+          (
+            matchingScheduleException
+              ?.break_2_end_est ??
+            matchingScheduleException
+              ?.Break_2_End_EST
+          ) ||
+          matchingBreakRow
+            ?.second_break_end ||
+          dayBreaks.second_break_end ||
+          matchingDailySchedule
+            ?.second_break_end ||
+          employee.second_break_end ||
+          "Not Available"
+        );
+
+  /*
+    Determine whether this employee was
+    actually scheduled on this date.
+
+    Priority:
+    1. Schedule Exception
+    2. Effective-dated version
+    3. Current employee master fallback
+  */
+  const fallbackOffDay =
+    normalizeOffDays(
+      employee.off_days
+    )
+      .map(normalizeDayName)
+      .includes(normalizedDay);
+
+  const isScheduled =
+    matchingScheduleException
+      ? true
+      : matchingDailySchedule
+      ? matchingDailySchedule
+          ?.is_scheduled !== false
+      : !fallbackOffDay;
 
   return {
-      has_schedule_exception:
-    Boolean(matchingScheduleException),
+    is_scheduled:
+      isScheduled,
 
-      schedule_exception_id:
-    matchingScheduleException?.exception_id || "",
+    has_schedule_exception:
+      Boolean(
+        matchingScheduleException
+      ),
 
-  schedule_exception_notes:
-    String(
-      matchingScheduleException?.notes || ""
-    ).trim(),
+    schedule_exception_id:
+      matchingScheduleException
+        ?.exception_id || "",
 
-  schedule_exception_source:
-    matchingScheduleException?.source || "",
+    schedule_exception_notes:
+      String(
+        matchingScheduleException
+          ?.notes || ""
+      ).trim(),
+
+    schedule_exception_source:
+      matchingScheduleException
+        ?.source || "",
+
+    schedule_version_id:
+      matchingDailySchedule?.id || "",
+
+    schedule_effective_from:
+      matchingDailySchedule
+        ?.effective_from || "",
+
+    schedule_effective_to:
+      matchingDailySchedule
+        ?.effective_to || "",
+
+    schedule_source:
+      matchingScheduleException
+        ? "Schedule Exception"
+        : matchingDailySchedule
+        ? (
+            matchingDailySchedule
+              ?.source ||
+            "Schedule Version"
+          )
+        : "Employee Master Schedule",
 
     shift_start:
-      convertEasternScheduleToEmployeeLocal(
-        rawShiftStart,
-        employee
-      ),
+  convertEasternScheduleToEmployeeLocal(
+    rawShiftStart,
+    employee,
+    targetScheduleDateObject
+  ),
 
-    shift_end:
-      convertEasternScheduleToEmployeeLocal(
-        rawShiftEnd,
-        employee
-      ),
+shift_end:
+  convertEasternScheduleToEmployeeLocal(
+    rawShiftEnd,
+    employee,
+    targetScheduleDateObject
+  ),
 
     break_start:
-  formatMilitaryTime(rawFirstBreakStart),
+      formatMilitaryTime(
+        rawFirstBreakStart
+      ),
 
-break_end:
-  formatMilitaryTime(rawFirstBreakEnd),
+    break_end:
+      formatMilitaryTime(
+        rawFirstBreakEnd
+      ),
 
-second_break_start:
-  formatMilitaryTime(rawSecondBreakStart),
+    second_break_start:
+      formatMilitaryTime(
+        rawSecondBreakStart
+      ),
 
-second_break_end:
-  formatMilitaryTime(rawSecondBreakEnd),
+    second_break_end:
+      formatMilitaryTime(
+        rawSecondBreakEnd
+      ),
 
     off_days:
       matchingDailySchedule?.off_days ||
@@ -5537,6 +5785,7 @@ savedDuration > 0
 function HRWorkforceApp() {
   const [employees, setEmployees] = useState([]);
   const [scheduleExceptions, setScheduleExceptions] = useState([]);
+  const [scheduleVersions, setScheduleVersions] = useState([]);
   const [countryHolidays, setCountryHolidays] = useState([]);
 
   const [
@@ -7657,7 +7906,7 @@ const scheduleRows =
           day,
           schedule: getStableSchedule(
   employee,
-  [],
+  scheduleVersions,
   day,
   employeeBreakRows,
   scheduleExceptions
@@ -7674,7 +7923,7 @@ const scheduleRows =
       day: employeeDay,
       schedule: getStableSchedule(
   employee,
-  [],
+  scheduleVersions,
   employeeDay,
   employeeBreakRows,
   scheduleExceptions
@@ -7740,25 +7989,27 @@ const scheduleRows =
     selected weekday as an off day.
   */
   const scheduledEmployees =
-    activeEmployees.filter((employee) => {
-      const employeeTimeZone =
-        getEmployeeTimeZone(employee);
+  activeEmployees.filter((employee) => {
+    const employeeTimeZone =
+      getEmployeeTimeZone(employee);
 
-      const weekday = todayDayName(
-        employeeTimeZone,
-        reportDateObject
+    const weekday = todayDayName(
+      employeeTimeZone,
+      reportDateObject
+    );
+
+    const schedule =
+      getStableSchedule(
+        employee,
+        scheduleVersions,
+        weekday,
+        employeeBreakRows,
+        scheduleExceptions,
+        reportDate
       );
 
-      const offDays = normalizeOffDays(
-        employee.off_days
-      ).map((day) =>
-        String(day).toLowerCase()
-      );
-
-      return !offDays.includes(
-        weekday.toLowerCase()
-      );
-    });
+    return schedule.is_scheduled !== false;
+  });
 
   /*
     Find one approved absence covering the selected date.
@@ -7853,11 +8104,14 @@ const scheduleRows =
       );
 
     const employeeSchedule =
-      getStableSchedule(
-        employee,
-        [],
-        employeeReportDay
-      );
+  getStableSchedule(
+    employee,
+    scheduleVersions,
+    employeeReportDay,
+    employeeBreakRows,
+    scheduleExceptions,
+    reportDate
+  );
 
     const scheduledMinutes =
       minutesBetween(
@@ -8526,6 +8780,73 @@ async function loadCountryHolidays() {
   return loadedHolidays;
 }
 
+async function loadScheduleVersions() {
+  if (!supabase) {
+    setScheduleVersions([]);
+    return [];
+  }
+
+  try {
+    const pageSize = 1000;
+    let from = 0;
+    let allRows = [];
+
+    while (true) {
+      const { data, error } = await supabase
+        .from("employee_schedule_versions")
+        .select("*")
+        .order("employee_id", {
+          ascending: true,
+        })
+        .order("effective_from", {
+          ascending: true,
+        })
+        .range(
+          from,
+          from + pageSize - 1
+        );
+
+      if (error) {
+        throw error;
+      }
+
+      const rows =
+        Array.isArray(data)
+          ? data
+          : [];
+
+      allRows = [
+        ...allRows,
+        ...rows,
+      ];
+
+      if (rows.length < pageSize) {
+        break;
+      }
+
+      from += pageSize;
+    }
+
+    setScheduleVersions(allRows);
+
+    console.log(
+      "Schedule versions loaded:",
+      allRows.length
+    );
+
+    return allRows;
+  } catch (error) {
+    console.warn(
+      "Schedule versions load failed:",
+      error?.message || error
+    );
+
+    setScheduleVersions([]);
+
+    return [];
+  }
+}
+
   async function refreshLiveData() {
   /*
   Load independent reference data in parallel.
@@ -8704,9 +9025,12 @@ useEffect(() => {
   };
 
   const loadAuthenticatedData = async () => {
-  await loadScheduleExceptions();
-  await loadCountryHolidays();
-  await loadAuthenticatedScheduleData();
+  await Promise.all([
+    loadScheduleExceptions(),
+    loadCountryHolidays(),
+    loadScheduleVersions(),
+    loadAuthenticatedScheduleData(),
+  ]);
 };
 
 loadAuthenticatedData();
@@ -10219,31 +10543,24 @@ const isFutureDate =
             const schedule =
               getStableSchedule(
                 employee,
-                [],
+                scheduleVersions,
                 dayName,
                 employeeBreakRows,
                 scheduleExceptions,
                 dateKey
               );
 
-            const normalOffDays =
-              normalizeOffDays(
-                employee.off_days
-              ).map((day) =>
-                normalizeDayName(
-                  day
-                )
-              );
-
             /*
-              A valid schedule exception overrides
-              the normal employee off-day.
-            */
-            const isOffDay =
-              normalOffDays.includes(
-                dayName
-              ) &&
-              !schedule.has_schedule_exception;
+  getStableSchedule already resolves:
+  1. Schedule Exception
+  2. Effective-dated Schedule Version
+  3. Employee master fallback
+
+  Payroll should therefore use its resolved
+  scheduled/off-day state directly.
+*/
+const isOffDay =
+  schedule.is_scheduled === false;
 
             const scheduleRange =
               buildMinuteRange(
@@ -10852,7 +11169,7 @@ const dayTimeAttendancePercent =
     ? Math.min(
         100,
         (
-          dayTrackedWithinSchedule /
+          dayLoggedMinutes /
           payrollDayScheduledMinutes
         ) * 100
       )
@@ -11170,15 +11487,15 @@ payableHours:
         );
 
         const timeAttendancePercent =
-          scheduledMinutes > 0
-            ? Math.min(
-                100,
-                (
-                  trackedWithinScheduleMinutes /
-                  scheduledMinutes
-                ) * 100
-              )
-            : 0;
+  scheduledMinutes > 0
+    ? Math.min(
+        100,
+        (
+          loggedMinutes /
+          scheduledMinutes
+        ) * 100
+      )
+    : 0;
 
         const approvedLeaveMinutes =
           ptoMinutes +
@@ -11369,6 +11686,7 @@ status,
   payrollTimeEntries,
   payrollDateRange.startDate,
   payrollDateRange.endDate,
+  scheduleVersions,
   employeeBreakRows,
   scheduleExceptions,
   requests,
@@ -12035,7 +12353,7 @@ const hasApprovedReportingAbsence =
       const schedule =
         getStableSchedule(
           employee,
-          [],
+          scheduleVersions,
           dayName,
           employeeBreakRows,
           scheduleExceptions,
