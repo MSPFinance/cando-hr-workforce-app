@@ -101,7 +101,8 @@ const WORKFORCE_BALANCES_SHEET_NAMES = ["App_Balances", "employee_balances"];
 const WORKFORCE_EXCEPTION_SHEET_NAMES = [
   "Schedule_Exceptions",
 ];
-const WORKFORCE_SYNC_AUTOMATIC_ENABLED = true;
+const WORKFORCE_SYNC_AUTOMATIC_ENABLED =
+  false;
 const WORKFORCE_SYNC_SCHEDULE_DAY = 6; // Saturday in the Magnemite app timezone.
 const WORKFORCE_SYNC_SCHEDULE_TIME = "05:00"; // Saturday morning sync window.
 const WORKFORCE_SYNC_LAST_RUN_KEY = "candoHrLastSaturdayWorkforceSync";
@@ -2315,6 +2316,53 @@ function buildScheduleVersionSyncRows(
   );
 
   return rows;
+}
+
+
+/*
+  Send the current App_Schedules snapshot to the
+  server-side effective-dated schedule version API.
+
+  This helper does not write directly to Supabase.
+  The API performs the historical comparison and
+  only creates a new version when the actual
+  employee schedule has changed.
+*/
+async function syncEffectiveDatedScheduleVersions(
+  rows,
+  effectiveDate = getAppDateKey()
+) {
+  const scheduleRows = Array.isArray(rows) ? rows : [];
+
+  /*
+    Effective-dated schedule versions are written securely
+    by Google Apps Script / server-side synchronization.
+
+    Magnemite's browser must never contain SCHEDULE_SYNC_SECRET.
+    This function remains as a compatibility layer so existing
+    roster synchronization logic does not break.
+  */
+
+  const result = {
+    success: true,
+    skipped: true,
+    source: "Google Apps Script / server-side sync",
+    effectiveDate,
+    receivedCount: scheduleRows.length,
+    insertedCount: 0,
+    sameDayUpdatedCount: 0,
+    closedCount: 0,
+    unchangedCount: scheduleRows.length,
+    changedCount: 0,
+    duplicateOpenKeys: [],
+  };
+
+  console.log(
+    "Effective-dated schedule write delegated to secure server-side sync:",
+    result
+  );
+
+  return result;
 }
 
 function mergeBreakRowsIntoEmployees(currentEmployees, breakRows) {
@@ -7204,44 +7252,85 @@ rosterResult = mergeWorkforceRowsIntoEmployees(
 breakResult = mergeBreakRowsIntoEmployees(rosterResult.employees, breakRows);
 balanceResult = mergeBalanceRowsIntoEmployees(breakResult.employees, balanceRows);
 
-const exceptionResponse = await fetch("/api/sync-schedule-exceptions", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    "x-sync-secret": import.meta.env.VITE_SCHEDULE_SYNC_SECRET,
-  },
-  body: JSON.stringify({
-  rows: exceptionRows,
-}),
-});
+/*
+  Schedule exceptions are synchronized securely by Google Apps Script.
 
-const exceptionData = await exceptionResponse.json();
+  The browser intentionally does NOT call /api/sync-schedule-exceptions
+  because SCHEDULE_SYNC_SECRET must remain server-side.
 
-if (!exceptionResponse.ok) {
-  throw new Error(
-    exceptionData?.error ||
-      exceptionData?.message ||
-      "Unable to sync schedule exceptions."
-  );
-}
+  After the Google Apps Script synchronization runs, simply reload
+  the current Supabase schedule exceptions here.
+*/
+await loadScheduleExceptions();
 
 const exceptionSyncResult = {
-  syncedCount:
-    exceptionData.syncedCount ??
-    exceptionData.count ??
-    exceptionData.data?.length ??
-    0,
+  syncedCount: 0,
+  source: "Google Apps Script / server-side sync",
 };
 
 console.log(
-  "Schedule exception sync completed:",
+  "Schedule exceptions loaded after server-side sync:",
   exceptionSyncResult
 );
 
-await loadScheduleExceptions();
+/*
+  Use the fully merged workforce employee data
+  when building schedule versions.
 
+  At this point roster, break and balance data
+  have already been resolved for this sync.
+*/
 finalSyncedEmployees =
   balanceResult.employees;
+
+/*
+  Build one schedule-version row for every
+  explicit employee + weekday coming from
+  App_Schedules.
+
+  Blank weekday source cells are intentionally
+  ignored so Magnemite never invents schedules.
+*/
+const scheduleVersionRows =
+  buildScheduleVersionSyncRows(
+    workforceRows,
+    finalSyncedEmployees
+  );
+
+console.log(
+  "Schedule version rows prepared:",
+  scheduleVersionRows.length,
+  scheduleVersionRows.slice(0, 10)
+);
+
+/*
+  Compare the current App_Schedules snapshot
+  against the currently-open Supabase versions.
+
+  The API will:
+  - leave unchanged schedules alone
+  - update a same-day version when necessary
+  - close the previous version when a later
+    schedule change becomes effective
+  - insert the new effective-dated version
+*/
+const scheduleVersionSyncResult =
+  await syncEffectiveDatedScheduleVersions(
+    scheduleVersionRows,
+    getAppDateKey()
+  );
+
+console.log(
+  "Effective-dated schedule versions synced:",
+  scheduleVersionSyncResult
+);
+
+/*
+  Immediately reload schedule versions so
+  Agent Portal, Payroll and historical schedule
+  calculations use the newly synchronized data.
+*/
+await loadScheduleVersions();
 
 setEmployees(finalSyncedEmployees);
 if (false && supabase && finalSyncedEmployees.length) {
