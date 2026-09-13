@@ -78,6 +78,17 @@ const LOGO = "/cando-logo.png";
 // For demo/testing purposes this is intentionally blank so the app uses the built-in demo users below.
 // When you are ready to reconnect live Google Sheets, replace "" with your working /exec Apps Script URL.
 const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
+/*
+  Legacy Google Apps Script database bootstrap.
+
+  Disabled because normal application startup
+  now uses Supabase.
+
+  This does NOT disable Sync Roster or the
+  direct Google workforce schedule sync.
+*/
+const LEGACY_GOOGLE_DATABASE_BOOTSTRAP_ENABLED =
+  false;
 
 // WORKFORCE PLANNING SHEET SYNC
 // Source: Google Sheet tab "New Team Roster(Lucho)" in GoDay & LC Team Schedules.
@@ -171,7 +182,168 @@ const OT_REQUESTS_ENABLED = false;
 const EARLY_SHIFT_START_GRACE_MINUTES = 15;
 const PAYROLL_VARIANCE_TOLERANCE_MINUTES = 5;
 const PAYROLL_STANDARD_WORK_DAYS_PER_PERIOD = 10;
+
+/*
+  Employees listed here remain valid Magnemite users.
+
+  They are NOT deleted from the employee database.
+
+  They may still:
+  - authenticate
+  - retain management permissions
+  - retain schedules
+  - remain supervisors/managers
+  - retain historical records
+
+  They are excluded only from operational employee
+  populations such as:
+  - OPS employee dropdowns
+  - Schedule employee population
+  - Payroll reconciliation
+  - Attendance population
+  - Productivity / operational reporting
+  - Live floor operational population
+*/
+const NON_TIME_TRACKED_EMPLOYEE_NAMES = new Set([
+  // Executive / Management / Support profiles
+  // that do not use Magnemite time for payroll.
+
+  "jordan hyde",
+
+  // JP / Juan Pablo aliases
+  "jp",
+  "jp chinchilla",
+  "juan pablo chinchilla",
+
+  // Eduardo / Ed aliases
+  "eduardo valverde",
+  "ed valverde",
+
+  "luis gonzalez",
+
+  // Maggie / Margarita aliases
+  "maggie penon",
+  "margarita penon",
+
+  "karen calderon",
+
+  // Additional non-time-tracked profiles
+  "abrilclever",
+  "clever",
+  "kat johnson",
+  "karla sixto",
+]);
+
+/*
+  ID matching is preferred when possible because
+  employee names can later be changed in the roster.
+
+  Name matching remains as a fallback.
+*/
+const NON_TIME_TRACKED_EMPLOYEE_IDS = new Set([
+  "93970136",  // JP
+  "139672677", // AbrilClever
+  "4",         // Kat Johnson
+  "7",         // Karla Sixto
+
+  // Existing known exclusions
+  "53002263",  // Maggie Penon
+  "27095128",  // Karen Calderon
+]);
+
+/*
+  Normalize employee names so capitalization,
+  accents and surrounding spaces do not affect
+  exclusion matching.
+
+  Examples:
+  "Maggie Penon" -> "maggie penon"
+  "  JP  "       -> "jp"
+*/
+function normalizeOperationalEmployeeName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+/*
+  Determine whether an employee should remain
+  outside Magnemite operational time populations.
+
+  Matching priority:
+
+  1. Employee ID
+  2. Employee Name
+
+  This function does NOT check employment status.
+  Active / inactive filtering remains handled by
+  isActiveEmployee().
+*/
+function isNonTimeTrackedEmployee(employee) {
+  if (!employee) {
+    return false;
+  }
+
+  /*
+    Magnemite currently receives employee identity
+    from several sources.
+
+    Check every ID field that may exist so this works
+    with Google roster records, Supabase records and
+    merged employee records.
+  */
+  const employeeIds = [
+    employee.id,
+    employee.employee_id,
+    employee.Employee_ID,
+    employee.supabase_employee_id,
+  ]
+    .map((value) =>
+      String(value || "").trim()
+    )
+    .filter(Boolean);
+
+  /*
+    Employee ID is the strongest match.
+
+    If ANY known employee ID belongs to the exclusion
+    Set, immediately exclude the employee from the
+    operational population.
+  */
+  const excludedById =
+    employeeIds.some((employeeId) =>
+      NON_TIME_TRACKED_EMPLOYEE_IDS.has(
+        employeeId
+      )
+    );
+
+  if (excludedById) {
+    return true;
+  }
+
+  /*
+    Fall back to employee name.
+
+    Different Magnemite data sources may expose the
+    name under full_name, employee_name or name.
+  */
+  const employeeName =
+    normalizeOperationalEmployeeName(
+      employee.full_name ||
+      employee.employee_name ||
+      employee.name ||
+      ""
+    );
+
+  return NON_TIME_TRACKED_EMPLOYEE_NAMES.has(
+    employeeName
+  );
+}
+
 const REQUEST_TYPE_OPTIONS = ["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Day off due to Swap"];
+
 const APPROVED_ATTENDANCE_ABSENCE_TYPES = [
   "PTO",
   "VTO",
@@ -3213,6 +3385,43 @@ function employeeMonthlyAttendance(employee, timeEntries = [], requests = []) {
     approvedRequests: approvedRequests.slice(0, 6),
   };
 }
+function isDemoEmployee(employee) {
+  const employeeId = String(
+    employee?.employee_id ||
+    employee?.Employee_ID ||
+    employee?.id ||
+    ""
+  )
+    .trim()
+    .toUpperCase();
+
+  const fullName = String(
+    employee?.full_name ||
+    employee?.employee_name ||
+    employee?.name ||
+    ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const email = normalizeEmail(
+    employee?.email ||
+    employee?.employee_email ||
+    ""
+  );
+
+  return (
+    employeeId.startsWith("EMP-") ||
+    fullName.startsWith("sample ") ||
+    fullName === "system admin" ||
+    fullName === "executive user" ||
+    DEMO_ACCOUNTS.some(
+      (account) =>
+        normalizeEmail(account.email) === email
+    )
+  );
+}
+
 function isActiveEmployee(employee) {
   const status = String(
     employee?.employment_status ||
@@ -3228,14 +3437,9 @@ function isActiveEmployee(employee) {
       ""
   ).trim();
 
-  const email = String(
-    employee?.email || ""
-  )
-    .trim()
-    .toLowerCase();
-
   const employeeId = String(
     employee?.employee_id ||
+      employee?.Employee_ID ||
       employee?.id ||
       ""
   ).trim();
@@ -3247,12 +3451,13 @@ function isActiveEmployee(employee) {
 
   const hasValidIdentity =
     Boolean(employeeId) &&
-    Boolean(email) &&
+    Boolean(fullName) &&
     !isPlaceholderName;
 
   return (
     status === "active" &&
-    hasValidIdentity
+    hasValidIdentity &&
+    !isDemoEmployee(employee)
   );
 }
 function applyMagnemiteScopeToEmployees(
@@ -3818,7 +4023,15 @@ async function googleJsonpWithRetry(params = {}, attempts = 2) {
 }
 
 async function googleGetDatabase() {
-  if (!GOOGLE_API_URL || GOOGLE_API_URL.includes("PASTE_YOUR_WORKING")) return null;
+    if (
+    !LEGACY_GOOGLE_DATABASE_BOOTSTRAP_ENABLED ||
+    !GOOGLE_API_URL ||
+    GOOGLE_API_URL.includes(
+      "PASTE_YOUR_WORKING"
+    )
+  ) {
+    return null;
+  }
   try {
     const responseData = await googleJsonpWithRetry({ action: "getAll" }, 2);
     console.log("Google Sheets GET result:", responseData);
@@ -4601,6 +4814,135 @@ pto_balance:
     "",
 };
     });
+
+    /*
+  Ensure Supabase-only employees are also loaded.
+
+  This is critical when the legacy Google database
+  bootstrap is unavailable. Authentication and
+  forgotten-shift cleanup must still have the
+  complete employee roster.
+*/
+const mergedEmployeeKeys =
+  new Set();
+
+mergedEmployees.forEach(
+  (employee) => {
+    [
+      normalizeEmail(
+        employee.email
+      ),
+
+      String(
+        employee.id ||
+          employee.employee_id ||
+          ""
+      )
+        .trim()
+        .toLowerCase(),
+
+      normalizeNameKey(
+        employee.full_name
+      ),
+    ]
+      .filter(Boolean)
+      .forEach((key) =>
+        mergedEmployeeKeys.add(key)
+      );
+  }
+);
+
+supabaseEmployees.forEach(
+  (supabaseProfile) => {
+    const profileKeys = [
+      normalizeEmail(
+        supabaseProfile.email ||
+          supabaseProfile.employee_email
+      ),
+
+      String(
+        supabaseProfile.employee_id ||
+          supabaseProfile.Employee_ID ||
+          supabaseProfile.id ||
+          ""
+      )
+        .trim()
+        .toLowerCase(),
+
+      normalizeNameKey(
+        supabaseProfile.full_name ||
+          supabaseProfile.employee_name ||
+          supabaseProfile.name
+      ),
+    ].filter(Boolean);
+
+    const alreadyLoaded =
+      profileKeys.some((key) =>
+        mergedEmployeeKeys.has(key)
+      );
+
+    if (alreadyLoaded) {
+      return;
+    }
+
+    let supabaseBalance = null;
+
+    for (const key of profileKeys) {
+      const match =
+        balanceIndex.get(key);
+
+      if (match) {
+        supabaseBalance = match;
+        break;
+      }
+    }
+
+    const mappedEmployee =
+      mapSupabaseEmployee(
+        supabaseProfile,
+        supabaseBalance || {},
+        {},
+        {}
+      );
+
+    /*
+      Authentication credentials must come only
+      from the actual Supabase profile.
+
+      Do not apply demo/default passwords.
+    */
+    mergedEmployees.push({
+      ...mappedEmployee,
+
+      temp_password:
+        supabaseProfile.temp_password ??
+        "",
+
+      temporary_password:
+        supabaseProfile.temporary_password ??
+        "",
+
+      must_change_password:
+        normalizeBoolean(
+          supabaseProfile.must_change_password
+        ),
+
+      force_password_change:
+        normalizeBoolean(
+          supabaseProfile.force_password_change
+        ),
+
+      requires_password_reset:
+        normalizeBoolean(
+          supabaseProfile.requires_password_reset
+        ),
+    });
+
+    profileKeys.forEach((key) =>
+      mergedEmployeeKeys.add(key)
+    );
+  }
+);
 
     if (typeof applyEmployees === "function") {
       applyEmployees(mergedEmployees);
@@ -7326,6 +7668,26 @@ const visibleEmployees =
           employee.searchable !== false
         );
       });
+
+      /*
+  Operational workforce.
+
+  These employees are active and visible in Magnemite,
+  but employees specifically marked as non-time-tracked
+  are excluded from OPS/time/payroll interfaces.
+
+  Their employee records remain in `employees` so:
+  - authentication still works
+  - management permissions still work
+  - historical data remains intact
+  - schedules remain stored in the database
+*/
+const operationalVisibleEmployees =
+  visibleEmployees.filter(
+    (employee) =>
+      !isNonTimeTrackedEmployee(employee)
+  );
+
  const visibleTime = isAgentOnly && currentUser?.id
   ? timeEntries.filter((t) => t.employee_id === currentUser.id)
   : timeEntries;
@@ -7867,7 +8229,7 @@ const todaysLogs = activitySource
 ]);
 
   
-  const filteredVisibleEmployees = visibleEmployees.filter((employee) => {
+  const filteredVisibleEmployees = operationalVisibleEmployees.filter((employee) => {
   if (!employee) return false;
     const assignedLeader = String(
   employee.team_leader ||
@@ -7896,40 +8258,56 @@ return (
     employee.country === filters.country)
 );
   });
+
 const scheduleRows =
   filters.employee !== "All"
-    ? WEEK_DAYS.map((day) => {
-        const employee = filteredVisibleEmployees[0] || selectedEmployee;
+    ? (() => {
+        const employee =
+          filteredVisibleEmployees[0];
 
-        return {
+        /*
+          Never fall back to the signed-in manager.
+          If the selected employee is not part of the
+          operational workforce, show no schedule rows.
+        */
+        if (!employee) {
+          return [];
+        }
+
+        return WEEK_DAYS.map((day) => ({
           employee,
           day,
-          schedule: getStableSchedule(
-  employee,
-  scheduleVersions,
-  day,
-  employeeBreakRows,
-  scheduleExceptions
-),
-        };
-      })
-    : filteredVisibleEmployees.map((employee) => {
-    const employeeDay = todayDayName(
-      getEmployeeTimeZone(employee)
-    );
 
-    return {
-      employee,
-      day: employeeDay,
-      schedule: getStableSchedule(
-  employee,
-  scheduleVersions,
-  employeeDay,
-  employeeBreakRows,
-  scheduleExceptions
-),
-    };
-  });
+          schedule: getStableSchedule(
+            employee,
+            scheduleVersions,
+            day,
+            employeeBreakRows,
+            scheduleExceptions
+          ),
+        }));
+      })()
+    : filteredVisibleEmployees.map(
+        (employee) => {
+          const employeeDay =
+            todayDayName(
+              getEmployeeTimeZone(employee)
+            );
+
+          return {
+            employee,
+            day: employeeDay,
+
+            schedule: getStableSchedule(
+              employee,
+              scheduleVersions,
+              employeeDay,
+              employeeBreakRows,
+              scheduleExceptions
+            ),
+          };
+        }
+      );
 
   const attendanceHeadcount = useMemo(() => {
   /*
@@ -9478,7 +9856,7 @@ return () => {
   const lobOptions = [
   "All",
   ...new Set(
-    visibleEmployees
+    operationalVisibleEmployees
       .map((employee) =>
         String(employee.lob || "").trim()
       )
@@ -9489,7 +9867,7 @@ return () => {
 const departmentOptions = [
   "All",
   ...new Set(
-    visibleEmployees
+    operationalVisibleEmployees
       .map((employee) =>
         String(
           employee.department || ""
@@ -9501,7 +9879,7 @@ const departmentOptions = [
   const subDepartmentOptions = [
   "All",
   ...new Set(
-    visibleEmployees
+    operationalVisibleEmployees
       .filter((employee) => {
         if (filters.department === "All") {
           return true;
@@ -9529,7 +9907,7 @@ const departmentOptions = [
 const teamLeaderOptions = [
   "All",
   ...new Set(
-    visibleEmployees
+    operationalVisibleEmployees
       .filter((employee) => {
         const employeeDepartment = String(
           employee.department || ""
@@ -9566,7 +9944,8 @@ const teamLeaderOptions = [
   if (b === "All") return 1;
   return a.localeCompare(b);
 });
-  const balanceFilteredEmployees = visibleEmployees.filter((employee) => {
+  const balanceFilteredEmployees =
+  operationalVisibleEmployees.filter((employee) => {
   const employeeLob = String(employee.lob || "").trim();
 
   const employeeDepartment = String(
@@ -9639,6 +10018,62 @@ const employeeOptions = [
     .sort((a, b) => a.localeCompare(b)),
 ];
 
+/*
+  Reset an Employee filter that is no longer allowed
+  in operational workforce views.
+
+  This handles cases where:
+  - an excluded Manager/Executive was selected before HMR
+  - an employee becomes inactive
+  - a demo/sample profile was previously selected
+  - roster refresh removes the employee from operational scope
+*/
+useEffect(() => {
+  if (filters.employee === "All") {
+    return;
+  }
+
+  const selectedFilterEmployee =
+    employees.find(
+      (employee) =>
+        String(
+          employee.full_name ||
+          employee.name ||
+          ""
+        ).trim() ===
+        String(
+          filters.employee || ""
+        ).trim()
+    ) || null;
+
+  const shouldResetEmployeeFilter =
+    !selectedFilterEmployee ||
+    !isActiveEmployee(
+      selectedFilterEmployee
+    ) ||
+    isNonTimeTrackedEmployee(
+      selectedFilterEmployee
+    );
+
+  if (!shouldResetEmployeeFilter) {
+    return;
+  }
+
+  setFilters((current) => {
+    if (current.employee === "All") {
+      return current;
+    }
+
+    return {
+      ...current,
+      employee: "All",
+    };
+  });
+}, [
+  filters.employee,
+  employees,
+]);
+
 const getBalanceEmployeeId = (employee) =>
   String(
     employee?.id ||
@@ -9656,7 +10091,16 @@ const displayedBalanceEmployees =
       )
     : balanceFilteredEmployees;
 
-  const countryOptions = ["All", ...new Set(visibleEmployees.map((e) => e.country).filter(Boolean))];
+  const countryOptions = [
+  "All",
+  ...new Set(
+    operationalVisibleEmployees
+      .map((employee) =>
+        String(employee.country || "").trim()
+      )
+      .filter(Boolean)
+  ),
+];
 
   const payrollReviewerOptions =
   useMemo(() => {
@@ -10171,6 +10615,55 @@ const payrollTimeEntries = useMemo(() => {
   filters.employee,
   filters.country,
 ]);
+
+const payrollLogsByEmployeeDate =
+  useMemo(() => {
+    const index = new Map();
+
+    payrollTimeEntries.forEach(
+      (timeLog) => {
+        const employeeId =
+          String(
+            timeLog.employee_id || ""
+          ).trim();
+
+        const entryDate =
+          normalizeDateForFilter(
+            timeLog.date ||
+              timeLog.clock_in ||
+              timeLog.category_start ||
+              timeLog.created_at
+          );
+
+        if (
+          !employeeId ||
+          !entryDate
+        ) {
+          return;
+        }
+
+        const key =
+          `${employeeId}::${entryDate}`;
+
+        const existing =
+          index.get(key);
+
+        if (existing) {
+          existing.push(timeLog);
+        } else {
+          index.set(
+            key,
+            [timeLog]
+          );
+        }
+      }
+    );
+
+    return index;
+  }, [
+    payrollTimeEntries,
+  ]);
+
 const payrollEmployeePeriodSummary = useMemo(() => {
   /*
     Payroll reconciliation engine.
@@ -10406,8 +10899,8 @@ const payrollEmployeePeriodSummary = useMemo(() => {
     );
 
   const result =
-    filteredVisibleEmployees.map(
-      (employee) => {
+  filteredVisibleEmployees.map(
+    (employee) => {
         const employeeIds =
           [
             employee.id,
@@ -10768,32 +11261,18 @@ if (isPayrollScheduledDay) {
               Get all time logs belonging to the
               employee on this payroll date.
             */
-            const dayLogs =
-              payrollTimeEntries.filter(
-                (timeLog) => {
-                  const logEmployeeId =
-                    String(
-                      timeLog.employee_id ||
-                        ""
-                    ).trim();
+            const uniqueEmployeeIds =
+  Array.from(
+    new Set(employeeIds)
+  );
 
-                  const logDate =
-                    normalizeDateForFilter(
-                      timeLog.date ||
-                        timeLog.clock_in ||
-                        timeLog.category_start ||
-                        timeLog.created_at
-                    );
-
-                  return (
-                    employeeIds.includes(
-                      logEmployeeId
-                    ) &&
-                    logDate ===
-                      dateKey
-                  );
-                }
-              );
+const dayLogs =
+  uniqueEmployeeIds.flatMap(
+    (candidateEmployeeId) =>
+      payrollLogsByEmployeeDate.get(
+        `${candidateEmployeeId}::${dateKey}`
+      ) || []
+  );
 
             const attendanceIntervals =
               [];
@@ -11683,7 +12162,7 @@ status,
   );
 }, [
   filteredVisibleEmployees,
-  payrollTimeEntries,
+  payrollLogsByEmployeeDate,
   payrollDateRange.startDate,
   payrollDateRange.endDate,
   scheduleVersions,
@@ -18096,8 +18575,35 @@ const calendarDateApprovedRequests = calendarDetailDate
     })
   : [];
   const headerRequestSummary = requestStatusSummary(filteredRequests);
-  const scheduledTodayCount = filteredVisibleEmployees.filter((employee) => !isTodayOffDay(employee) && employee.employment_status === "Active").length;
-  const activeEmployeeCount = filteredVisibleEmployees.filter((employee) => employee.employment_status === "Active").length;
+  const activeEmployeeCount =
+  filteredVisibleEmployees.length;
+
+const scheduledTodayCount =
+  filteredVisibleEmployees.filter(
+    (employee) => {
+      const employeeDate =
+        getEmployeeDateKey(employee);
+
+      const employeeDay =
+        todayDayName(
+          getEmployeeTimeZone(employee)
+        );
+
+      const schedule =
+        getStableSchedule(
+          employee,
+          scheduleVersions,
+          employeeDay,
+          employeeBreakRows,
+          scheduleExceptions,
+          employeeDate
+        );
+
+      return (
+        schedule.is_scheduled !== false
+      );
+    }
+  ).length;
 
   function HeaderMetrics() {
     if (isAgentOnly) return null;
@@ -18159,7 +18665,7 @@ const calendarDateApprovedRequests = calendarDetailDate
         setConfirmPersonalPassword={setConfirmPersonalPassword}
         onCompletePasswordReset={completePasswordReset}
         databaseStatus={databaseStatus}
-        demoAccounts={DEMO_ACCOUNTS}
+        demoAccounts={[]}
       />
     );
   }
