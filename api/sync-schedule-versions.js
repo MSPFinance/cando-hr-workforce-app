@@ -363,17 +363,47 @@ export default async function handler(
     });
   }
 
-  const incomingRows =
-    Array.isArray(
-      request.body?.rows
-    )
-      ? request.body.rows
-      : [];
+  /*
+  Vercel may provide request.body either as:
+  - an already-parsed JavaScript object, or
+  - a JSON string, depending on the caller/runtime.
 
-  const requestedEffectiveDate =
-    cleanText(
-      request.body?.effectiveDate
+  Google Apps Script sends JSON, so normalize the
+  request body before reading rows/effectiveDate.
+*/
+let parsedBody = request.body;
+
+if (typeof parsedBody === "string") {
+  try {
+    parsedBody = JSON.parse(parsedBody);
+  } catch (error) {
+    console.error(
+      "Unable to parse schedule sync request body:",
+      error
     );
+
+    return response.status(400).json({
+      error: "Invalid JSON request body.",
+    });
+  }
+}
+
+if (
+  !parsedBody ||
+  typeof parsedBody !== "object"
+) {
+  parsedBody = {};
+}
+
+const incomingRows =
+  Array.isArray(parsedBody.rows)
+    ? parsedBody.rows
+    : [];
+
+const requestedEffectiveDate =
+  cleanText(
+    parsedBody.effectiveDate
+  );
 
   const effectiveDate =
     /^\d{4}-\d{2}-\d{2}$/.test(
