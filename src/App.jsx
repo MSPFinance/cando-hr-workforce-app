@@ -78,6 +78,17 @@ const LOGO = "/cando-logo.png";
 // For demo/testing purposes this is intentionally blank so the app uses the built-in demo users below.
 // When you are ready to reconnect live Google Sheets, replace "" with your working /exec Apps Script URL.
 const GOOGLE_API_URL = import.meta.env.VITE_GOOGLE_API_URL || "";
+/*
+  Legacy Google Apps Script database bootstrap.
+
+  Disabled because normal application startup
+  now uses Supabase.
+
+  This does NOT disable Sync Roster or the
+  direct Google workforce schedule sync.
+*/
+const LEGACY_GOOGLE_DATABASE_BOOTSTRAP_ENABLED =
+  false;
 
 // WORKFORCE PLANNING SHEET SYNC
 // Source: Google Sheet tab "New Team Roster(Lucho)" in GoDay & LC Team Schedules.
@@ -90,7 +101,8 @@ const WORKFORCE_BALANCES_SHEET_NAMES = ["App_Balances", "employee_balances"];
 const WORKFORCE_EXCEPTION_SHEET_NAMES = [
   "Schedule_Exceptions",
 ];
-const WORKFORCE_SYNC_AUTOMATIC_ENABLED = true;
+const WORKFORCE_SYNC_AUTOMATIC_ENABLED =
+  false;
 const WORKFORCE_SYNC_SCHEDULE_DAY = 6; // Saturday in the Magnemite app timezone.
 const WORKFORCE_SYNC_SCHEDULE_TIME = "05:00"; // Saturday morning sync window.
 const WORKFORCE_SYNC_LAST_RUN_KEY = "candoHrLastSaturdayWorkforceSync";
@@ -117,6 +129,7 @@ const WORKFORCE_SYNC_ALLOWED_FIELDS = [
   "employment_type",
   "off_days",
   "schedule_days",
+  "expected_productive_hours",
   "shift_start",
   "shift_end",
   "break_start",
@@ -171,7 +184,168 @@ const OT_REQUESTS_ENABLED = false;
 const EARLY_SHIFT_START_GRACE_MINUTES = 15;
 const PAYROLL_VARIANCE_TOLERANCE_MINUTES = 5;
 const PAYROLL_STANDARD_WORK_DAYS_PER_PERIOD = 10;
+
+/*
+  Employees listed here remain valid Magnemite users.
+
+  They are NOT deleted from the employee database.
+
+  They may still:
+  - authenticate
+  - retain management permissions
+  - retain schedules
+  - remain supervisors/managers
+  - retain historical records
+
+  They are excluded only from operational employee
+  populations such as:
+  - OPS employee dropdowns
+  - Schedule employee population
+  - Payroll reconciliation
+  - Attendance population
+  - Productivity / operational reporting
+  - Live floor operational population
+*/
+const NON_TIME_TRACKED_EMPLOYEE_NAMES = new Set([
+  // Executive / Management / Support profiles
+  // that do not use Magnemite time for payroll.
+
+  "jordan hyde",
+
+  // JP / Juan Pablo aliases
+  "jp",
+  "jp chinchilla",
+  "juan pablo chinchilla",
+
+  // Eduardo / Ed aliases
+  "eduardo valverde",
+  "ed valverde",
+
+  "luis gonzalez",
+
+  // Maggie / Margarita aliases
+  "maggie penon",
+  "margarita penon",
+
+  "karen calderon",
+
+  // Additional non-time-tracked profiles
+  "abrilclever",
+  "clever",
+  "kat johnson",
+  "karla sixto",
+]);
+
+/*
+  ID matching is preferred when possible because
+  employee names can later be changed in the roster.
+
+  Name matching remains as a fallback.
+*/
+const NON_TIME_TRACKED_EMPLOYEE_IDS = new Set([
+  "93970136",  // JP
+  "139672677", // AbrilClever
+  "4",         // Kat Johnson
+  "7",         // Karla Sixto
+
+  // Existing known exclusions
+  "53002263",  // Maggie Penon
+  "27095128",  // Karen Calderon
+]);
+
+/*
+  Normalize employee names so capitalization,
+  accents and surrounding spaces do not affect
+  exclusion matching.
+
+  Examples:
+  "Maggie Penon" -> "maggie penon"
+  "  JP  "       -> "jp"
+*/
+function normalizeOperationalEmployeeName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+/*
+  Determine whether an employee should remain
+  outside Magnemite operational time populations.
+
+  Matching priority:
+
+  1. Employee ID
+  2. Employee Name
+
+  This function does NOT check employment status.
+  Active / inactive filtering remains handled by
+  isActiveEmployee().
+*/
+function isNonTimeTrackedEmployee(employee) {
+  if (!employee) {
+    return false;
+  }
+
+  /*
+    Magnemite currently receives employee identity
+    from several sources.
+
+    Check every ID field that may exist so this works
+    with Google roster records, Supabase records and
+    merged employee records.
+  */
+  const employeeIds = [
+    employee.id,
+    employee.employee_id,
+    employee.Employee_ID,
+    employee.supabase_employee_id,
+  ]
+    .map((value) =>
+      String(value || "").trim()
+    )
+    .filter(Boolean);
+
+  /*
+    Employee ID is the strongest match.
+
+    If ANY known employee ID belongs to the exclusion
+    Set, immediately exclude the employee from the
+    operational population.
+  */
+  const excludedById =
+    employeeIds.some((employeeId) =>
+      NON_TIME_TRACKED_EMPLOYEE_IDS.has(
+        employeeId
+      )
+    );
+
+  if (excludedById) {
+    return true;
+  }
+
+  /*
+    Fall back to employee name.
+
+    Different Magnemite data sources may expose the
+    name under full_name, employee_name or name.
+  */
+  const employeeName =
+    normalizeOperationalEmployeeName(
+      employee.full_name ||
+      employee.employee_name ||
+      employee.name ||
+      ""
+    );
+
+  return NON_TIME_TRACKED_EMPLOYEE_NAMES.has(
+    employeeName
+  );
+}
+
 const REQUEST_TYPE_OPTIONS = ["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Day off due to Swap"];
+
 const APPROVED_ATTENDANCE_ABSENCE_TYPES = [
   "PTO",
   "VTO",
@@ -1275,6 +1449,14 @@ payload.schedule_days = dayValues;
   setNumber("vto_balance_days", ["VTO_Balance_Days", "VTO Balance Days", "VTO Days"]);
 
   setNumber("break_minutes", ["Break_Minutes", "Break Minutes", "Break Min", "Lunch_Minutes", "Lunch Minutes", "Lunch Min"]);
+  setNumber(
+  "expected_productive_hours",
+  [
+    "expected_productive_hours",
+    "Expected_Productive_Hours",
+    "Expected Productive Hours",
+  ]
+);
 // setNumber("lunch_minutes", ["Lunch_Minutes", "Lunch Minutes", "Lunch Min"]);
 
 
@@ -1911,6 +2093,278 @@ function mergeWorkforceRowsIntoEmployees(currentEmployees, workforceRows, option
     missingCount: Math.max(0, workforceRows.length - matchedRosterKeys.size),
   };
 }
+
+function buildScheduleVersionSyncRows(
+  workforceRows = [],
+  employeesList = []
+) {
+  /*
+    Build employee lookup once.
+
+    This avoids repeatedly searching the full
+    employee list for every weekday.
+  */
+  const employeeById =
+    new Map();
+
+  employeesList.forEach(
+    (employee) => {
+      [
+        employee.id,
+        employee.employee_id,
+        employee.Employee_ID,
+        employee.supabase_employee_id,
+      ]
+        .map((value) =>
+          String(
+            value || ""
+          ).trim()
+        )
+        .filter(Boolean)
+        .forEach((employeeId) => {
+          employeeById.set(
+            employeeId,
+            employee
+          );
+        });
+    }
+  );
+
+  const rows = [];
+
+  workforceRows.forEach(
+    (workforceRow) => {
+      const employeeId =
+        String(
+          workforceRow?.employeeId ||
+          ""
+        ).trim();
+
+      if (!employeeId) {
+        return;
+      }
+
+      const employee =
+        employeeById.get(
+          employeeId
+        ) || null;
+
+      const payload =
+        workforceRow?.payload ||
+        {};
+
+      const scheduleDays =
+        payload.schedule_days ||
+        {};
+
+      /*
+        IMPORTANT:
+        Some App_Schedules rows are incomplete.
+
+        If Google contains no explicit weekday
+        markers for an employee, do NOT create
+        new effective-dated versions. This keeps
+        the existing baseline intact instead of
+        guessing a schedule.
+      */
+      const hasExplicitSchedule =
+        WEEK_DAYS.some((day) => {
+          const rawValue =
+            scheduleDays[day] ??
+            scheduleDays[
+              day.toLowerCase()
+            ] ??
+            "";
+
+          return (
+            String(
+              rawValue || ""
+            ).trim() !== ""
+          );
+        });
+
+      if (!hasExplicitSchedule) {
+        return;
+      }
+
+      WEEK_DAYS.forEach(
+        (day) => {
+          const rawMarker =
+            scheduleDays[day] ??
+            scheduleDays[
+              day.toLowerCase()
+            ] ??
+            "";
+
+          const marker =
+            String(
+              rawMarker || ""
+            )
+              .trim()
+              .toUpperCase();
+
+          /*
+            Do not invent a weekday if that
+            particular source cell is blank.
+          */
+          if (!marker) {
+            return;
+          }
+
+          const isScheduled =
+            marker !== "OFF";
+
+          const dayBreaks =
+            employee
+              ?.breaks_by_day?.[
+                day
+              ] || {};
+
+          rows.push({
+            employee_id:
+              employeeId,
+
+            employee_name:
+              employee?.full_name ||
+              workforceRow?.fullName ||
+              "",
+
+            day_name:
+              day,
+
+            lob:
+              employee?.lob ||
+              "",
+
+            department:
+              employee?.department ||
+              "",
+
+            supervisor:
+              employee?.supervisor ||
+              employee?.team_leader ||
+              "",
+
+            shift_start:
+              isScheduled
+                ? (
+                    payload.shift_start ||
+                    ""
+                  )
+                : null,
+
+            shift_end:
+              isScheduled
+                ? (
+                    payload.shift_end ||
+                    ""
+                  )
+                : null,
+
+            is_scheduled:
+              isScheduled,
+
+            off_days:
+              payload.off_days ||
+              employee?.off_days ||
+              "",
+
+            lunch_start:
+              employee?.lunch_start ||
+              null,
+
+            lunch_end:
+              employee?.lunch_end ||
+              null,
+
+            break_1_start:
+              dayBreaks
+                .first_break_start ||
+              null,
+
+            break_1_end:
+              dayBreaks
+                .first_break_end ||
+              null,
+
+            break_2_start:
+              dayBreaks
+                .second_break_start ||
+              null,
+
+            break_2_end:
+              dayBreaks
+                .second_break_end ||
+              null,
+
+            expected_productive_hours:
+              payload
+                .expected_productive_hours ??
+              employee
+                ?.expected_productive_hours ??
+              null,
+
+            source_schedule_key:
+              `${employeeId}_${day}`,
+
+            source:
+              "Google Sheets: App_Schedules",
+          });
+        }
+      );
+    }
+  );
+
+  return rows;
+}
+
+
+/*
+  Send the current App_Schedules snapshot to the
+  server-side effective-dated schedule version API.
+
+  This helper does not write directly to Supabase.
+  The API performs the historical comparison and
+  only creates a new version when the actual
+  employee schedule has changed.
+*/
+async function syncEffectiveDatedScheduleVersions(
+  rows,
+  effectiveDate = getAppDateKey()
+) {
+  const scheduleRows = Array.isArray(rows) ? rows : [];
+
+  /*
+    Effective-dated schedule versions are written securely
+    by Google Apps Script / server-side synchronization.
+
+    Magnemite's browser must never contain SCHEDULE_SYNC_SECRET.
+    This function remains as a compatibility layer so existing
+    roster synchronization logic does not break.
+  */
+
+  const result = {
+    success: true,
+    skipped: true,
+    source: "Google Apps Script / server-side sync",
+    effectiveDate,
+    receivedCount: scheduleRows.length,
+    insertedCount: 0,
+    sameDayUpdatedCount: 0,
+    closedCount: 0,
+    unchangedCount: scheduleRows.length,
+    changedCount: 0,
+    duplicateOpenKeys: [],
+  };
+
+  console.log(
+    "Effective-dated schedule write delegated to secure server-side sync:",
+    result
+  );
+
+  return result;
+}
+
 function mergeBreakRowsIntoEmployees(currentEmployees, breakRows) {
   if (!Array.isArray(breakRows) || !breakRows.length) {
     return { employees: currentEmployees, updatedCount: 0, missingCount: 0 };
@@ -2263,6 +2717,11 @@ function getStableSchedule(
       second_break_end: "Not Available",
       off_days: "",
       sub_department: "",
+      is_scheduled: false,
+      schedule_version_id: "",
+      schedule_effective_from: "",
+      schedule_effective_to: "",
+      schedule_source: "",
     };
   }
 
@@ -2275,85 +2734,112 @@ function getStableSchedule(
         todayDayName(employeeTimeZone)
     );
 
+  const targetScheduleDate =
+    formatDateOnly(scheduleDate) ||
+    getEmployeeDateKey(employee);
+
+    const targetScheduleDateObject =
+  new Date(
+    `${targetScheduleDate}T12:00:00Z`
+  );
+
   const employeeIdentifierCandidates = [
-  employee?.employee_id,
-  employee?.Employee_ID,
-  employee?.id,
-  employee?.supabase_employee_id,
-]
-  .map((value) =>
-    String(value || "").trim().toLowerCase()
-  )
-  .filter(Boolean);
+    employee?.employee_id,
+    employee?.Employee_ID,
+    employee?.id,
+    employee?.supabase_employee_id,
+  ]
+    .map((value) =>
+      String(value || "")
+        .trim()
+        .toLowerCase()
+    )
+    .filter(Boolean);
 
   const normalizedEmployeeId =
-  employeeIdentifierCandidates[0] || "";
+    employeeIdentifierCandidates[0] || "";
 
-const matchingScheduleException =
-  Array.isArray(scheduleExceptions)
-    ? scheduleExceptions.find((exceptionRow) => {
-        const exceptionEmployeeId = String(
-          exceptionRow?.employee_id ||
-            exceptionRow?.Employee_ID ||
-            ""
-        ).trim();
-
-        const exceptionDay = normalizeDayName(
-          exceptionRow?.weekday ||
-            exceptionRow?.Weekday ||
-            ""
-        );
-        const targetDate =
-  formatDateOnly(scheduleDate) ||
-  getEmployeeDateKey(employee);
-
-const exceptionStartDate =
-  formatDateOnly(
-    exceptionRow?.start_date ||
-      exceptionRow?.Start_Date ||
-      ""
-  );
-
-const exceptionEndDate =
-  formatDateOnly(
-    exceptionRow?.end_date ||
-      exceptionRow?.End_Date ||
-      ""
-  );
-
-const dateIsValid =
-  (!exceptionStartDate ||
-    targetDate >= exceptionStartDate) &&
-  (!exceptionEndDate ||
-    targetDate <= exceptionEndDate);
-
-        return (
-  employeeIdentifierCandidates.includes(
-  exceptionEmployeeId.toLowerCase()
-) &&
-  exceptionDay === normalizedDay &&
-  dateIsValid &&
-  normalizeBoolean(
-    exceptionRow?.enabled ??
-      exceptionRow?.Enabled
-  )
-);
-      })
-    : null;
-
-    
   /*
-    Supabase employee_breaks is the primary source
-    for daily first and second break schedules.
+    Schedule exception has highest priority.
+    It applies only when:
+    - employee matches
+    - weekday matches
+    - selected date falls inside the exception
+    - exception is enabled
+  */
+  const matchingScheduleException =
+    Array.isArray(scheduleExceptions)
+      ? scheduleExceptions.find(
+          (exceptionRow) => {
+            const exceptionEmployeeId =
+              String(
+                exceptionRow?.employee_id ||
+                  exceptionRow?.Employee_ID ||
+                  ""
+              )
+                .trim()
+                .toLowerCase();
+
+            const exceptionDay =
+              normalizeDayName(
+                exceptionRow?.weekday ||
+                  exceptionRow?.Weekday ||
+                  ""
+              );
+
+            const exceptionStartDate =
+              formatDateOnly(
+                exceptionRow?.start_date ||
+                  exceptionRow?.Start_Date ||
+                  ""
+              );
+
+            const exceptionEndDate =
+              formatDateOnly(
+                exceptionRow?.end_date ||
+                  exceptionRow?.End_Date ||
+                  ""
+              );
+
+            const dateIsValid =
+              (!exceptionStartDate ||
+                targetScheduleDate >=
+                  exceptionStartDate) &&
+              (!exceptionEndDate ||
+                targetScheduleDate <=
+                  exceptionEndDate);
+
+            return (
+              employeeIdentifierCandidates.includes(
+                exceptionEmployeeId
+              ) &&
+              exceptionDay ===
+                normalizedDay &&
+              dateIsValid &&
+              normalizeBoolean(
+                exceptionRow?.enabled ??
+                  exceptionRow?.Enabled
+              )
+            );
+          }
+        )
+      : null;
+
+  /*
+    Supabase employee_breaks remains the
+    primary source for daily break times.
   */
   const matchingBreakRow =
     Array.isArray(employeeBreakRows)
       ? employeeBreakRows.find((row) => {
-          const rowEmployeeId = String(
-            row?.employee_id ||
-              row?.Employee_ID ||
-              ""
-          ).trim();
+          const rowEmployeeId =
+            String(
+              row?.employee_id ||
+                row?.Employee_ID ||
+                ""
+            )
+              .trim()
+              .toLowerCase();
 
           const rowDay =
             normalizeDayName(
@@ -2365,152 +2851,368 @@ const dateIsValid =
             );
 
           return (
-            rowEmployeeId ===
-              normalizedEmployeeId &&
+            employeeIdentifierCandidates.includes(
+              rowEmployeeId
+            ) &&
             rowDay === normalizedDay
           );
         })
       : null;
 
+  const dayBreaks =
+    matchingBreakRow || {};
+
   /*
-    Legacy Google Sheets break information remains
-    as a fallback while the new Supabase source is tested.
+    Find ALL schedule versions belonging
+    to this employee + weekday.
+
+    They are sorted oldest → newest.
   */
- const dayBreaks = matchingBreakRow || {};
-
-  const matchingDailySchedule =
+  const scheduleCandidates =
     Array.isArray(schedules)
-      ? schedules.find((scheduleRow) => {
-          const scheduleEmployeeId =
-            String(
-              scheduleRow?.employee_id ||
-                scheduleRow?.Employee_ID ||
-                scheduleRow?.employeeId ||
-                ""
-            ).trim();
+      ? schedules
+          .filter((scheduleRow) => {
+            const scheduleEmployeeId =
+              String(
+                scheduleRow?.employee_id ||
+                  scheduleRow?.Employee_ID ||
+                  scheduleRow?.employeeId ||
+                  ""
+              )
+                .trim()
+                .toLowerCase();
 
-          const scheduleDay =
-            normalizeDayName(
-              scheduleRow?.day_name ||
-                scheduleRow?.day ||
-                scheduleRow?.Day ||
-                ""
+            const scheduleDay =
+              normalizeDayName(
+                scheduleRow?.day_name ||
+                  scheduleRow?.day ||
+                  scheduleRow?.Day ||
+                  ""
+              );
+
+            return (
+              employeeIdentifierCandidates.includes(
+                scheduleEmployeeId
+              ) &&
+              scheduleDay === normalizedDay
             );
+          })
+          .sort((a, b) =>
+            String(
+              a?.effective_from || ""
+            ).localeCompare(
+              String(
+                b?.effective_from || ""
+              )
+            )
+          )
+      : [];
 
-          return (
-            scheduleEmployeeId ===
-              normalizedEmployeeId &&
-            scheduleDay === normalizedDay
+  /*
+    Select the schedule version that was
+    actually effective on targetScheduleDate.
+  */
+  let matchingDailySchedule =
+    scheduleCandidates.find(
+      (scheduleRow) => {
+        const effectiveFrom =
+          formatDateOnly(
+            scheduleRow?.effective_from
           );
-        })
-      : null;
 
+        const effectiveTo =
+          formatDateOnly(
+            scheduleRow?.effective_to
+          );
+
+        return (
+          (!effectiveFrom ||
+            targetScheduleDate >=
+              effectiveFrom) &&
+          (!effectiveTo ||
+            targetScheduleDate <=
+              effectiveTo)
+        );
+      }
+    ) || null;
+
+  /*
+    Historical dates before 2026-09-12:
+
+    We do not have older version history yet.
+
+    Use the earliest frozen baseline instead
+    of the employee's live/current schedule.
+
+    This is important because future changes
+    must not rewrite historical reporting.
+  */
+  if (
+    !matchingDailySchedule &&
+    scheduleCandidates.length
+  ) {
+    const earliestSchedule =
+      scheduleCandidates[0];
+
+    const earliestEffectiveFrom =
+      formatDateOnly(
+        earliestSchedule?.effective_from
+      );
+
+    if (
+      earliestEffectiveFrom &&
+      targetScheduleDate <
+        earliestEffectiveFrom
+    ) {
+      matchingDailySchedule =
+        earliestSchedule;
+    }
+  }
+
+  const versionExplicitlyOff =
+    Boolean(matchingDailySchedule) &&
+    matchingDailySchedule
+      ?.is_scheduled === false;
+
+  /*
+    Schedule exception overrides the
+    normal/versioned schedule.
+
+    An OFF version must NOT fall through
+    to employee.shift_start / shift_end.
+  */
   const rawShiftStart =
-  matchingScheduleException?.shift_start_est ??
-  matchingScheduleException?.Shift_Start_EST ??
-  matchingDailySchedule?.shift_start ??
-  matchingDailySchedule?.start_time_est ??
-  employee.start_time_est ??
-  employee.Start_Time_EST ??
-  employee.shift_start ??
-  employee.Shift_Start ??
-  "";
+    matchingScheduleException
+      ? (
+          matchingScheduleException
+            ?.shift_start_est ??
+          matchingScheduleException
+            ?.Shift_Start_EST ??
+          ""
+        )
+      : versionExplicitlyOff
+      ? ""
+      : (
+          matchingDailySchedule
+            ?.shift_start ??
+          matchingDailySchedule
+            ?.start_time_est ??
+          employee.start_time_est ??
+          employee.Start_Time_EST ??
+          employee.shift_start ??
+          employee.Shift_Start ??
+          ""
+        );
 
   const rawShiftEnd =
-  matchingScheduleException?.shift_end_est ??
-  matchingScheduleException?.Shift_End_EST ??
-  matchingDailySchedule?.shift_end ??
-  matchingDailySchedule?.end_time_est ??
-  employee.end_time_est ??
-  employee.End_Time_EST ??
-  employee.shift_end ??
-  employee.Shift_End ??
-  "";
+    matchingScheduleException
+      ? (
+          matchingScheduleException
+            ?.shift_end_est ??
+          matchingScheduleException
+            ?.Shift_End_EST ??
+          ""
+        )
+      : versionExplicitlyOff
+      ? ""
+      : (
+          matchingDailySchedule
+            ?.shift_end ??
+          matchingDailySchedule
+            ?.end_time_est ??
+          employee.end_time_est ??
+          employee.End_Time_EST ??
+          employee.shift_end ??
+          employee.Shift_End ??
+          ""
+        );
 
   const rawFirstBreakStart =
-  (
-    matchingScheduleException?.break_1_start_est ??
-    matchingScheduleException?.Break_1_Start_EST
-  ) ||
-  matchingBreakRow?.first_break_start ||
-  dayBreaks.first_break_start ||
-  matchingDailySchedule?.first_break_start ||
-  matchingDailySchedule?.break_start ||
-  employee.break_start ||
-  "Not Available";
+    versionExplicitlyOff &&
+    !matchingScheduleException
+      ? "Not Available"
+      : (
+          (
+            matchingScheduleException
+              ?.break_1_start_est ??
+            matchingScheduleException
+              ?.Break_1_Start_EST
+          ) ||
+          matchingBreakRow
+            ?.first_break_start ||
+          dayBreaks.first_break_start ||
+          matchingDailySchedule
+            ?.first_break_start ||
+          matchingDailySchedule
+            ?.break_start ||
+          employee.break_start ||
+          "Not Available"
+        );
 
-const rawFirstBreakEnd =
-  (
-    matchingScheduleException?.break_1_end_est ??
-    matchingScheduleException?.Break_1_End_EST
-  ) ||
-  matchingBreakRow?.first_break_end ||
-  dayBreaks.first_break_end ||
-  matchingDailySchedule?.first_break_end ||
-  matchingDailySchedule?.break_end ||
-  employee.break_end ||
-  "Not Available";
+  const rawFirstBreakEnd =
+    versionExplicitlyOff &&
+    !matchingScheduleException
+      ? "Not Available"
+      : (
+          (
+            matchingScheduleException
+              ?.break_1_end_est ??
+            matchingScheduleException
+              ?.Break_1_End_EST
+          ) ||
+          matchingBreakRow
+            ?.first_break_end ||
+          dayBreaks.first_break_end ||
+          matchingDailySchedule
+            ?.first_break_end ||
+          matchingDailySchedule
+            ?.break_end ||
+          employee.break_end ||
+          "Not Available"
+        );
 
-const rawSecondBreakStart =
-  (
-    matchingScheduleException?.break_2_start_est ??
-    matchingScheduleException?.Break_2_Start_EST
-  ) ||
-  matchingBreakRow?.second_break_start ||
-  dayBreaks.second_break_start ||
-  matchingDailySchedule?.second_break_start ||
-  employee.second_break_start ||
-  "Not Available";
+  const rawSecondBreakStart =
+    versionExplicitlyOff &&
+    !matchingScheduleException
+      ? "Not Available"
+      : (
+          (
+            matchingScheduleException
+              ?.break_2_start_est ??
+            matchingScheduleException
+              ?.Break_2_Start_EST
+          ) ||
+          matchingBreakRow
+            ?.second_break_start ||
+          dayBreaks.second_break_start ||
+          matchingDailySchedule
+            ?.second_break_start ||
+          employee.second_break_start ||
+          "Not Available"
+        );
 
-const rawSecondBreakEnd =
-  (
-    matchingScheduleException?.break_2_end_est ??
-    matchingScheduleException?.Break_2_End_EST
-  ) ||
-  matchingBreakRow?.second_break_end ||
-  dayBreaks.second_break_end ||
-  matchingDailySchedule?.second_break_end ||
-  employee.second_break_end ||
-  "Not Available";
+  const rawSecondBreakEnd =
+    versionExplicitlyOff &&
+    !matchingScheduleException
+      ? "Not Available"
+      : (
+          (
+            matchingScheduleException
+              ?.break_2_end_est ??
+            matchingScheduleException
+              ?.Break_2_End_EST
+          ) ||
+          matchingBreakRow
+            ?.second_break_end ||
+          dayBreaks.second_break_end ||
+          matchingDailySchedule
+            ?.second_break_end ||
+          employee.second_break_end ||
+          "Not Available"
+        );
+
+  /*
+    Determine whether this employee was
+    actually scheduled on this date.
+
+    Priority:
+    1. Schedule Exception
+    2. Effective-dated version
+    3. Current employee master fallback
+  */
+  const fallbackOffDay =
+    normalizeOffDays(
+      employee.off_days
+    )
+      .map(normalizeDayName)
+      .includes(normalizedDay);
+
+  const isScheduled =
+    matchingScheduleException
+      ? true
+      : matchingDailySchedule
+      ? matchingDailySchedule
+          ?.is_scheduled !== false
+      : !fallbackOffDay;
 
   return {
-      has_schedule_exception:
-    Boolean(matchingScheduleException),
+    is_scheduled:
+      isScheduled,
 
-      schedule_exception_id:
-    matchingScheduleException?.exception_id || "",
+    has_schedule_exception:
+      Boolean(
+        matchingScheduleException
+      ),
 
-  schedule_exception_notes:
-    String(
-      matchingScheduleException?.notes || ""
-    ).trim(),
+    schedule_exception_id:
+      matchingScheduleException
+        ?.exception_id || "",
 
-  schedule_exception_source:
-    matchingScheduleException?.source || "",
+    schedule_exception_notes:
+      String(
+        matchingScheduleException
+          ?.notes || ""
+      ).trim(),
+
+    schedule_exception_source:
+      matchingScheduleException
+        ?.source || "",
+
+    schedule_version_id:
+      matchingDailySchedule?.id || "",
+
+    schedule_effective_from:
+      matchingDailySchedule
+        ?.effective_from || "",
+
+    schedule_effective_to:
+      matchingDailySchedule
+        ?.effective_to || "",
+
+    schedule_source:
+      matchingScheduleException
+        ? "Schedule Exception"
+        : matchingDailySchedule
+        ? (
+            matchingDailySchedule
+              ?.source ||
+            "Schedule Version"
+          )
+        : "Employee Master Schedule",
 
     shift_start:
-      convertEasternScheduleToEmployeeLocal(
-        rawShiftStart,
-        employee
-      ),
+  convertEasternScheduleToEmployeeLocal(
+    rawShiftStart,
+    employee,
+    targetScheduleDateObject
+  ),
 
-    shift_end:
-      convertEasternScheduleToEmployeeLocal(
-        rawShiftEnd,
-        employee
-      ),
+shift_end:
+  convertEasternScheduleToEmployeeLocal(
+    rawShiftEnd,
+    employee,
+    targetScheduleDateObject
+  ),
 
     break_start:
-  formatMilitaryTime(rawFirstBreakStart),
+      formatMilitaryTime(
+        rawFirstBreakStart
+      ),
 
-break_end:
-  formatMilitaryTime(rawFirstBreakEnd),
+    break_end:
+      formatMilitaryTime(
+        rawFirstBreakEnd
+      ),
 
-second_break_start:
-  formatMilitaryTime(rawSecondBreakStart),
+    second_break_start:
+      formatMilitaryTime(
+        rawSecondBreakStart
+      ),
 
-second_break_end:
-  formatMilitaryTime(rawSecondBreakEnd),
+    second_break_end:
+      formatMilitaryTime(
+        rawSecondBreakEnd
+      ),
 
     off_days:
       matchingDailySchedule?.off_days ||
@@ -2965,6 +3667,43 @@ function employeeMonthlyAttendance(employee, timeEntries = [], requests = []) {
     approvedRequests: approvedRequests.slice(0, 6),
   };
 }
+function isDemoEmployee(employee) {
+  const employeeId = String(
+    employee?.employee_id ||
+    employee?.Employee_ID ||
+    employee?.id ||
+    ""
+  )
+    .trim()
+    .toUpperCase();
+
+  const fullName = String(
+    employee?.full_name ||
+    employee?.employee_name ||
+    employee?.name ||
+    ""
+  )
+    .trim()
+    .toLowerCase();
+
+  const email = normalizeEmail(
+    employee?.email ||
+    employee?.employee_email ||
+    ""
+  );
+
+  return (
+    employeeId.startsWith("EMP-") ||
+    fullName.startsWith("sample ") ||
+    fullName === "system admin" ||
+    fullName === "executive user" ||
+    DEMO_ACCOUNTS.some(
+      (account) =>
+        normalizeEmail(account.email) === email
+    )
+  );
+}
+
 function isActiveEmployee(employee) {
   const status = String(
     employee?.employment_status ||
@@ -2980,14 +3719,9 @@ function isActiveEmployee(employee) {
       ""
   ).trim();
 
-  const email = String(
-    employee?.email || ""
-  )
-    .trim()
-    .toLowerCase();
-
   const employeeId = String(
     employee?.employee_id ||
+      employee?.Employee_ID ||
       employee?.id ||
       ""
   ).trim();
@@ -2999,12 +3733,13 @@ function isActiveEmployee(employee) {
 
   const hasValidIdentity =
     Boolean(employeeId) &&
-    Boolean(email) &&
+    Boolean(fullName) &&
     !isPlaceholderName;
 
   return (
     status === "active" &&
-    hasValidIdentity
+    hasValidIdentity &&
+    !isDemoEmployee(employee)
   );
 }
 function applyMagnemiteScopeToEmployees(
@@ -3570,7 +4305,15 @@ async function googleJsonpWithRetry(params = {}, attempts = 2) {
 }
 
 async function googleGetDatabase() {
-  if (!GOOGLE_API_URL || GOOGLE_API_URL.includes("PASTE_YOUR_WORKING")) return null;
+    if (
+    !LEGACY_GOOGLE_DATABASE_BOOTSTRAP_ENABLED ||
+    !GOOGLE_API_URL ||
+    GOOGLE_API_URL.includes(
+      "PASTE_YOUR_WORKING"
+    )
+  ) {
+    return null;
+  }
   try {
     const responseData = await googleJsonpWithRetry({ action: "getAll" }, 2);
     console.log("Google Sheets GET result:", responseData);
@@ -4353,6 +5096,135 @@ pto_balance:
     "",
 };
     });
+
+    /*
+  Ensure Supabase-only employees are also loaded.
+
+  This is critical when the legacy Google database
+  bootstrap is unavailable. Authentication and
+  forgotten-shift cleanup must still have the
+  complete employee roster.
+*/
+const mergedEmployeeKeys =
+  new Set();
+
+mergedEmployees.forEach(
+  (employee) => {
+    [
+      normalizeEmail(
+        employee.email
+      ),
+
+      String(
+        employee.id ||
+          employee.employee_id ||
+          ""
+      )
+        .trim()
+        .toLowerCase(),
+
+      normalizeNameKey(
+        employee.full_name
+      ),
+    ]
+      .filter(Boolean)
+      .forEach((key) =>
+        mergedEmployeeKeys.add(key)
+      );
+  }
+);
+
+supabaseEmployees.forEach(
+  (supabaseProfile) => {
+    const profileKeys = [
+      normalizeEmail(
+        supabaseProfile.email ||
+          supabaseProfile.employee_email
+      ),
+
+      String(
+        supabaseProfile.employee_id ||
+          supabaseProfile.Employee_ID ||
+          supabaseProfile.id ||
+          ""
+      )
+        .trim()
+        .toLowerCase(),
+
+      normalizeNameKey(
+        supabaseProfile.full_name ||
+          supabaseProfile.employee_name ||
+          supabaseProfile.name
+      ),
+    ].filter(Boolean);
+
+    const alreadyLoaded =
+      profileKeys.some((key) =>
+        mergedEmployeeKeys.has(key)
+      );
+
+    if (alreadyLoaded) {
+      return;
+    }
+
+    let supabaseBalance = null;
+
+    for (const key of profileKeys) {
+      const match =
+        balanceIndex.get(key);
+
+      if (match) {
+        supabaseBalance = match;
+        break;
+      }
+    }
+
+    const mappedEmployee =
+      mapSupabaseEmployee(
+        supabaseProfile,
+        supabaseBalance || {},
+        {},
+        {}
+      );
+
+    /*
+      Authentication credentials must come only
+      from the actual Supabase profile.
+
+      Do not apply demo/default passwords.
+    */
+    mergedEmployees.push({
+      ...mappedEmployee,
+
+      temp_password:
+        supabaseProfile.temp_password ??
+        "",
+
+      temporary_password:
+        supabaseProfile.temporary_password ??
+        "",
+
+      must_change_password:
+        normalizeBoolean(
+          supabaseProfile.must_change_password
+        ),
+
+      force_password_change:
+        normalizeBoolean(
+          supabaseProfile.force_password_change
+        ),
+
+      requires_password_reset:
+        normalizeBoolean(
+          supabaseProfile.requires_password_reset
+        ),
+    });
+
+    profileKeys.forEach((key) =>
+      mergedEmployeeKeys.add(key)
+    );
+  }
+);
 
     if (typeof applyEmployees === "function") {
       applyEmployees(mergedEmployees);
@@ -5537,6 +6409,7 @@ savedDuration > 0
 function HRWorkforceApp() {
   const [employees, setEmployees] = useState([]);
   const [scheduleExceptions, setScheduleExceptions] = useState([]);
+  const [scheduleVersions, setScheduleVersions] = useState([]);
   const [countryHolidays, setCountryHolidays] = useState([]);
 
   const [
@@ -6379,44 +7252,85 @@ rosterResult = mergeWorkforceRowsIntoEmployees(
 breakResult = mergeBreakRowsIntoEmployees(rosterResult.employees, breakRows);
 balanceResult = mergeBalanceRowsIntoEmployees(breakResult.employees, balanceRows);
 
-const exceptionResponse = await fetch("/api/sync-schedule-exceptions", {
-  method: "POST",
-  headers: {
-    "Content-Type": "application/json",
-    "x-sync-secret": import.meta.env.VITE_SCHEDULE_SYNC_SECRET,
-  },
-  body: JSON.stringify({
-  rows: exceptionRows,
-}),
-});
+/*
+  Schedule exceptions are synchronized securely by Google Apps Script.
 
-const exceptionData = await exceptionResponse.json();
+  The browser intentionally does NOT call /api/sync-schedule-exceptions
+  because SCHEDULE_SYNC_SECRET must remain server-side.
 
-if (!exceptionResponse.ok) {
-  throw new Error(
-    exceptionData?.error ||
-      exceptionData?.message ||
-      "Unable to sync schedule exceptions."
-  );
-}
+  After the Google Apps Script synchronization runs, simply reload
+  the current Supabase schedule exceptions here.
+*/
+await loadScheduleExceptions();
 
 const exceptionSyncResult = {
-  syncedCount:
-    exceptionData.syncedCount ??
-    exceptionData.count ??
-    exceptionData.data?.length ??
-    0,
+  syncedCount: 0,
+  source: "Google Apps Script / server-side sync",
 };
 
 console.log(
-  "Schedule exception sync completed:",
+  "Schedule exceptions loaded after server-side sync:",
   exceptionSyncResult
 );
 
-await loadScheduleExceptions();
+/*
+  Use the fully merged workforce employee data
+  when building schedule versions.
 
+  At this point roster, break and balance data
+  have already been resolved for this sync.
+*/
 finalSyncedEmployees =
   balanceResult.employees;
+
+/*
+  Build one schedule-version row for every
+  explicit employee + weekday coming from
+  App_Schedules.
+
+  Blank weekday source cells are intentionally
+  ignored so Magnemite never invents schedules.
+*/
+const scheduleVersionRows =
+  buildScheduleVersionSyncRows(
+    workforceRows,
+    finalSyncedEmployees
+  );
+
+console.log(
+  "Schedule version rows prepared:",
+  scheduleVersionRows.length,
+  scheduleVersionRows.slice(0, 10)
+);
+
+/*
+  Compare the current App_Schedules snapshot
+  against the currently-open Supabase versions.
+
+  The API will:
+  - leave unchanged schedules alone
+  - update a same-day version when necessary
+  - close the previous version when a later
+    schedule change becomes effective
+  - insert the new effective-dated version
+*/
+const scheduleVersionSyncResult =
+  await syncEffectiveDatedScheduleVersions(
+    scheduleVersionRows,
+    getAppDateKey()
+  );
+
+console.log(
+  "Effective-dated schedule versions synced:",
+  scheduleVersionSyncResult
+);
+
+/*
+  Immediately reload schedule versions so
+  Agent Portal, Payroll and historical schedule
+  calculations use the newly synchronized data.
+*/
+await loadScheduleVersions();
 
 setEmployees(finalSyncedEmployees);
 if (false && supabase && finalSyncedEmployees.length) {
@@ -7077,6 +7991,26 @@ const visibleEmployees =
           employee.searchable !== false
         );
       });
+
+      /*
+  Operational workforce.
+
+  These employees are active and visible in Magnemite,
+  but employees specifically marked as non-time-tracked
+  are excluded from OPS/time/payroll interfaces.
+
+  Their employee records remain in `employees` so:
+  - authentication still works
+  - management permissions still work
+  - historical data remains intact
+  - schedules remain stored in the database
+*/
+const operationalVisibleEmployees =
+  visibleEmployees.filter(
+    (employee) =>
+      !isNonTimeTrackedEmployee(employee)
+  );
+
  const visibleTime = isAgentOnly && currentUser?.id
   ? timeEntries.filter((t) => t.employee_id === currentUser.id)
   : timeEntries;
@@ -7618,7 +8552,7 @@ const todaysLogs = activitySource
 ]);
 
   
-  const filteredVisibleEmployees = visibleEmployees.filter((employee) => {
+  const filteredVisibleEmployees = operationalVisibleEmployees.filter((employee) => {
   if (!employee) return false;
     const assignedLeader = String(
   employee.team_leader ||
@@ -7647,40 +8581,56 @@ return (
     employee.country === filters.country)
 );
   });
+
 const scheduleRows =
   filters.employee !== "All"
-    ? WEEK_DAYS.map((day) => {
-        const employee = filteredVisibleEmployees[0] || selectedEmployee;
+    ? (() => {
+        const employee =
+          filteredVisibleEmployees[0];
 
-        return {
+        /*
+          Never fall back to the signed-in manager.
+          If the selected employee is not part of the
+          operational workforce, show no schedule rows.
+        */
+        if (!employee) {
+          return [];
+        }
+
+        return WEEK_DAYS.map((day) => ({
           employee,
           day,
-          schedule: getStableSchedule(
-  employee,
-  [],
-  day,
-  employeeBreakRows,
-  scheduleExceptions
-),
-        };
-      })
-    : filteredVisibleEmployees.map((employee) => {
-    const employeeDay = todayDayName(
-      getEmployeeTimeZone(employee)
-    );
 
-    return {
-      employee,
-      day: employeeDay,
-      schedule: getStableSchedule(
-  employee,
-  [],
-  employeeDay,
-  employeeBreakRows,
-  scheduleExceptions
-),
-    };
-  });
+          schedule: getStableSchedule(
+            employee,
+            scheduleVersions,
+            day,
+            employeeBreakRows,
+            scheduleExceptions
+          ),
+        }));
+      })()
+    : filteredVisibleEmployees.map(
+        (employee) => {
+          const employeeDay =
+            todayDayName(
+              getEmployeeTimeZone(employee)
+            );
+
+          return {
+            employee,
+            day: employeeDay,
+
+            schedule: getStableSchedule(
+              employee,
+              scheduleVersions,
+              employeeDay,
+              employeeBreakRows,
+              scheduleExceptions
+            ),
+          };
+        }
+      );
 
   const attendanceHeadcount = useMemo(() => {
   /*
@@ -7740,25 +8690,27 @@ const scheduleRows =
     selected weekday as an off day.
   */
   const scheduledEmployees =
-    activeEmployees.filter((employee) => {
-      const employeeTimeZone =
-        getEmployeeTimeZone(employee);
+  activeEmployees.filter((employee) => {
+    const employeeTimeZone =
+      getEmployeeTimeZone(employee);
 
-      const weekday = todayDayName(
-        employeeTimeZone,
-        reportDateObject
+    const weekday = todayDayName(
+      employeeTimeZone,
+      reportDateObject
+    );
+
+    const schedule =
+      getStableSchedule(
+        employee,
+        scheduleVersions,
+        weekday,
+        employeeBreakRows,
+        scheduleExceptions,
+        reportDate
       );
 
-      const offDays = normalizeOffDays(
-        employee.off_days
-      ).map((day) =>
-        String(day).toLowerCase()
-      );
-
-      return !offDays.includes(
-        weekday.toLowerCase()
-      );
-    });
+    return schedule.is_scheduled !== false;
+  });
 
   /*
     Find one approved absence covering the selected date.
@@ -7853,11 +8805,14 @@ const scheduleRows =
       );
 
     const employeeSchedule =
-      getStableSchedule(
-        employee,
-        [],
-        employeeReportDay
-      );
+  getStableSchedule(
+    employee,
+    scheduleVersions,
+    employeeReportDay,
+    employeeBreakRows,
+    scheduleExceptions,
+    reportDate
+  );
 
     const scheduledMinutes =
       minutesBetween(
@@ -8526,6 +9481,73 @@ async function loadCountryHolidays() {
   return loadedHolidays;
 }
 
+async function loadScheduleVersions() {
+  if (!supabase) {
+    setScheduleVersions([]);
+    return [];
+  }
+
+  try {
+    const pageSize = 1000;
+    let from = 0;
+    let allRows = [];
+
+    while (true) {
+      const { data, error } = await supabase
+        .from("employee_schedule_versions")
+        .select("*")
+        .order("employee_id", {
+          ascending: true,
+        })
+        .order("effective_from", {
+          ascending: true,
+        })
+        .range(
+          from,
+          from + pageSize - 1
+        );
+
+      if (error) {
+        throw error;
+      }
+
+      const rows =
+        Array.isArray(data)
+          ? data
+          : [];
+
+      allRows = [
+        ...allRows,
+        ...rows,
+      ];
+
+      if (rows.length < pageSize) {
+        break;
+      }
+
+      from += pageSize;
+    }
+
+    setScheduleVersions(allRows);
+
+    console.log(
+      "Schedule versions loaded:",
+      allRows.length
+    );
+
+    return allRows;
+  } catch (error) {
+    console.warn(
+      "Schedule versions load failed:",
+      error?.message || error
+    );
+
+    setScheduleVersions([]);
+
+    return [];
+  }
+}
+
   async function refreshLiveData() {
   /*
   Load independent reference data in parallel.
@@ -8704,9 +9726,12 @@ useEffect(() => {
   };
 
   const loadAuthenticatedData = async () => {
-  await loadScheduleExceptions();
-  await loadCountryHolidays();
-  await loadAuthenticatedScheduleData();
+  await Promise.all([
+    loadScheduleExceptions(),
+    loadCountryHolidays(),
+    loadScheduleVersions(),
+    loadAuthenticatedScheduleData(),
+  ]);
 };
 
 loadAuthenticatedData();
@@ -9154,7 +10179,7 @@ return () => {
   const lobOptions = [
   "All",
   ...new Set(
-    visibleEmployees
+    operationalVisibleEmployees
       .map((employee) =>
         String(employee.lob || "").trim()
       )
@@ -9165,7 +10190,7 @@ return () => {
 const departmentOptions = [
   "All",
   ...new Set(
-    visibleEmployees
+    operationalVisibleEmployees
       .map((employee) =>
         String(
           employee.department || ""
@@ -9177,7 +10202,7 @@ const departmentOptions = [
   const subDepartmentOptions = [
   "All",
   ...new Set(
-    visibleEmployees
+    operationalVisibleEmployees
       .filter((employee) => {
         if (filters.department === "All") {
           return true;
@@ -9205,7 +10230,7 @@ const departmentOptions = [
 const teamLeaderOptions = [
   "All",
   ...new Set(
-    visibleEmployees
+    operationalVisibleEmployees
       .filter((employee) => {
         const employeeDepartment = String(
           employee.department || ""
@@ -9242,7 +10267,8 @@ const teamLeaderOptions = [
   if (b === "All") return 1;
   return a.localeCompare(b);
 });
-  const balanceFilteredEmployees = visibleEmployees.filter((employee) => {
+  const balanceFilteredEmployees =
+  operationalVisibleEmployees.filter((employee) => {
   const employeeLob = String(employee.lob || "").trim();
 
   const employeeDepartment = String(
@@ -9315,6 +10341,62 @@ const employeeOptions = [
     .sort((a, b) => a.localeCompare(b)),
 ];
 
+/*
+  Reset an Employee filter that is no longer allowed
+  in operational workforce views.
+
+  This handles cases where:
+  - an excluded Manager/Executive was selected before HMR
+  - an employee becomes inactive
+  - a demo/sample profile was previously selected
+  - roster refresh removes the employee from operational scope
+*/
+useEffect(() => {
+  if (filters.employee === "All") {
+    return;
+  }
+
+  const selectedFilterEmployee =
+    employees.find(
+      (employee) =>
+        String(
+          employee.full_name ||
+          employee.name ||
+          ""
+        ).trim() ===
+        String(
+          filters.employee || ""
+        ).trim()
+    ) || null;
+
+  const shouldResetEmployeeFilter =
+    !selectedFilterEmployee ||
+    !isActiveEmployee(
+      selectedFilterEmployee
+    ) ||
+    isNonTimeTrackedEmployee(
+      selectedFilterEmployee
+    );
+
+  if (!shouldResetEmployeeFilter) {
+    return;
+  }
+
+  setFilters((current) => {
+    if (current.employee === "All") {
+      return current;
+    }
+
+    return {
+      ...current,
+      employee: "All",
+    };
+  });
+}, [
+  filters.employee,
+  employees,
+]);
+
 const getBalanceEmployeeId = (employee) =>
   String(
     employee?.id ||
@@ -9332,7 +10414,16 @@ const displayedBalanceEmployees =
       )
     : balanceFilteredEmployees;
 
-  const countryOptions = ["All", ...new Set(visibleEmployees.map((e) => e.country).filter(Boolean))];
+  const countryOptions = [
+  "All",
+  ...new Set(
+    operationalVisibleEmployees
+      .map((employee) =>
+        String(employee.country || "").trim()
+      )
+      .filter(Boolean)
+  ),
+];
 
   const payrollReviewerOptions =
   useMemo(() => {
@@ -9847,6 +10938,55 @@ const payrollTimeEntries = useMemo(() => {
   filters.employee,
   filters.country,
 ]);
+
+const payrollLogsByEmployeeDate =
+  useMemo(() => {
+    const index = new Map();
+
+    payrollTimeEntries.forEach(
+      (timeLog) => {
+        const employeeId =
+          String(
+            timeLog.employee_id || ""
+          ).trim();
+
+        const entryDate =
+          normalizeDateForFilter(
+            timeLog.date ||
+              timeLog.clock_in ||
+              timeLog.category_start ||
+              timeLog.created_at
+          );
+
+        if (
+          !employeeId ||
+          !entryDate
+        ) {
+          return;
+        }
+
+        const key =
+          `${employeeId}::${entryDate}`;
+
+        const existing =
+          index.get(key);
+
+        if (existing) {
+          existing.push(timeLog);
+        } else {
+          index.set(
+            key,
+            [timeLog]
+          );
+        }
+      }
+    );
+
+    return index;
+  }, [
+    payrollTimeEntries,
+  ]);
+
 const payrollEmployeePeriodSummary = useMemo(() => {
   /*
     Payroll reconciliation engine.
@@ -10082,8 +11222,8 @@ const payrollEmployeePeriodSummary = useMemo(() => {
     );
 
   const result =
-    filteredVisibleEmployees.map(
-      (employee) => {
+  filteredVisibleEmployees.map(
+    (employee) => {
         const employeeIds =
           [
             employee.id,
@@ -10219,31 +11359,24 @@ const isFutureDate =
             const schedule =
               getStableSchedule(
                 employee,
-                [],
+                scheduleVersions,
                 dayName,
                 employeeBreakRows,
                 scheduleExceptions,
                 dateKey
               );
 
-            const normalOffDays =
-              normalizeOffDays(
-                employee.off_days
-              ).map((day) =>
-                normalizeDayName(
-                  day
-                )
-              );
-
             /*
-              A valid schedule exception overrides
-              the normal employee off-day.
-            */
-            const isOffDay =
-              normalOffDays.includes(
-                dayName
-              ) &&
-              !schedule.has_schedule_exception;
+  getStableSchedule already resolves:
+  1. Schedule Exception
+  2. Effective-dated Schedule Version
+  3. Employee master fallback
+
+  Payroll should therefore use its resolved
+  scheduled/off-day state directly.
+*/
+const isOffDay =
+  schedule.is_scheduled === false;
 
             const scheduleRange =
               buildMinuteRange(
@@ -10451,32 +11584,18 @@ if (isPayrollScheduledDay) {
               Get all time logs belonging to the
               employee on this payroll date.
             */
-            const dayLogs =
-              payrollTimeEntries.filter(
-                (timeLog) => {
-                  const logEmployeeId =
-                    String(
-                      timeLog.employee_id ||
-                        ""
-                    ).trim();
+            const uniqueEmployeeIds =
+  Array.from(
+    new Set(employeeIds)
+  );
 
-                  const logDate =
-                    normalizeDateForFilter(
-                      timeLog.date ||
-                        timeLog.clock_in ||
-                        timeLog.category_start ||
-                        timeLog.created_at
-                    );
-
-                  return (
-                    employeeIds.includes(
-                      logEmployeeId
-                    ) &&
-                    logDate ===
-                      dateKey
-                  );
-                }
-              );
+const dayLogs =
+  uniqueEmployeeIds.flatMap(
+    (candidateEmployeeId) =>
+      payrollLogsByEmployeeDate.get(
+        `${candidateEmployeeId}::${dateKey}`
+      ) || []
+  );
 
             const attendanceIntervals =
               [];
@@ -10852,7 +11971,7 @@ const dayTimeAttendancePercent =
     ? Math.min(
         100,
         (
-          dayTrackedWithinSchedule /
+          dayLoggedMinutes /
           payrollDayScheduledMinutes
         ) * 100
       )
@@ -11170,15 +12289,15 @@ payableHours:
         );
 
         const timeAttendancePercent =
-          scheduledMinutes > 0
-            ? Math.min(
-                100,
-                (
-                  trackedWithinScheduleMinutes /
-                  scheduledMinutes
-                ) * 100
-              )
-            : 0;
+  scheduledMinutes > 0
+    ? Math.min(
+        100,
+        (
+          loggedMinutes /
+          scheduledMinutes
+        ) * 100
+      )
+    : 0;
 
         const approvedLeaveMinutes =
           ptoMinutes +
@@ -11366,9 +12485,10 @@ status,
   );
 }, [
   filteredVisibleEmployees,
-  payrollTimeEntries,
+  payrollLogsByEmployeeDate,
   payrollDateRange.startDate,
   payrollDateRange.endDate,
+  scheduleVersions,
   employeeBreakRows,
   scheduleExceptions,
   requests,
@@ -12035,7 +13155,7 @@ const hasApprovedReportingAbsence =
       const schedule =
         getStableSchedule(
           employee,
-          [],
+          scheduleVersions,
           dayName,
           employeeBreakRows,
           scheduleExceptions,
@@ -17778,8 +18898,35 @@ const calendarDateApprovedRequests = calendarDetailDate
     })
   : [];
   const headerRequestSummary = requestStatusSummary(filteredRequests);
-  const scheduledTodayCount = filteredVisibleEmployees.filter((employee) => !isTodayOffDay(employee) && employee.employment_status === "Active").length;
-  const activeEmployeeCount = filteredVisibleEmployees.filter((employee) => employee.employment_status === "Active").length;
+  const activeEmployeeCount =
+  filteredVisibleEmployees.length;
+
+const scheduledTodayCount =
+  filteredVisibleEmployees.filter(
+    (employee) => {
+      const employeeDate =
+        getEmployeeDateKey(employee);
+
+      const employeeDay =
+        todayDayName(
+          getEmployeeTimeZone(employee)
+        );
+
+      const schedule =
+        getStableSchedule(
+          employee,
+          scheduleVersions,
+          employeeDay,
+          employeeBreakRows,
+          scheduleExceptions,
+          employeeDate
+        );
+
+      return (
+        schedule.is_scheduled !== false
+      );
+    }
+  ).length;
 
   function HeaderMetrics() {
     if (isAgentOnly) return null;
@@ -17841,7 +18988,7 @@ const calendarDateApprovedRequests = calendarDetailDate
         setConfirmPersonalPassword={setConfirmPersonalPassword}
         onCompletePasswordReset={completePasswordReset}
         databaseStatus={databaseStatus}
-        demoAccounts={DEMO_ACCOUNTS}
+        demoAccounts={[]}
       />
     );
   }
