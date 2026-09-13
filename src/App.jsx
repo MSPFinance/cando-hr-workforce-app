@@ -128,6 +128,7 @@ const WORKFORCE_SYNC_ALLOWED_FIELDS = [
   "employment_type",
   "off_days",
   "schedule_days",
+  "expected_productive_hours",
   "shift_start",
   "shift_end",
   "break_start",
@@ -1447,6 +1448,14 @@ payload.schedule_days = dayValues;
   setNumber("vto_balance_days", ["VTO_Balance_Days", "VTO Balance Days", "VTO Days"]);
 
   setNumber("break_minutes", ["Break_Minutes", "Break Minutes", "Break Min", "Lunch_Minutes", "Lunch Minutes", "Lunch Min"]);
+  setNumber(
+  "expected_productive_hours",
+  [
+    "expected_productive_hours",
+    "Expected_Productive_Hours",
+    "Expected Productive Hours",
+  ]
+);
 // setNumber("lunch_minutes", ["Lunch_Minutes", "Lunch Minutes", "Lunch Min"]);
 
 
@@ -2083,6 +2092,231 @@ function mergeWorkforceRowsIntoEmployees(currentEmployees, workforceRows, option
     missingCount: Math.max(0, workforceRows.length - matchedRosterKeys.size),
   };
 }
+
+function buildScheduleVersionSyncRows(
+  workforceRows = [],
+  employeesList = []
+) {
+  /*
+    Build employee lookup once.
+
+    This avoids repeatedly searching the full
+    employee list for every weekday.
+  */
+  const employeeById =
+    new Map();
+
+  employeesList.forEach(
+    (employee) => {
+      [
+        employee.id,
+        employee.employee_id,
+        employee.Employee_ID,
+        employee.supabase_employee_id,
+      ]
+        .map((value) =>
+          String(
+            value || ""
+          ).trim()
+        )
+        .filter(Boolean)
+        .forEach((employeeId) => {
+          employeeById.set(
+            employeeId,
+            employee
+          );
+        });
+    }
+  );
+
+  const rows = [];
+
+  workforceRows.forEach(
+    (workforceRow) => {
+      const employeeId =
+        String(
+          workforceRow?.employeeId ||
+          ""
+        ).trim();
+
+      if (!employeeId) {
+        return;
+      }
+
+      const employee =
+        employeeById.get(
+          employeeId
+        ) || null;
+
+      const payload =
+        workforceRow?.payload ||
+        {};
+
+      const scheduleDays =
+        payload.schedule_days ||
+        {};
+
+      /*
+        IMPORTANT:
+        Some App_Schedules rows are incomplete.
+
+        If Google contains no explicit weekday
+        markers for an employee, do NOT create
+        new effective-dated versions. This keeps
+        the existing baseline intact instead of
+        guessing a schedule.
+      */
+      const hasExplicitSchedule =
+        WEEK_DAYS.some((day) => {
+          const rawValue =
+            scheduleDays[day] ??
+            scheduleDays[
+              day.toLowerCase()
+            ] ??
+            "";
+
+          return (
+            String(
+              rawValue || ""
+            ).trim() !== ""
+          );
+        });
+
+      if (!hasExplicitSchedule) {
+        return;
+      }
+
+      WEEK_DAYS.forEach(
+        (day) => {
+          const rawMarker =
+            scheduleDays[day] ??
+            scheduleDays[
+              day.toLowerCase()
+            ] ??
+            "";
+
+          const marker =
+            String(
+              rawMarker || ""
+            )
+              .trim()
+              .toUpperCase();
+
+          /*
+            Do not invent a weekday if that
+            particular source cell is blank.
+          */
+          if (!marker) {
+            return;
+          }
+
+          const isScheduled =
+            marker !== "OFF";
+
+          const dayBreaks =
+            employee
+              ?.breaks_by_day?.[
+                day
+              ] || {};
+
+          rows.push({
+            employee_id:
+              employeeId,
+
+            employee_name:
+              employee?.full_name ||
+              workforceRow?.fullName ||
+              "",
+
+            day_name:
+              day,
+
+            lob:
+              employee?.lob ||
+              "",
+
+            department:
+              employee?.department ||
+              "",
+
+            supervisor:
+              employee?.supervisor ||
+              employee?.team_leader ||
+              "",
+
+            shift_start:
+              isScheduled
+                ? (
+                    payload.shift_start ||
+                    ""
+                  )
+                : null,
+
+            shift_end:
+              isScheduled
+                ? (
+                    payload.shift_end ||
+                    ""
+                  )
+                : null,
+
+            is_scheduled:
+              isScheduled,
+
+            off_days:
+              payload.off_days ||
+              employee?.off_days ||
+              "",
+
+            lunch_start:
+              employee?.lunch_start ||
+              null,
+
+            lunch_end:
+              employee?.lunch_end ||
+              null,
+
+            break_1_start:
+              dayBreaks
+                .first_break_start ||
+              null,
+
+            break_1_end:
+              dayBreaks
+                .first_break_end ||
+              null,
+
+            break_2_start:
+              dayBreaks
+                .second_break_start ||
+              null,
+
+            break_2_end:
+              dayBreaks
+                .second_break_end ||
+              null,
+
+            expected_productive_hours:
+              payload
+                .expected_productive_hours ??
+              employee
+                ?.expected_productive_hours ??
+              null,
+
+            source_schedule_key:
+              `${employeeId}_${day}`,
+
+            source:
+              "Google Sheets: App_Schedules",
+          });
+        }
+      );
+    }
+  );
+
+  return rows;
+}
+
 function mergeBreakRowsIntoEmployees(currentEmployees, breakRows) {
   if (!Array.isArray(breakRows) || !breakRows.length) {
     return { employees: currentEmployees, updatedCount: 0, missingCount: 0 };
