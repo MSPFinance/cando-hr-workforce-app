@@ -233,8 +233,7 @@ const NON_TIME_TRACKED_EMPLOYEE_NAMES = new Set([
   "abrilclever",
   "clever",
   "kat johnson",
-  "karla sixto",
-]);
+ ]);
 
 /*
   ID matching is preferred when possible because
@@ -246,7 +245,6 @@ const NON_TIME_TRACKED_EMPLOYEE_IDS = new Set([
   "93970136",  // JP
   "139672677", // AbrilClever
   "4",         // Kat Johnson
-  "7",         // Karla Sixto
 
   // Existing known exclusions
   "53002263",  // Maggie Penon
