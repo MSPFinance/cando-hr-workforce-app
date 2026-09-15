@@ -2417,8 +2417,7 @@ async function syncEffectiveDatedScheduleVersions(
   rows,
   effectiveDate = getAppDateKey()
 ) {
-  
-  const scheduleRows = Array.isArray(rows) ? rows : [];
+const scheduleRows = Array.isArray(rows) ? rows : [];
 
   /*
     Effective-dated schedule versions are written securely
