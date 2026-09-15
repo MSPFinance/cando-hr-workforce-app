@@ -8768,15 +8768,17 @@ const scheduleRows =
         department,
 
         scheduled: 0,
-        loggedIn: 0,
-        approvedAbsence: 0,
-        noLogin: 0,
-        attendancePercent: 0,
+loggedIn: 0,
+holiday: 0,
+approvedAbsence: 0,
+noLogin: 0,
+attendancePercent: 0,
 
-        scheduledEmployees: [],
-        loggedInEmployees: [],
-        approvedAbsenceEmployees: [],
-        noLoginEmployees: [],
+scheduledEmployees: [],
+loggedInEmployees: [],
+holidayEmployees: [],
+approvedAbsenceEmployees: [],
+noLoginEmployees: [],
       });
     }
 
@@ -8955,21 +8957,37 @@ const scheduleRows =
         : 0;
 
     const approvedAbsence =
-      findApprovedAbsence(employeeId);
+  findApprovedAbsence(employeeId);
 
-    /*
-      Classification priority:
+const holiday =
+  isHolidayForCountry(
+    employee.country || "",
+    reportDate,
+    countryHolidays
+  );
 
-      1. Logged In
-      2. Approved Absence
-      3. No Login / Unjustified
-    */
-    const attendanceStatus =
-      loggedEmployeeIds.has(employeeId)
-        ? "Logged In"
-        : approvedAbsence
-        ? "Approved Absence"
-        : "Unjustified No Login";
+const holidayName =
+  holiday?.holiday_name || "";
+
+/*
+  Classification priority:
+
+  1. Logged In
+  2. Holiday
+  3. Approved Absence
+  4. No Login / Unjustified
+
+  Holiday takes priority over PTO/VTO when
+  the employee did not work that day.
+*/
+const attendanceStatus =
+  loggedEmployeeIds.has(employeeId)
+    ? "Logged In"
+    : holiday
+    ? "Holiday"
+    : approvedAbsence
+    ? "Approved Absence"
+    : "Unjustified No Login";
 
     const approvedAbsenceType =
       approvedAbsence
@@ -9028,7 +9046,8 @@ const scheduleRows =
       timeAttendancePercent,
 
       attendanceStatus,
-      approvedAbsenceType,
+holidayName,
+approvedAbsenceType,
 
       approvedAbsenceReason:
         approvedAbsence?.reason ||
@@ -9041,17 +9060,25 @@ const scheduleRows =
     );
 
     if (
-      attendanceStatus === "Logged In"
-    ) {
-      row.loggedIn += 1;
+  attendanceStatus === "Logged In"
+) {
+  row.loggedIn += 1;
 
-      row.loggedInEmployees.push(
-        employeeSummary
-      );
-    } else if (
-      attendanceStatus ===
-      "Approved Absence"
-    ) {
+  row.loggedInEmployees.push(
+    employeeSummary
+  );
+} else if (
+  attendanceStatus === "Holiday"
+) {
+  row.holiday += 1;
+
+  row.holidayEmployees.push(
+    employeeSummary
+  );
+} else if (
+  attendanceStatus ===
+  "Approved Absence"
+) {
       row.approvedAbsence += 1;
 
       row.approvedAbsenceEmployees.push(
@@ -9075,8 +9102,9 @@ const scheduleRows =
           Math.max(
             0,
             row.scheduled -
-              row.loggedIn -
-              row.approvedAbsence
+  row.loggedIn -
+  row.holiday -
+  row.approvedAbsence
           );
 
         /*
@@ -9089,7 +9117,8 @@ const scheduleRows =
                 (
                   (
                     row.loggedIn +
-                    row.approvedAbsence
+row.holiday +
+row.approvedAbsence
                   ) /
                   row.scheduled
                 ) * 100
@@ -9121,6 +9150,12 @@ const scheduleRows =
         total + row.loggedIn,
       0
     );
+const holiday =
+  departments.reduce(
+    (total, row) =>
+      total + row.holiday,
+    0
+  );
 
   const approvedAbsence =
     departments.reduce(
@@ -9130,40 +9165,48 @@ const scheduleRows =
     );
 
   const noLogin =
-    Math.max(
-      0,
-      scheduled -
-        loggedIn -
-        approvedAbsence
-    );
+  Math.max(
+    0,
+    scheduled -
+      loggedIn -
+      holiday -
+      approvedAbsence
+  );
 
   const attendancePercent =
-    scheduled > 0
-      ? Math.round(
+  scheduled > 0
+    ? Math.round(
+        (
           (
-            (
-              loggedIn +
-              approvedAbsence
-            ) /
-            scheduled
-          ) * 100
-        )
-      : 0;
+            loggedIn +
+            holiday +
+            approvedAbsence
+          ) /
+          scheduled
+        ) * 100
+      )
+    : 0;
 
   return {
-    reportDate,
-    scheduled,
-    loggedIn,
-    approvedAbsence,
-    noLogin,
-    attendancePercent,
-    departments,
-  };
+  reportDate,
+  scheduled,
+  loggedIn,
+  holiday,
+  approvedAbsence,
+  noLogin,
+  attendancePercent,
+  departments,
+};
+
 }, [
   filters.startDate,
   filteredVisibleEmployees,
   timeEntries,
   requests,
+  countryHolidays,
+  scheduleVersions,
+  employeeBreakRows,
+  scheduleExceptions,
 ]);
 
 const selectedAttendanceDepartment =
@@ -9178,6 +9221,8 @@ const selectedAttendanceEmployees =
     ? []
     : attendanceDetailView === "Logged In"
     ? selectedAttendanceDepartment.loggedInEmployees
+    : attendanceDetailView === "Holiday"
+    ? selectedAttendanceDepartment.holidayEmployees
     : attendanceDetailView ===
       "Approved Absence"
     ? selectedAttendanceDepartment
@@ -11411,7 +11456,8 @@ const isCurrentShiftInProgress =
 
             if (
   !isOffDay &&
-  !scheduleRange
+  !scheduleRange &&
+  !isFutureDate
 ) {
   noScheduleDays += 1;
 
@@ -12046,9 +12092,9 @@ if (
 
 let dayStatus = "Reconciled";
 
-if (
-  isFutureDate
-) {
+if (holiday?.holiday_name) {
+  dayStatus = `Holiday · ${holiday.holiday_name}`;
+} else if (isFutureDate) {
   dayStatus =
     isOffDay
       ? "Upcoming Off Day"
@@ -13132,6 +13178,26 @@ const hasApprovedReportingAbsence =
     approvedReportingAbsence
   );
 
+ /*
+  COUNTRY HOLIDAY FOR REPORTING DATE
+
+  Determine whether the selected reporting date
+  is a holiday for this employee's country.
+*/
+const reportingHoliday =
+  isHolidayForCountry(
+    employee.country || "",
+    reportDate,
+    countryHolidays
+  );
+
+const isReportingHoliday =
+  Boolean(reportingHoliday);
+
+const reportingHolidayName =
+  reportingHoliday?.holiday_name ||
+  "Holiday";
+
       /*
         Resolve the employee's schedule for the
         selected date, including Schedule Exceptions
@@ -13263,6 +13329,7 @@ const firstActualStartMinutes =
 */
 const lateApplicable =
   !isOffDay &&
+  !isReportingHoliday &&
   !hasApprovedReportingAbsence &&
   !isFutureDate &&
   shiftStart !== null &&
@@ -13315,9 +13382,10 @@ const lateMinutes =
       let expectedToDateMinutes = 0;
 
       if (
-        !isOffDay &&
-        fullScheduledMinutes > 0
-      ) {
+  !isOffDay &&
+  !isReportingHoliday &&
+  fullScheduledMinutes > 0
+) {
         if (isPastDate) {
           expectedToDateMinutes =
             fullScheduledMinutes;
@@ -13357,9 +13425,9 @@ const lateMinutes =
       ];
 
       const fullExpectedBreakMinutes =
-        isOffDay
-          ? 0
-          : breakWindows.reduce(
+  isOffDay || isReportingHoliday
+    ? 0
+    : breakWindows.reduce(
               (
                 total,
                 [start, end]
@@ -13444,8 +13512,8 @@ const lateMinutes =
       }
 
       const expectedBreakEvents =
-        isOffDay
-          ? 0
+  isOffDay || isReportingHoliday
+    ? 0
           : breakWindows.filter(
               ([start, end]) =>
                 minutesBetween(
@@ -13606,7 +13674,12 @@ const lateMinutes =
 
       let status = "On Track";
 
-if (isFutureDate) {
+if (isReportingHoliday) {
+  status =
+    actualTrackedMinutes > 0
+      ? `Holiday · ${reportingHolidayName} · Activity recorded`
+      : `Holiday · ${reportingHolidayName}`;
+} else if (isFutureDate) {
   status = "Upcoming";
 } else if (isOffDay) {
   status =
@@ -13735,6 +13808,12 @@ approvedAbsence:
 
 approvedAbsenceType:
   approvedAbsenceLabel,
+
+holiday:
+  isReportingHoliday,
+
+holidayName:
+  reportingHolidayName,
 
         expectedBreakMinutes,
         fullExpectedBreakMinutes,
@@ -21852,11 +21931,12 @@ employee.expectedToDateMinutes > 0
 </Card>
             <Card title="Daily Attendance Headcount">
   <p className="helperText">
-    Scheduled headcount classified as Logged In,
-    Approved Absence, or Unjustified No Login for the
-    selected date. Attendance Compliance includes logged-in
-    employees and employees with approved leave.
-  </p>
+  Scheduled headcount classified as Logged In,
+  Holiday, Approved Absence, or Unjustified No Login
+  for the selected date. Attendance Compliance includes
+  logged-in employees, applicable country holidays,
+  and employees with approved leave.
+</p>
 
   <div className="reportMiniGrid">
     <Info
@@ -21873,6 +21953,10 @@ employee.expectedToDateMinutes > 0
       label="Logged In"
       value={attendanceHeadcount.loggedIn}
     />
+    <Info
+  label="Holiday"
+  value={attendanceHeadcount.holiday}
+/>
 
     <Info
       label="Approved Absence"
@@ -21892,21 +21976,23 @@ employee.expectedToDateMinutes > 0
 
   <Table
     headers={[
-      "Department",
-      "Scheduled",
-      "Logged In",
-      "Approved Absence",
-      "Unjustified",
-      "Compliance",
-      "Details",
-    ]}
+  "Department",
+  "Scheduled",
+  "Logged In",
+  "Holiday",
+  "Approved Absence",
+  "Unjustified",
+  "Compliance",
+  "Details",
+]}
     rows={attendanceHeadcount.departments.map(
       (row) => [
         row.department,
-        row.scheduled,
-        row.loggedIn,
-        row.approvedAbsence,
-        row.noLogin,
+row.scheduled,
+row.loggedIn,
+row.holiday,
+row.approvedAbsence,
+row.noLogin,
         `${row.attendancePercent}%`,
 
         <button
@@ -21992,6 +22078,21 @@ employee.expectedToDateMinutes > 0
         </button>
 
         <button
+  type="button"
+  className={
+    attendanceDetailView === "Holiday"
+      ? "primary"
+      : "btn"
+  }
+  onClick={() =>
+    setAttendanceDetailView("Holiday")
+  }
+>
+  Holiday (
+  {selectedAttendanceDepartment.holiday})
+</button>
+
+        <button
           type="button"
           className={
             attendanceDetailView ===
@@ -22031,17 +22132,18 @@ employee.expectedToDateMinutes > 0
 
       <Table
         headers={[
-          "Employee",
-          "Status",
-          "Scheduled",
-          "Tracked",
-          "Time Attendance",
-          "Access Level",
-          "Sub-Department",
-          "LOB",
-          "Country",
-          "Email",
-        ]}
+  "Employee",
+  "Status",
+  "Holiday",
+  "Scheduled",
+  "Tracked",
+  "Time Attendance",
+  "Access Level",
+  "Sub-Department",
+  "LOB",
+  "Country",
+  "Email",
+]}
         rows={selectedAttendanceEmployees.map(
           (employee) => [
             employee.name,
@@ -22050,6 +22152,8 @@ employee.expectedToDateMinutes > 0
             "Approved Absence"
               ? `${employee.approvedAbsenceType} — Approved`
               : employee.attendanceStatus,
+
+              employee.holidayName || "—",
 
             `${Number(
               employee.scheduledHours || 0
