@@ -3284,8 +3284,8 @@ function getAutoWorkClassification(
     employee's normal off-day rule for that date.
   */
   const effectiveOffDay =
-    !schedule.has_schedule_exception &&
-    isTodayOffDay(employee);
+  schedule.is_scheduled === false &&
+  !schedule.has_schedule_exception;
 
   if (effectiveOffDay) {
     return {
@@ -4062,7 +4062,8 @@ function getPayrollPeriodRange(
 
 function employeeLiveStatus(
   employee,
-  timeEntries = []
+  timeEntries = [],
+  effectiveSchedule = null
 ) {
   if (!employee) {
     return {
@@ -4135,13 +4136,16 @@ function employeeLiveStatus(
   );
 
   if (!openLog) {
-    if (isTodayOffDay(employee)) {
-      return {
-        status: "Off Day",
-        color: "gray",
-        note: "Scheduled off",
-      };
-    }
+  if (
+    effectiveSchedule?.is_scheduled === false &&
+    !effectiveSchedule?.has_schedule_exception
+  ) {
+    return {
+      status: "Off Day",
+      color: "gray",
+      note: "Scheduled off",
+    };
+  }
 
     return {
       status: "Offline",
@@ -9312,14 +9316,14 @@ const selectedAttendanceEmployees =
         getLocalDateKey(rowDate);
 
       const schedule =
-        getStableSchedule(
-          scheduleEmployee,
-          [],
-          day,
-          employeeBreakRows,
-          scheduleExceptions,
-          dateKey
-        );
+  getStableSchedule(
+    scheduleEmployee,
+    scheduleVersions,
+    day,
+    employeeBreakRows,
+    scheduleExceptions,
+    dateKey
+  );
 
       const employeeIdentifierCandidates = [
   scheduleEmployee.employee_id,
@@ -9412,6 +9416,7 @@ const selectedAttendanceEmployees =
 }, [
   employees,
   selectedEmployee,
+  scheduleVersions,
   employeeBreakRows,
   scheduleExceptions,
 ]);
@@ -9432,6 +9437,9 @@ const agentShiftSummary =
   buildShiftSummaryFromSchedule(
     agentScheduleRow?.schedule
   );
+  const agentIsOffToday =
+  agentScheduleRow?.schedule
+    ?.is_scheduled === false;
 
       async function saveScheduleChanges() {
   showToast(
@@ -13226,22 +13234,13 @@ const reportingHolidayName =
           reportDate
         );
 
-      const normalOffDay =
-        normalizeOffDays(
-          employee.off_days
-        ).some(
-          (day) =>
-            normalizeDayName(day) ===
-            dayName
-        );
-
       /*
-        A valid schedule exception overrides
-        the employee's normal off-day.
-      */
-      const isOffDay =
-        normalOffDay &&
-        !schedule.has_schedule_exception;
+  Use the resolved effective-dated schedule
+  as the source of truth for OFF days.
+*/
+const isOffDay =
+  schedule.is_scheduled === false &&
+  !schedule.has_schedule_exception;
 
       const shiftStart =
         isOffDay
@@ -13716,10 +13715,11 @@ if (isReportingHoliday) {
     shiftEnd
 ) {
   const liveStatus =
-    employeeLiveStatus(
-      employee,
-      timeEntries
-    );
+  employeeLiveStatus(
+    employee,
+    timeEntries,
+    schedule
+  );
 
   if (lateIsLive) {
     status =
@@ -13842,6 +13842,7 @@ holidayName:
   requests,
   filters.startDate,
   filters.endDate,
+  scheduleVersions,
   employeeBreakRows,
   scheduleExceptions,
   reportingNow,
@@ -14444,23 +14445,65 @@ User can now log into the Agent Portal.`
     return [...new Set(recipients.filter(Boolean))].join(", ");
   }
 
-  function buildAttendanceEmailNotes(employee, savedEntries = []) {
-    const dateKey = getLocalDateKey(new Date());
-    const schedule = getStableSchedule(employee);
-    const categories = savedEntries.map((entry) => entry.category).filter(Boolean).join(" / ") || "Time Logged";
-    const actions = savedEntries.map((entry) => entry.notes).filter(Boolean).join(" / ") || "Attendance activity";
-    return [
-      `Date: ${dateKey}`,
-      `Employee: ${employee.full_name || "Employee"}`,
-      `LOB: ${employee.lob || "N/A"}`,
-      `Department: ${employee.department || "N/A"}`,
-      `Scheduled Shift: ${formatTimeRange(schedule.shift_start, schedule.shift_end)}`,
-      `Latest Action: ${actions}`,
-      `Latest Category: ${categories}`,
-      `Delivery Mode: ${attendanceEmailSettings.deliveryMode}`,
-      `Scheduled Daily Send Time: ${attendanceEmailSettings.sendTime}`,
-    ].join(" | ");
-  }
+  function buildAttendanceEmailNotes(
+  employee,
+  savedEntries = []
+) {
+  const dateKey =
+    getEmployeeDateKey(employee);
+
+  const employeeDay =
+    todayDayName(
+      getEmployeeTimeZone(employee)
+    );
+
+  const schedule =
+    getStableSchedule(
+      employee,
+      scheduleVersions,
+      employeeDay,
+      employeeBreakRows,
+      scheduleExceptions,
+      dateKey
+    );
+
+  const categories =
+    savedEntries
+      .map((entry) => entry.category)
+      .filter(Boolean)
+      .join(" / ") ||
+    "Time Logged";
+
+  const actions =
+    savedEntries
+      .map((entry) => entry.notes)
+      .filter(Boolean)
+      .join(" / ") ||
+    "Attendance activity";
+
+  return [
+    `Date: ${dateKey}`,
+    `Employee: ${
+      employee.full_name || "Employee"
+    }`,
+    `LOB: ${employee.lob || "N/A"}`,
+    `Department: ${
+      employee.department || "N/A"
+    }`,
+    `Scheduled Shift: ${formatTimeRange(
+      schedule.shift_start,
+      schedule.shift_end
+    )}`,
+    `Latest Action: ${actions}`,
+    `Latest Category: ${categories}`,
+    `Delivery Mode: ${
+      attendanceEmailSettings.deliveryMode
+    }`,
+    `Scheduled Daily Send Time: ${
+      attendanceEmailSettings.sendTime
+    }`,
+  ].join(" | ");
+}
 
   async function queueDailyAttendanceEmail(employee, savedEntries = []) {
     if (!ATTENDANCE_DAILY_EMAILS_ENABLED || !attendanceEmailSettings.enabled || !employee) return;
@@ -14620,7 +14663,7 @@ const employeeDay =
 const schedule =
   getStableSchedule(
     selectedEmployee,
-    [],
+    scheduleVersions,
     employeeDay,
     employeeBreakRows,
     scheduleExceptions,
@@ -15914,12 +15957,30 @@ setTimeEntries((current) => [
     return null;
   }
 
-  const schedule =
-    getStableSchedule(selectedEmployee);
-
   const employeeDate =
-    newTime.date ||
-    getEmployeeDateKey(selectedEmployee);
+  newTime.date ||
+  getEmployeeDateKey(selectedEmployee);
+
+const employeeDateObject =
+  new Date(
+    `${employeeDate}T12:00:00Z`
+  );
+
+const employeeDay =
+  todayDayName(
+    getEmployeeTimeZone(selectedEmployee),
+    employeeDateObject
+  );
+
+const schedule =
+  getStableSchedule(
+    selectedEmployee,
+    scheduleVersions,
+    employeeDay,
+    employeeBreakRows,
+    scheduleExceptions,
+    employeeDate
+  );
 
   const selectedEmployeeTimeLogId =
     selectedEmployee.supabase_employee_id ||
@@ -15983,10 +16044,11 @@ setTimeEntries((current) => [
       }
 
       const manualClass =
-        getAutoWorkClassification(
-          selectedEmployee,
-          newTime.category_start
-        );
+  getAutoWorkClassification(
+    selectedEmployee,
+    newTime.category_start,
+    schedule
+  );
 
       const manualCategory =
         newTime.category === "Working" &&
@@ -16045,7 +16107,8 @@ setTimeEntries((current) => [
           schedule.off_days,
 
         schedule_source:
-          "Employee Master Schedule",
+  schedule.schedule_source ||
+  "Employee Master Schedule",
 
         clock_in:
           newTime.category_start,
@@ -19271,10 +19334,10 @@ if (startupLoading) {
                   <Info label="Employment Status" value={selectedEmployee.employment_status} />
                 </div>
               </div>
-              <div className={`agentShiftCard ${isTodayOffDay(selectedEmployee) ? "offDay" : ""}`}>
-                <span>{isTodayOffDay(selectedEmployee) ? "Today’s Status" : "Today’s Shift"}</span>
+              <div className={`agentShiftCard ${agentIsOffToday ? "offDay" : ""}`}>
+                <span>{agentIsOffToday ? "Today’s Status" : "Today’s Shift"}</span>
                 <strong>{agentShiftSummary.label}</strong>
-                {isTodayOffDay(selectedEmployee) ? (
+                {agentIsOffToday ? (
                   <small className="shiftDetails offDetails">
                     <b>Scheduled off today</b>
                     <em>Assigned off days: {formatOffDays(selectedEmployee.off_days)}</em>
@@ -19736,7 +19799,14 @@ if (startupLoading) {
 
                     const liveLobEmployees = lobEmployees.map((employee) => ({
   employee,
-  live: getAgentLiveStatus(employee, timeEntries, requests)
+  live: getAgentLiveStatus(
+    employee,
+    timeEntries,
+    requests,
+    scheduleVersions,
+    employeeBreakRows,
+    scheduleExceptions
+  )
 }));
 
 const alerts = liveLobEmployees.filter(({ live }) =>
@@ -22637,7 +22707,10 @@ function Approval({ title, detail, approve, deny }) { return <div className="app
 function getAgentLiveStatus(
   agent,
   statusLogs = [],
-  approvals = []
+  approvals = [],
+  schedules = [],
+  employeeBreakRows = [],
+  scheduleExceptions = []
 ) {
   if (!agent) {
     return {
@@ -22778,15 +22851,32 @@ function getAgentLiveStatus(
         employeeDate
       )
   );
+const employeeDay =
+  todayDayName(
+    getEmployeeTimeZone(agent)
+  );
+
+const scheduleForToday =
+  getStableSchedule(
+    agent,
+    schedules,
+    employeeDay,
+    employeeBreakRows,
+    scheduleExceptions,
+    employeeDate
+  );
 
   if (!openLog) {
-    if (isTodayOffDay(agent)) {
-      return {
-        label: "OFF DAY",
-        type: "gray",
-        detail: "Scheduled off",
-      };
-    }
+  if (
+    scheduleForToday.is_scheduled === false &&
+    !scheduleForToday.has_schedule_exception
+  ) {
+    return {
+      label: "OFF DAY",
+      type: "gray",
+      detail: "Scheduled off",
+    };
+  }
 
     return {
       label: "OFFLINE",
@@ -22826,14 +22916,6 @@ function getAgentLiveStatus(
         )
       : 0;
 
-  const scheduleForToday =
-    getStableSchedule(
-      agent,
-      [],
-      todayDayName(
-        getEmployeeTimeZone(agent)
-      )
-    );
 
   const firstBreakMinutes =
     minutesBetween(
