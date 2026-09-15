@@ -9588,28 +9588,30 @@ const selectedAttendanceEmployees =
           }
         );
 
-      const isOffDay =
-        normalizeOffDays(
-          scheduleEmployee.off_days
-        ).some(
-          (offDay) =>
-            normalizeDayName(offDay) ===
-            day
-        );
+      /*
+  Weekly Overview must use the resolved
+  effective-dated schedule as the source of truth.
 
-      return {
-        employee: scheduleEmployee,
-        day,
-        date: dateKey,
-        schedule,
-        isToday:
-          dateKey === employeeTodayKey,
-        isOffDay:
-          isOffDay &&
-          !matchingException,
-        isException:
-          Boolean(matchingException),
-      };
+  Do not use employee.off_days here because that
+  field may be older than the current schedule version.
+*/
+const isOffDay =
+  schedule.is_scheduled === false &&
+  !schedule.has_schedule_exception;
+
+return {
+  employee: scheduleEmployee,
+  day,
+  date: dateKey,
+  schedule,
+  isToday:
+    dateKey === employeeTodayKey,
+  isOffDay,
+  isException:
+    Boolean(
+      schedule.has_schedule_exception
+    ),
+};
     }
   );
 }, [
