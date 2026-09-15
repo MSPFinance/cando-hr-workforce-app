@@ -95,7 +95,10 @@ const LEGACY_GOOGLE_DATABASE_BOOTSTRAP_ENABLED =
 // This reads approved operational fields from the shared workforce sheet while protecting identity/auth fields.
 // Protected fields that are NEVER overwritten by this sync: email, password/temp_password, role, access_level, hire_date, birthday, and employee id.
 const WORKFORCE_SYNC_SHEET_ID = "1cmYlztzC9oc8z6LSD6ER_UqU2F17Lq7fiMAAWLnMy5s";
-const WORKFORCE_SYNC_SHEET_NAMES = ["App_Schedules"];
+const WORKFORCE_SYNC_SHEET_NAMES = [
+  "Roster",
+  "App_Schedules",
+];
 const WORKFORCE_BREAKS_SHEET_NAMES = ["Breaks"];
 const WORKFORCE_BALANCES_SHEET_NAMES = ["App_Balances", "employee_balances"];
 const WORKFORCE_EXCEPTION_SHEET_NAMES = [
@@ -1346,9 +1349,44 @@ function splitTimeRange(value) {
 }
 
 function mapWorkforceSyncRow(row) {
-  const employeeId = String(firstValue(row, ["Employee_ID", "Employee ID", "ID", "employee_id", "Employee Id"]) || "").trim();
-  const fullName = String(firstValue(row, ["Full_Name", "Full Name", "Employee", "Employee Name", "Name", "Agent", "Agent Name"]) || "").trim();
-  const sourceEmail = String(firstValue(row, ["Email", "Auth_Email", "Work Email", "Company Email"]) || "").trim();
+  const employeeId = String(
+  firstValue(row, [
+    "Employee_ID",
+    "Employee ID",
+    "ID",
+    "employee_id",
+    "Employee Id",
+    "Agent_ID",
+    "Agent ID",
+    "agent_id",
+  ]) || ""
+).trim();
+
+const fullName = String(
+  firstValue(row, [
+    "Full_Name",
+    "Full Name",
+    "Employee",
+    "Employee Name",
+    "Name",
+    "Agent",
+    "Agent Name",
+    "Agent_Name",
+    "agent_name",
+  ]) || ""
+).trim();
+
+const sourceEmail = String(
+  firstValue(row, [
+    "Email",
+    "Auth_Email",
+    "Work Email",
+    "Company Email",
+    "Email_Address",
+    "Email Address",
+    "email_address",
+  ]) || ""
+).trim();
 
   if (!employeeId && !fullName && !sourceEmail) return null;
 
@@ -1375,11 +1413,58 @@ function mapWorkforceSyncRow(row) {
   "Country",
   "Employee Country",
   "Country Code",
+  "Team",
 ]);
-  setText("lob", ["LOB", "Line of Business", "Line_Of_Business", "Client"]);
-  setText("department", ["Department", "Team", "Area"]);
-  setText("sub_department", ["Sub_Department", "Sub Department", "SubDepartment", "Sub Team", "Queue", "Role"]);
-  setText("supervisor", ["Supervisor", "TL", "Team_Leader", "Team Leader", "Team Lead", "Direct Supervisor"]);
+
+setText("lob", [
+  "LOB",
+  "Line of Business",
+  "Line_Of_Business",
+  "Client",
+]);
+
+setText("department", [
+  "Department",
+  "Area",
+]);
+
+/*
+  In the Roster tab, access_level represents the
+  employee's operational team such as:
+  CS, CS/LO, Collector, Emails, LO, etc.
+
+  This is mapped only into sub_department.
+  Supabase remains the source of truth for the
+  actual Magnemite authentication access level.
+*/
+setText("sub_department", [
+  "Sub_Department",
+  "Sub Department",
+  "SubDepartment",
+  "Sub Team",
+  "Queue",
+  "Access_Level",
+  "Access Level",
+  "access_level",
+]);
+
+setText("supervisor", [
+  "Supervisor",
+  "TL",
+  "Team_Leader",
+  "Team Leader",
+  "Team Lead",
+  "Direct Supervisor",
+  "team_leader",
+]);
+
+/*
+  The operational Roster does not contain a separate
+  department field for standard agents.
+*/
+if (!payload.department) {
+  payload.department = "Operations";
+}
   setText("manager", ["Manager", "Operations Manager", "OM"]);
   setText("employment_status", ["Employment_Status", "Employment Status", "Status"]);
   setText("employment_type", ["Employment_Type", "Employment Type"]);
@@ -1447,12 +1532,14 @@ payload.schedule_days = dayValues;
   setNumber("vto_balance_days", ["VTO_Balance_Days", "VTO Balance Days", "VTO Days"]);
 
   setNumber("break_minutes", ["Break_Minutes", "Break Minutes", "Break Min", "Lunch_Minutes", "Lunch Minutes", "Lunch Min"]);
-  setNumber(
+ setNumber(
   "expected_productive_hours",
   [
     "expected_productive_hours",
     "Expected_Productive_Hours",
     "Expected Productive Hours",
+    "exp_prod_hrs",
+    "Exp Prod Hrs",
   ]
 );
 // setNumber("lunch_minutes", ["Lunch_Minutes", "Lunch Minutes", "Lunch Min"]);
@@ -6427,6 +6514,31 @@ function HRWorkforceApp() {
   const [lobs, setLobs] = useState(lobSeed);
   const [departments, setDepartments] = useState(departmentSeed);
   const [subDepartments, setSubDepartments] = useState(operationsSubDepartmentSeed);
+  useEffect(() => {
+  const rosterSubDepartments =
+    employees
+      .map((employee) =>
+        String(
+          employee.sub_department || ""
+        ).trim()
+      )
+      .filter(Boolean);
+
+  if (!rosterSubDepartments.length) {
+    return;
+  }
+
+  setSubDepartments((current) =>
+    [
+      ...new Set([
+        ...current,
+        ...rosterSubDepartments,
+      ]),
+    ].sort((a, b) =>
+      a.localeCompare(b)
+    )
+  );
+}, [employees]);
   const [newLob, setNewLob] = useState("");
   const [newDepartment, setNewDepartment] = useState("");
   const [tab, setTab] = useState("agent");
@@ -7454,10 +7566,97 @@ if (finalSyncedEmployees?.length) {
       const database = await googleGetDatabase();
 
       if (!database) {
-        const loadedSupabase = await loadSupabaseReferenceData(employeesSeed, setEmployees, setDatabaseStatus);
-        if (!loadedSupabase) setDatabaseStatus("Demo mode active. Using built-in demo users and sample HR data. Workforce roster sync is scheduled for Saturday 5:00 AM or can be run manually by an admin.");
-        return;
-      }
+  /*
+    Legacy Google database bootstrap is disabled.
+
+    Load the operational workforce sources directly
+    before applying the Supabase authentication overlay.
+
+    Source priority:
+    1. App_Schedules
+    2. Breaks
+    3. App_Balances
+    4. Supabase authentication/access
+  */
+  const [
+    workforceRows,
+    breakRows,
+    balanceRows,
+  ] = await Promise.all([
+    fetchWorkforceSheetRows(),
+    fetchBreaksSheetRows(),
+    fetchBalanceSheetRows(),
+  ]);
+
+  /*
+    Build the employee operational profile from
+    App_Schedules.
+
+    This restores:
+    - LOB
+    - Department
+    - Sub-Department
+    - Off Days
+    - Country
+    - Supervisor / Manager
+    - operational schedule metadata
+  */
+  const rosterResult =
+    mergeWorkforceRowsIntoEmployees(
+      employeesSeed,
+      workforceRows,
+      { importMissing: true }
+    );
+
+  const breakResult =
+    mergeBreakRowsIntoEmployees(
+      rosterResult.employees,
+      breakRows
+    );
+
+  const balanceResult =
+    mergeBalanceRowsIntoEmployees(
+      breakResult.employees,
+      balanceRows
+    );
+
+  const workforceEmployees =
+    (
+      balanceResult.employees ||
+      breakResult.employees ||
+      rosterResult.employees ||
+      employeesSeed
+    ).filter(isActiveEmployee);
+
+  /*
+    Put the Google operational roster into state first.
+  */
+  setEmployees(workforceEmployees);
+
+  /*
+    Supabase is then applied only for authentication,
+    access levels, passwords and other protected fields.
+
+    It must not replace the Google operational schedule
+    metadata above.
+  */
+  const loadedSupabase =
+    await loadSupabaseReferenceData(
+      workforceEmployees,
+      setEmployees,
+      setDatabaseStatus
+    );
+
+  if (!loadedSupabase) {
+    setDatabaseStatus(
+      workforceRows.length
+        ? "Google Sheets workforce data loaded. Supabase authentication overlay was unavailable."
+        : "Workforce data and Supabase profile data were unavailable."
+    );
+  }
+
+  return;
+}
 
       const sheetEmployees = (database.employees || []).map(mapEmployeeFromSheet);
       const scopeRows =
