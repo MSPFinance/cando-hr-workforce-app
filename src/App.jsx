@@ -2417,7 +2417,7 @@ async function syncEffectiveDatedScheduleVersions(
   rows,
   effectiveDate = getAppDateKey()
 ) {
-  const scheduleRows = Array.isArray(rows) ? rows : [];
+const scheduleRows = Array.isArray(rows) ? rows : [];
 
   /*
     Effective-dated schedule versions are written securely
@@ -8782,6 +8782,28 @@ return (
     employee.country === filters.country)
 );
   });
+
+  const getEffectiveOffDaysForEmployee = (employee) => {
+  if (!employee) return "";
+
+  return WEEK_DAYS
+    .filter((day) => {
+      const effectiveSchedule =
+        getStableSchedule(
+          employee,
+          scheduleVersions,
+          day,
+          employeeBreakRows,
+          scheduleExceptions
+        );
+
+      return (
+        effectiveSchedule?.is_scheduled === false &&
+        !effectiveSchedule?.has_schedule_exception
+      );
+    })
+    .join(", ");
+};
 
 const scheduleRows =
   filters.employee !== "All"
@@ -20145,15 +20167,24 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
 </div>
               
               <Table
-                headers={["Employee", "Day", "LOB", "Department", "Sub-Department", "Off Days", "Today", "Shift Start", "Shift End", "First Break", "Second Break", "Total Break Min"]}
+                headers={["Employee", "Day", "LOB", "Department", "Sub-Department", "Off Days", "Status", "Shift Start", "Shift End", "First Break", "Second Break", "Total Break Min"]}
                 rows={scheduleRows.map(({ employee: e, day, schedule }) => [
                   <strong>{e.full_name}</strong>,
                   day,
                   <select value={e.lob} onChange={(event) => updateEmployeeSchedule(e.id, "lob", event.target.value)}>{lobs.map((lob) => <option key={lob}>{lob}</option>)}</select>,
                   <select value={e.department} onChange={(event) => updateEmployeeSchedule(e.id, "department", event.target.value)}>{departments.map((department) => <option key={department}>{department}</option>)}</select>,
                   <select value={e.sub_department || ""} onChange={(event) => updateEmployeeSchedule(e.id, "sub_department", event.target.value)}>{subDepartments.map((subDepartment) => <option key={subDepartment}>{subDepartment}</option>)}</select>,
-                  <input value={e.off_days || ""} onChange={(event) => updateEmployeeSchedule(e.id, "off_days", event.target.value)} placeholder="Saturday, Sunday" />,
-                  <Badge danger={isTodayOffDay(e)} muted={!isTodayOffDay(e)}>{isTodayOffDay(e) ? "Off Today" : "Scheduled"}</Badge>,
+                  <input
+  value={getEffectiveOffDaysForEmployee(e)}
+  readOnly
+  placeholder="No off days"
+/>,
+                  <Badge
+  danger={schedule.is_scheduled === false}
+  muted={schedule.is_scheduled !== false}
+>
+  {schedule.is_scheduled === false ? "Off" : "Scheduled"}
+</Badge>,
                   <input type="time" value={schedule.shift_start} disabled={!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")} onChange={(event) => updateEmployeeSchedule(e.id, "shift_start", event.target.value)} />,
                   <input type="time" value={schedule.shift_end} disabled={!canEditSchedules(selectedEmployee?.access_level || selectedEmployee?.role || "Agent")} onChange={(event) => updateEmployeeSchedule(e.id, "shift_end", event.target.value)} />,
                   <div className="miniTimes"><input type="time" value={schedule.break_start === "Not Available" ? "" : schedule.break_start} onChange={(event) => updateEmployeeSchedule(e.id, "break_start", event.target.value)} /><input type="time" value={schedule.break_end === "Not Available" ? "" : schedule.break_end} onChange={(event) => updateEmployeeSchedule(e.id, "break_end", event.target.value)} /></div>,
