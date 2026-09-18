@@ -7811,6 +7811,38 @@ const loadedSupabase = await loadSupabaseReferenceData(
     toastTimerRef.current = setTimeout(() => setToast(null), 4200);
   }
 
+  const logUserAction = async ({
+  actionType,
+  actionCategory = null,
+  employeeId = null,
+  employeeName = null,
+  targetTable = null,
+  targetRecordId = null,
+  recordsAffected = 1,
+  metadata = {},
+}) => {
+  try {
+    const { error } = await supabase.rpc("log_app_user_action", {
+      p_action_type: actionType,
+      p_action_category: actionCategory,
+      p_employee_id: employeeId ? String(employeeId) : null,
+      p_employee_name: employeeName || null,
+      p_target_table: targetTable || null,
+      p_target_record_id: targetRecordId
+        ? String(targetRecordId)
+        : null,
+      p_records_affected: recordsAffected || 1,
+      p_metadata: metadata || {},
+    });
+
+    if (error) {
+      console.warn("Magnemite action logging failed:", error);
+    }
+  } catch (error) {
+    console.warn("Magnemite action logging failed:", error);
+  }
+};
+
   async function runProtectedAction(key, title, handler) {
     if (actionLockRef.current.has(key)) {
       setProcessingModal({
@@ -17039,6 +17071,51 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
         "Approval decision"
       );
 
+            await logUserAction({
+        actionType:
+          status === "Approved"
+            ? "Request Approved"
+            : "Request Denied",
+
+        actionCategory:
+          "Manager Approval",
+
+        employeeId:
+          latestRequest.employee_id,
+
+        employeeName:
+          latestRequest.employee_name,
+
+        targetTable:
+          "requests",
+
+        targetRecordId:
+          latestRequest.id,
+
+        recordsAffected: 1,
+
+        metadata: {
+          requestType:
+            latestRequest.type,
+
+          decision:
+            status,
+
+          approverEmail:
+            currentUser?.email || "",
+
+          startDate:
+            formatDateOnly(
+              latestRequest.start_date
+            ),
+
+          endDate:
+            formatDateOnly(
+              latestRequest.end_date
+            ),
+        },
+      });
+
       void googleUpdateRow("requests", "Request_ID", id, mapRequestToSheet(updatedRequest));
       await supabaseInsert(
         "email_queue",
@@ -17315,7 +17392,56 @@ if (request.type === "PTO") {
           notes: `Manager decision recorded for ${latestTimeEntry.category}`,
         })
       );
+      await logUserAction({
+        actionType:
+          approved === "Approved"
+            ? "Time Log Approved"
+            : approved === "Denied"
+            ? "Time Log Denied"
+            : "Time Log Status Changed",
 
+        actionCategory:
+          "Manager Approval",
+
+        employeeId:
+          latestTimeEntry.employee_id,
+
+        employeeName:
+          latestTimeEntry.employee_name,
+
+        targetTable:
+          "time_logs",
+
+        targetRecordId:
+          latestTimeEntry.app_log_id ||
+          latestTimeEntry.supabase_id ||
+          latestTimeEntry.id ||
+          id,
+
+        recordsAffected: 1,
+
+        metadata: {
+          decision:
+            approved,
+
+          previousStatus:
+            latestTimeEntry.approved || "",
+
+          payableStatus:
+            updatedTimeEntry.payable_status || "",
+
+          category:
+            latestTimeEntry.category ||
+            latestTimeEntry.status ||
+            "",
+
+          approverEmail:
+            currentUser?.email || "",
+
+          editorEmail:
+            currentUser?.email || "",
+        },
+      });
       setTimeEntries((current) => current.map((t) => (t.id === id ? updatedTimeEntry : t)));
     });
   }
@@ -17489,6 +17615,82 @@ async function bulkApproveSelectedTimeLogs() {
             : entry;
         })
       );
+
+            const affectedEmployeeIds = [
+        ...new Set(
+          selectedEntries
+            .map((entry) =>
+              String(
+                entry.employee_id || ""
+              ).trim()
+            )
+            .filter(Boolean)
+        ),
+      ];
+
+      const affectedEmployeeNames = [
+        ...new Set(
+          selectedEntries
+            .map((entry) =>
+              String(
+                entry.employee_name || ""
+              ).trim()
+            )
+            .filter(Boolean)
+        ),
+      ];
+
+      await logUserAction({
+        actionType:
+          "Bulk Time Logs Approved",
+
+        actionCategory:
+          "Manager Approval",
+
+        employeeId:
+          affectedEmployeeIds.length === 1
+            ? affectedEmployeeIds[0]
+            : null,
+
+        employeeName:
+          affectedEmployeeNames.length === 1
+            ? affectedEmployeeNames[0]
+            : null,
+
+        targetTable:
+          "time_logs",
+
+        targetRecordId:
+          null,
+
+        recordsAffected:
+          savedRows.length ||
+          selectedEntries.length,
+
+        metadata: {
+          approverEmail:
+            currentUser?.email || "",
+
+          recordsAffected:
+            savedRows.length ||
+            selectedEntries.length,
+
+          employeesAffected:
+            affectedEmployeeIds.length,
+
+          employeeNames:
+            affectedEmployeeNames,
+
+          approvalStatus:
+            "Approved",
+
+          payableStatus:
+            "Approved Payable",
+
+          approvedAt:
+            approvedAt,
+        },
+      });
 
       setSelectedTimeLogIds([]);
 
@@ -17936,6 +18138,67 @@ status:
             : entry;
         })
       );
+
+            await logUserAction({
+        actionType:
+          "Time Log Corrected",
+
+        actionCategory:
+          "Manager Edit",
+
+        employeeId:
+          timeEntry.employee_id,
+
+        employeeName:
+          timeEntry.employee_name,
+
+        targetTable:
+          "time_logs",
+
+        targetRecordId:
+          savedRow?.id ||
+          timeEntry.supabase_id ||
+          timeEntry.app_log_id ||
+          timeEntry.id ||
+          id,
+
+        recordsAffected: 1,
+
+        metadata: {
+          editorEmail:
+            currentUser?.email || "",
+
+          appLogId:
+            timeEntry.app_log_id ||
+            timeEntry.id ||
+            "",
+
+          date:
+            correctedDate,
+
+          category:
+            timeEntry.category ||
+            timeEntry.status ||
+            "Working",
+
+          correctedStart:
+            correctedStart,
+
+          correctedEnd:
+            correctedEnd || null,
+
+          durationMinutes:
+            durationMinutes,
+
+          approvalStatus:
+            updatePayload.approval_status ||
+            "",
+
+          payableStatus:
+            updatePayload.payable_status ||
+            "",
+        },
+      });
 
       try {
         await googleAddRow(
