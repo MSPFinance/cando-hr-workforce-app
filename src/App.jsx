@@ -11904,98 +11904,131 @@ const dayLogs =
       ) || []
   );
 
-            const attendanceIntervals =
-              [];
+            const attendanceIntervals = [];
 
-            dayLogs.forEach(
-              (timeLog) => {
-                const category =
-                  String(
-                    timeLog.category ||
-                      timeLog.status ||
-                      ""
-                  )
-                    .trim()
-                    .toLowerCase();
+const leaveIntervalsByType = {
+  pto: [],
+  vto: [],
+  "sick leave": [],
+  "paid leave": [],
+  "unpaid leave": [],
+};
 
-                /*
-                  Leave categories are not actual
-                  logged-presence intervals.
-                */
-                if (
-                  [
-                    "pto",
-                    "vto",
-                    "sick leave",
-                    "paid leave",
-                    "unpaid leave",
-                  ].includes(category)
-                ) {
-                  return;
-                }
+dayLogs.forEach((timeLog) => {
+  const category = String(
+    timeLog.category ||
+      timeLog.status ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
 
-                const startValue =
-                  timeLog.category_start ||
-                  timeLog.clock_in ||
-                  timeLog.created_at;
+  /*
+    Keep leave time logs separate from actual
+    worked/presence intervals.
 
-                let endValue =
-                  timeLog.category_end ||
-                  timeLog.clock_out;
+    These intervals can reconcile scheduled time,
+    but they must not become worked hours.
+  */
+  const isLeaveCategory =
+    Object.prototype.hasOwnProperty.call(
+      leaveIntervalsByType,
+      category
+    );
 
-                /*
-                  For today's currently open status,
-                  include time through the employee's
-                  current local time.
-                */
-                if (
-                  !endValue &&
-                  dateKey ===
-                    getEmployeeDateKey(
-                      employee
-                    )
-                ) {
-                  endValue =
-                    getEmployeeTimeKey(
-                      employee
-                    );
-                }
+    const approvalStatus = String(
+  timeLog.approval_status ||
+    timeLog.approved ||
+    ""
+)
+  .trim()
+  .toLowerCase();
 
-                if (!endValue) {
-  criticalReviewReasons.add(
-    "Open time log"
-  );
+const isApprovedLeaveLog =
+  isLeaveCategory &&
+  [
+    "approved",
+    "approve",
+  ].includes(approvalStatus);
+
+  const startValue =
+    timeLog.category_start ||
+    timeLog.clock_in ||
+    timeLog.created_at;
+
+  let endValue =
+    timeLog.category_end ||
+    timeLog.clock_out;
+
+  /*
+    Only actual open work/status logs should run
+    through the employee's current local time.
+
+    Leave entries must have their own defined end.
+  */
+  if (
+    !endValue &&
+    !isLeaveCategory &&
+    dateKey ===
+      getEmployeeDateKey(employee)
+  ) {
+    endValue =
+      getEmployeeTimeKey(employee);
+  }
+
+  if (!endValue) {
+    if (!isLeaveCategory) {
+      criticalReviewReasons.add(
+        "Open time log"
+      );
+    }
+
+    return;
+  }
+
+  const localStart =
+    getEmployeeLocalTime(
+      startValue,
+      employee
+    );
+
+  const localEnd =
+    getEmployeeLocalTime(
+      endValue,
+      employee
+    );
+
+  const logRange =
+    buildMinuteRange(
+      localStart,
+      localEnd
+    );
+
+  if (!logRange) {
+    return;
+  }
+
+  if (isLeaveCategory) {
+  /*
+    Leave-category logs should never count as
+    worked attendance.
+
+    Only approved leave logs may reconcile
+    scheduled Payroll time.
+  */
+  if (isApprovedLeaveLog) {
+    leaveIntervalsByType[
+      category
+    ].push(logRange);
+  }
 
   return;
 }
 
-                const localStart =
-                  getEmployeeLocalTime(
-                    startValue,
-                    employee
-                  );
-
-                const localEnd =
-                  getEmployeeLocalTime(
-                    endValue,
-                    employee
-                  );
-
-                const logRange =
-                  buildMinuteRange(
-                    localStart,
-                    localEnd
-                  );
-
-                if (!logRange) {
-                  return;
-                }
-
-                attendanceIntervals.push(
-                  logRange
-                );
-              }
-            );
+  attendanceIntervals.push(
+    logRange
+  );
+});
 
             const mergedAttendance =
               mergeIntervals(
@@ -12076,6 +12109,99 @@ const dayLogs =
 
             trackedWithinScheduleMinutes +=
               dayTrackedWithinSchedule;
+
+              /*
+  Calculate approved leave-category time logs that
+  overlap the employee's scheduled working window.
+
+  These minutes reconcile the schedule but do not
+  become worked/payable hours.
+*/
+const getLeaveLogMinutesWithinSchedule = (
+  intervals
+) => {
+  if (
+    !scheduleRange ||
+    !intervals ||
+    intervals.length === 0
+  ) {
+    return 0;
+  }
+
+  const insideLeaveIntervals =
+    intervals
+      .map((interval) => {
+        const start = Math.max(
+          interval.start,
+          scheduleRange.start
+        );
+
+        const end = Math.min(
+          interval.end,
+          scheduleRange.end
+        );
+
+        if (end <= start) {
+          return null;
+        }
+
+        return {
+          start,
+          end,
+        };
+      })
+      .filter(Boolean);
+
+  return Math.min(
+    dayScheduledMinutes,
+    intervalMinutes(
+      mergeIntervals(
+        insideLeaveIntervals
+      )
+    )
+  );
+};
+
+const dayPtoLogMinutes =
+  getLeaveLogMinutesWithinSchedule(
+    leaveIntervalsByType.pto
+  );
+
+const dayVtoLogMinutes =
+  getLeaveLogMinutesWithinSchedule(
+    leaveIntervalsByType.vto
+  );
+
+const daySickLogMinutes =
+  getLeaveLogMinutesWithinSchedule(
+    leaveIntervalsByType[
+      "sick leave"
+    ]
+  );
+
+const dayPaidLeaveLogMinutes =
+  getLeaveLogMinutesWithinSchedule(
+    leaveIntervalsByType[
+      "paid leave"
+    ]
+  );
+
+const dayUnpaidLeaveLogMinutes =
+  getLeaveLogMinutesWithinSchedule(
+    leaveIntervalsByType[
+      "unpaid leave"
+    ]
+  );
+
+const dayTimeLogLeaveMinutes =
+  Math.min(
+    dayScheduledMinutes,
+    dayPtoLogMinutes +
+      dayVtoLogMinutes +
+      daySickLogMinutes +
+      dayPaidLeaveLogMinutes +
+      dayUnpaidLeaveLogMinutes
+  );
 
             /*
               Time outside the employee schedule is
@@ -12196,6 +12322,37 @@ if (
                   dayScheduledMinutes;
               }
             }
+
+            /*
+  Manager/TL-entered leave-category time logs
+  can also reconcile scheduled time.
+
+  Only use these when there is no full-day
+  approved leave request, preventing duplicate
+  leave credit.
+*/
+if (
+  dayLeaveCredit === 0 &&
+  dayTimeLogLeaveMinutes > 0
+) {
+  ptoMinutes +=
+    dayPtoLogMinutes;
+
+  vtoMinutes +=
+    dayVtoLogMinutes;
+
+  sickMinutes +=
+    daySickLogMinutes;
+
+  paidLeaveMinutes +=
+    dayPaidLeaveLogMinutes;
+
+  unpaidLeaveMinutes +=
+    dayUnpaidLeaveLogMinutes;
+
+  dayLeaveCredit =
+    dayTimeLogLeaveMinutes;
+}
 
             /*
               A paid holiday can account for the
@@ -12405,6 +12562,28 @@ if (holiday?.holiday_name) {
   dayStatus = "No Scheduled Time";
 }
 
+const timeLogLeaveTypes = [
+  dayPtoLogMinutes > 0
+    ? "PTO"
+    : null,
+
+  dayVtoLogMinutes > 0
+    ? "VTO"
+    : null,
+
+  daySickLogMinutes > 0
+    ? "Sick Leave"
+    : null,
+
+  dayPaidLeaveLogMinutes > 0
+    ? "Paid Leave"
+    : null,
+
+  dayUnpaidLeaveLogMinutes > 0
+    ? "Unpaid Leave"
+    : null,
+].filter(Boolean);
+
 const leaveType =
   approvedLeave
     ? (
@@ -12413,7 +12592,9 @@ const leaveType =
         approvedLeave.Request_Type ||
         "Approved Leave"
       )
-    : "";
+    : timeLogLeaveTypes.join(
+        " + "
+      );
 
 const holidayName =
   holiday?.holiday_name ||
