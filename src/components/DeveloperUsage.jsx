@@ -15,13 +15,17 @@ export default function DeveloperUsage() {
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [periodPreset, setPeriodPreset] = useState("custom");
+  const [actorName, setActorName] = useState("");
+  const [employeeName, setEmployeeName] = useState("");
 
     // Reporting period currently displayed in the dashboard.
   // This changes only after Apply Filters succeeds.
   const [appliedRange, setAppliedRange] = useState({
-    startDate: "",
-    endDate: "",
-  });
+  startDate: "",
+  endDate: "",
+  actorName: "",
+  employeeName: "",
+});
 
   // Complete summary for the selected date range.
   const [summary, setSummary] = useState(null);
@@ -115,6 +119,13 @@ export default function DeveloperUsage() {
       params.set("start_date", reportRange.startDate);
       params.set("end_date", reportRange.endDate);
     }
+    if (reportRange.actorName) {
+  params.set("actor_name", reportRange.actorName);
+}
+
+if (reportRange.employeeName) {
+  params.set("employee_name", reportRange.employeeName);
+}
 
     const response = await fetch(
       `/api/application-usage?${params.toString()}`,
@@ -204,15 +215,22 @@ export default function DeveloperUsage() {
         "",
         "mock-developer@example.invalid",
         1,
-        { startDate: "", endDate: "" }
+        {
+  startDate: "",
+  endDate: "",
+  actorName: "",
+  employeeName: "",
+}
       );
 
       setRows(activity);
       setConnected(true);
       setAppliedRange({
-        startDate: "",
-        endDate: "",
-      });
+  startDate: "",
+  endDate: "",
+  actorName: "",
+  employeeName: "",
+});
     } catch (err) {
       setError(
         err.message || "Unable to load test data."
@@ -264,9 +282,11 @@ export default function DeveloperUsage() {
     setError("");
 
     const nextRange = {
-      startDate,
-      endDate,
-    };
+  startDate,
+  endDate,
+  actorName: actorName.trim(),
+  employeeName: employeeName.trim(),
+};
 
     try {
       const activity = await loadActivity(
@@ -462,7 +482,12 @@ export default function DeveloperUsage() {
 
     // Export the reporting period that was
     // successfully applied to the dashboard.
-    const { startDate, endDate } = appliedRange;
+    const {
+  startDate,
+  endDate,
+  actorName: appliedActorName,
+  employeeName: appliedEmployeeName,
+} = appliedRange;
 
     if (!startDate || !endDate) {
       setError(
@@ -480,6 +505,20 @@ export default function DeveloperUsage() {
         start_date: startDate,
         end_date: endDate,
       });
+
+      if (appliedActorName) {
+  params.set(
+    "actor_name",
+    appliedActorName
+  );
+}
+
+if (appliedEmployeeName) {
+  params.set(
+    "employee_name",
+    appliedEmployeeName
+  );
+}
 
       const response = await fetch(
         `/api/application-usage?${params.toString()}`,
@@ -833,6 +872,40 @@ export default function DeveloperUsage() {
                     style={inputStyle}
                   />
                 </div>
+
+<div style={{ minWidth: "200px", flex: 1 }}>
+  <label htmlFor="usageActorName">
+    Performed by
+  </label>
+
+  <input
+    id="usageActorName"
+    type="text"
+    value={actorName}
+    onChange={(event) =>
+      setActorName(event.target.value)
+    }
+    style={inputStyle}
+    placeholder="Manager, TL, employee..."
+  />
+</div>
+
+<div style={{ minWidth: "200px", flex: 1 }}>
+  <label htmlFor="usageEmployeeName">
+    Affected employee
+  </label>
+
+  <input
+    id="usageEmployeeName"
+    type="text"
+    value={employeeName}
+    onChange={(event) =>
+      setEmployeeName(event.target.value)
+    }
+    style={inputStyle}
+    placeholder="Employee name..."
+  />
+</div>
 
                 <button
                   type="button"

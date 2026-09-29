@@ -270,7 +270,12 @@ function buildUsageCsv(rows) {
  * from the browser.
  */
 
-async function loadAllUsageRows(startDate, endDate) {
+async function loadAllUsageRows(
+  startDate,
+  endDate,
+  actorName = "",
+  employeeName = ""
+) {
   if (!startDate || !endDate) {
     throw new Error(
       "Select a start date and end date before exporting."
@@ -310,6 +315,20 @@ async function loadAllUsageRows(startDate, endDate) {
       "activity_date",
       `lte.${endDate}`
     );
+
+    if (actorName) {
+      params.set(
+        "actor_name",
+        `ilike.*${actorName}*`
+      );
+    }
+
+    if (employeeName) {
+      params.set(
+        "employee_name",
+        `ilike.*${employeeName}*`
+      );
+    }
 
     params.set(
       "limit",
@@ -470,6 +489,16 @@ export default async function handler(
         req.query?.end_date || ""
       ).trim();
 
+    const actorName =
+      String(
+        req.query?.actor_name || ""
+      ).trim();
+
+    const employeeName =
+      String(
+        req.query?.employee_name || ""
+      ).trim();
+
     if (
       startDate &&
       !isValidDateKey(startDate)
@@ -530,10 +559,12 @@ export default async function handler(
       }
 
       const exportRows =
-        await loadAllUsageRows(
-          startDate,
-          endDate
-        );
+  await loadAllUsageRows(
+    startDate,
+    endDate,
+    actorName,
+    employeeName
+  );
 
       const csvContent =
         buildUsageCsv(exportRows);
@@ -633,6 +664,19 @@ export default async function handler(
       params.append(
         "activity_date",
         `lte.${endDate}`
+      );
+    }
+    if (actorName) {
+      params.set(
+        "actor_name",
+        `ilike.*${actorName}*`
+      );
+    }
+
+    if (employeeName) {
+      params.set(
+        "employee_name",
+        `ilike.*${employeeName}*`
       );
     }
 
