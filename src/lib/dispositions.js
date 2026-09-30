@@ -710,11 +710,29 @@ export const DISPOSITION_RULES = [
       "Secondary dropdown + optional ticket",
   }),
 
+  disposition({
+    lobs: [ALL],
+    departments: [ALL],
 
+    status: "System Issue",
+
+    subStatus:
+      "Receiving Support",
+
+    reportingCategory:
+      "System Loss",
+
+    productive: false,
+
+    countsInUtilization:
+      false,
+
+    captureMethod:
+      "Secondary dropdown + optional note",
+  }),
   // ==========================================================
   // WORKING - DOCUMENTS / CLS
   // ==========================================================
-
   disposition({
     lobs: [ALL],
 
