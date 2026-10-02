@@ -11620,6 +11620,23 @@ const reviewReasons =
 const minorVarianceReasons =
   new Set();
 
+/*
+  Track whether a TL/Manager has reviewed or
+  corrected any Payroll-supporting record during
+  this pay period.
+
+  This does not override a genuine unresolved
+  Payroll exception. It is used only after the
+  calculated time is reconciled.
+*/
+let managerReviewedPeriod = false;
+
+/*
+  Prevent one reviewed day from clearing a minor
+  variance belonging to a different, unreviewed day.
+*/
+let unreviewedMinorVarianceExists = false;
+
 const dailyRows = [];
 
         payrollDates.forEach(
@@ -11903,6 +11920,86 @@ const dayLogs =
         `${candidateEmployeeId}::${dateKey}`
       ) || []
   );
+
+  /*
+  A Payroll day is considered management-reviewed
+  when either:
+
+  - an approved PTO/VTO/Sick/Leave request covers it
+  - a time log was manually edited by management
+  - a time log was explicitly approved
+
+  Auto Logged entries are not treated as a
+  Manager/TL review.
+*/
+const dayWasManagerReviewed =
+  Boolean(approvedLeave) ||
+  dayLogs.some((timeLog) => {
+    const approvalStatus = String(
+      timeLog.approval_status ||
+        timeLog.approved ||
+        ""
+    )
+      .trim()
+      .toLowerCase();
+
+    const editedBy = String(
+      timeLog.edited_by || ""
+    ).trim();
+
+    const approvedBy = String(
+      timeLog.approved_by || ""
+    ).trim();
+
+    const reviewerValues = [
+      editedBy,
+      approvedBy,
+    ].filter(Boolean);
+
+    const isSystemReviewer =
+      reviewerValues.some((value) => {
+        const normalizedValue =
+          value.toLowerCase();
+
+        return (
+          normalizedValue === "system" ||
+          normalizedValue.startsWith(
+            "magnemite automatic"
+          )
+        );
+      });
+
+    const hasHumanReviewer =
+      reviewerValues.some((value) => {
+        const normalizedValue =
+          value.toLowerCase();
+
+        return (
+          normalizedValue !== "system" &&
+          !normalizedValue.startsWith(
+            "magnemite automatic"
+          )
+        );
+      });
+
+    const isAutoLogged =
+      approvalStatus === "auto logged";
+
+    return (
+      !isAutoLogged &&
+      (
+        hasHumanReviewer ||
+        (
+          approvalStatus === "approved" &&
+          !isSystemReviewer
+        )
+      )
+    );
+  });
+
+if (dayWasManagerReviewed) {
+  managerReviewedPeriod = true;
+}
 
             const attendanceIntervals = [];
 
@@ -12417,15 +12514,30 @@ const dayMissingMinutes =
       );
 
             missingMinutes +=
-              dayMissingMinutes;
+  dayMissingMinutes;
 
-            if (
-              dayMissingMinutes > 0
-            ) {
-              reviewReasons.add(
-                "Missing scheduled time"
-              );
-            }
+/*
+  Keep the employee/pay-period Payroll status
+  consistent with the daily reconciliation logic.
+
+  A variance within the Payroll tolerance is
+  informational only and should not be treated
+  as unresolved missing scheduled time.
+*/
+if (
+  dayMissingMinutes >
+  PAYROLL_VARIANCE_TOLERANCE_MINUTES
+) {
+  reviewReasons.add(
+    "Missing scheduled time"
+  );
+} else if (
+  dayMissingMinutes > 0
+) {
+  minorVarianceReasons.add(
+    "Minor missing-time variance"
+  );
+}
             /*
   Preserve this individual payroll day so it can
   be displayed in the Payroll Detail modal.
@@ -12510,6 +12622,17 @@ if (
   }
 }
 
+/*
+  A minor variance may be treated as reconciled only
+  when that same Payroll day was reviewed by management.
+*/
+if (
+  dayMinorVarianceReasons.length > 0 &&
+  !dayWasManagerReviewed
+) {
+  unreviewedMinorVarianceExists = true;
+}
+
 let dayStatus = "Reconciled";
 
 if (holiday?.holiday_name) {
@@ -12531,6 +12654,10 @@ if (holiday?.holiday_name) {
   dayReviewReasons.length > 0
 ) {
   dayStatus = "Review";
+} else if (
+  dayWasManagerReviewed
+) {
+  dayStatus = "Reviewed & Reconciled";
 } else if (
   dayMinorVarianceReasons.length > 0
 ) {
@@ -12818,6 +12945,11 @@ if (
 ) {
   status = "Review";
 } else if (
+  managerReviewedPeriod &&
+  !unreviewedMinorVarianceExists
+) {
+  status = "Reviewed & Reconciled";
+} else if (
   minorVarianceReasons.size > 0
 ) {
   status = "Minor Variance";
@@ -12941,7 +13073,11 @@ totalPayableHours,
   new Set([
     ...criticalReviewReasons,
     ...reviewReasons,
-    ...minorVarianceReasons,
+    ...(
+      status === "Reviewed & Reconciled"
+        ? []
+        : minorVarianceReasons
+    ),
   ])
 ),
 
@@ -22002,11 +22138,79 @@ rows={filteredRequests.map((r) => [
           )
         : "—",
 
-      employee.reviewReasons.length
-        ? `${employee.status}: ${employee.reviewReasons.join(
-            ", "
-          )}`
-        : employee.status,
+      (() => {
+  const payrollDays =
+    employee.dailyRows || [];
+
+  const criticalDays =
+    payrollDays.filter(
+      (day) =>
+        day.status === "Critical Review"
+    ).length;
+
+  const reviewDays =
+    payrollDays.filter(
+      (day) =>
+        day.status === "Review"
+    ).length;
+
+  const minorVarianceDays =
+    payrollDays.filter(
+      (day) =>
+        day.status === "Minor Variance"
+    ).length;
+
+  const reviewedReconciledDays =
+    payrollDays.filter(
+      (day) =>
+        day.status ===
+        "Reviewed & Reconciled"
+    ).length;
+
+  const daySummary = [
+    criticalDays > 0
+      ? `${criticalDays} critical`
+      : "",
+    reviewDays > 0
+      ? `${reviewDays} review`
+      : "",
+    minorVarianceDays > 0
+      ? `${minorVarianceDays} minor variance`
+      : "",
+    reviewedReconciledDays > 0
+      ? `${reviewedReconciledDays} reviewed & reconciled`
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  return (
+    <div>
+      <div>
+        <strong>
+          {employee.status}
+        </strong>
+      </div>
+
+      {daySummary && (
+        <div>
+          {daySummary}
+        </div>
+      )}
+
+      {employee.status !==
+        "Reviewed & Reconciled" &&
+        employee.reviewReasons.length >
+          0 && (
+          <div>
+            {employee.reviewReasons.join(
+              ", "
+            )}
+          </div>
+        )}
+    </div>
+  );
+})(),
 
         <button
   type="button"
