@@ -1140,6 +1140,43 @@ function formatTimeRange(start, end) {
   return `${formattedStart} - ${formattedEnd}`;
 }
 
+function format12HourTime(value) {
+  const militaryTime = formatMilitaryTime(value);
+
+  if (!militaryTime || militaryTime === "Not Available") {
+    return militaryTime || "";
+  }
+
+  const match = militaryTime.match(/^(\d{1,2}):(\d{2})$/);
+
+  if (!match) {
+    return militaryTime;
+  }
+
+  const hour24 = Number(match[1]);
+  const minutes = match[2];
+  const meridian = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+
+  return `${hour12}:${minutes} ${meridian}`;
+}
+
+function formatTimeRange12Hour(start, end) {
+  const formattedStart = format12HourTime(start);
+  const formattedEnd = format12HourTime(end);
+
+  if (
+    !formattedStart ||
+    !formattedEnd ||
+    formattedStart === "Not Available" ||
+    formattedEnd === "Not Available"
+  ) {
+    return "Not Available";
+  }
+
+  return `${formattedStart} - ${formattedEnd}`;
+}
+
 function formatDateOnly(value) {
   if (!value) return "";
   if (typeof value === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(value)) return value;
@@ -9692,6 +9729,33 @@ const agentShiftSummary =
   buildShiftSummaryFromSchedule(
     agentScheduleRow?.schedule
   );
+
+  const use12HourAgentShiftFormat =
+  String(
+    selectedEmployee?.id ||
+    selectedEmployee?.employee_id ||
+    ""
+  ) === "93003954";
+
+const agentShiftSummaryForDisplay =
+  use12HourAgentShiftFormat
+    ? {
+        ...agentShiftSummary,
+        label: formatTimeRange12Hour(
+          agentScheduleRow?.schedule?.shift_start,
+          agentScheduleRow?.schedule?.shift_end
+        ),
+        detail:
+          `First Break: ${formatTimeRange12Hour(
+            agentScheduleRow?.schedule?.break_start,
+            agentScheduleRow?.schedule?.break_end
+          )} · Second Break: ${formatTimeRange12Hour(
+            agentScheduleRow?.schedule?.second_break_start,
+            agentScheduleRow?.schedule?.second_break_end
+          )}`,
+      }
+    : agentShiftSummary;
+
   const agentIsOffToday =
   agentScheduleRow?.schedule
     ?.is_scheduled === false;
@@ -20139,7 +20203,7 @@ if (startupLoading) {
               </div>
               <div className={`agentShiftCard ${agentIsOffToday ? "offDay" : ""}`}>
                 <span>{agentIsOffToday ? "Today’s Status" : "Today’s Shift"}</span>
-                <strong>{agentShiftSummary.label}</strong>
+                <strong>{agentShiftSummaryForDisplay.label}</strong>
                 {agentIsOffToday ? (
                   <small className="shiftDetails offDetails">
                     <b>Scheduled off today</b>
@@ -20147,7 +20211,7 @@ if (startupLoading) {
                   </small>
                 ) : (
                   <small className="shiftDetails">
-                    {agentShiftSummary.detail
+                    {agentShiftSummaryForDisplay.detail
   .split(" · ")
   .map((line) => (
     <b key={line}>{line}</b>
@@ -20225,8 +20289,15 @@ if (startupLoading) {
   }}
 >
   {agentWeeklySchedule.map((row) => {
-    const isOff =
-      row.isOffDay;
+  const isOff =
+    row.isOffDay;
+
+  const use12HourWeeklyFormat =
+    String(
+      selectedEmployee?.id ||
+      selectedEmployee?.employee_id ||
+      ""
+    ) === "93003954";
 
     return (
       <div
@@ -20309,10 +20380,15 @@ if (startupLoading) {
                 marginBottom: "5px",
               }}
             >
-              {formatTimeRange(
-                row.schedule.shift_start,
-                row.schedule.shift_end
-              )}
+              {use12HourWeeklyFormat
+  ? formatTimeRange12Hour(
+      row.schedule.shift_start,
+      row.schedule.shift_end
+    )
+  : formatTimeRange(
+      row.schedule.shift_start,
+      row.schedule.shift_end
+    )}
             </strong>
 
             {row.isToday ? (
@@ -20335,13 +20411,23 @@ if (startupLoading) {
     }}
   >
     B1{" "}
-    {formatTimeRange(
+{use12HourWeeklyFormat
+  ? formatTimeRange12Hour(
+      row.schedule.break_start,
+      row.schedule.break_end
+    )
+  : formatTimeRange(
       row.schedule.break_start,
       row.schedule.break_end
     )}
     <br />
     B2{" "}
-    {formatTimeRange(
+{use12HourWeeklyFormat
+  ? formatTimeRange12Hour(
+      row.schedule.second_break_start,
+      row.schedule.second_break_end
+    )
+  : formatTimeRange(
       row.schedule.second_break_start,
       row.schedule.second_break_end
     )}
