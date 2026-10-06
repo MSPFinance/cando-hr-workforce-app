@@ -706,6 +706,12 @@ const timeCategories = [
   "System Issue",
   "PTO",
   "VTO",
+  "Late Arrival",
+  "VTO - Early Leave",
+  "Prize - Early Leave",
+  "Sick Leave",
+  "Sick Leave - Early Leave",
+
   // System-managed categories below are intentionally kept in code for reporting and automation,
   // but disabled from manual selection in the UI.
   "Overtime",
@@ -714,6 +720,27 @@ const timeCategories = [
 ];
 
 const SYSTEM_MANAGED_TIME_CATEGORIES = ["Overtime", "Early Unscheduled", "Off-Day Unscheduled"];
+
+const NON_WORKED_TIME_CATEGORIES = new Set([
+  "pto",
+  "vto",
+  "late arrival",
+  "vto - early leave",
+  "prize - early leave",
+  "sick leave",
+  "sick leave - early leave",
+  "paid leave",
+  "unpaid leave",
+  "day off due to swap",
+]);
+
+function isNonWorkedTimeCategory(category) {
+  return NON_WORKED_TIME_CATEGORIES.has(
+    String(category || "")
+      .trim()
+      .toLowerCase()
+  );
+}
 
 const ROLE_ACCESS = {
   Employee: ["portal"],
@@ -11020,6 +11047,97 @@ const payrollDateRange = useMemo(() => {
   payrollPresetRange,
 ]);
 
+const payrollRangeValidation = useMemo(() => {
+  const startDate =
+    payrollDateRange.startDate;
+
+  const endDate =
+    payrollDateRange.endDate;
+
+  const datePattern =
+    /^\d{4}-\d{2}-\d{2}$/;
+
+  if (
+    !datePattern.test(startDate || "") ||
+    !datePattern.test(endDate || "")
+  ) {
+    return {
+      isValid: false,
+      reason: "Enter complete payroll dates.",
+    };
+  }
+
+  const startYear =
+    Number(startDate.slice(0, 4));
+
+  const endYear =
+    Number(endDate.slice(0, 4));
+
+  /*
+    Protect Payroll from temporary or accidental
+    years entered while editing a date field.
+  */
+  if (
+    startYear < 2000 ||
+    startYear > 2100 ||
+    endYear < 2000 ||
+    endYear > 2100
+  ) {
+    return {
+      isValid: false,
+      reason: "Payroll dates must use a valid year.",
+    };
+  }
+
+  const startMs =
+    new Date(`${startDate}T00:00:00Z`).getTime();
+
+  const endMs =
+    new Date(`${endDate}T00:00:00Z`).getTime();
+
+  if (
+    Number.isNaN(startMs) ||
+    Number.isNaN(endMs) ||
+    startMs > endMs
+  ) {
+    return {
+      isValid: false,
+      reason: "Payroll start date must be before the end date.",
+    };
+  }
+
+  const dayCount =
+    Math.floor(
+      (endMs - startMs) /
+        (24 * 60 * 60 * 1000)
+    ) + 1;
+
+  /*
+    Payroll normally runs semi-monthly.
+    Keep a generous safety ceiling for custom reviews
+    while preventing accidental multi-year calculations.
+  */
+  if (dayCount > 62) {
+    return {
+      isValid: false,
+      reason:
+        "Custom Payroll ranges cannot exceed 62 days.",
+    };
+  }
+
+  return {
+    isValid: true,
+    reason: "",
+    dayCount,
+  };
+}, [
+  payrollDateRange.startDate,
+  payrollDateRange.endDate,
+]);
+
+const isPayrollDateRangeSafe =
+  payrollRangeValidation.isValid;
+
 useEffect(() => {
   if (
     !supabase ||
@@ -11027,8 +11145,14 @@ useEffect(() => {
     isAgentOnly ||
     tab !== "payroll" ||
     !payrollDateRange.startDate ||
-    !payrollDateRange.endDate
+    !payrollDateRange.endDate ||
+    !isPayrollDateRangeSafe
   ) {
+    if (!isPayrollDateRangeSafe) {
+      setPayrollLogsLoading(false);
+      setPayrollSourceTimeEntries([]);
+    }
+
     return undefined;
   }
 
@@ -11189,6 +11313,7 @@ useEffect(() => {
   tab,
   payrollDateRange.startDate,
   payrollDateRange.endDate,
+  isPayrollDateRangeSafe,
 ]);
 
 const payrollTimeEntries = useMemo(() => {
@@ -11377,11 +11502,12 @@ const payrollEmployeePeriodSummary = useMemo(() => {
   */
 
   if (
-    !payrollDateRange.startDate ||
-    !payrollDateRange.endDate
-  ) {
-    return [];
-  }
+  !isPayrollDateRangeSafe ||
+  !payrollDateRange.startDate ||
+  !payrollDateRange.endDate
+) {
+  return [];
+}
 
   /*
     Build every date belonging to the selected
@@ -12070,7 +12196,10 @@ if (dayWasManagerReviewed) {
 const leaveIntervalsByType = {
   pto: [],
   vto: [],
+  "vto - early leave": [],
   "sick leave": [],
+  "sick leave - early leave": [],
+  "prize - early leave": [],
   "paid leave": [],
   "unpaid leave": [],
 };
@@ -12096,6 +12225,9 @@ dayLogs.forEach((timeLog) => {
       leaveIntervalsByType,
       category
     );
+
+    const isAttendanceVarianceCategory =
+  category === "late arrival";
 
     const approvalStatus = String(
   timeLog.approval_status ||
@@ -12128,24 +12260,28 @@ const isApprovedLeaveLog =
     Leave entries must have their own defined end.
   */
   if (
-    !endValue &&
-    !isLeaveCategory &&
-    dateKey ===
-      getEmployeeDateKey(employee)
-  ) {
-    endValue =
-      getEmployeeTimeKey(employee);
-  }
+  !endValue &&
+  !isLeaveCategory &&
+  !isAttendanceVarianceCategory &&
+  dateKey ===
+    getEmployeeDateKey(employee)
+) {
+  endValue =
+    getEmployeeTimeKey(employee);
+}
 
   if (!endValue) {
-    if (!isLeaveCategory) {
-      criticalReviewReasons.add(
-        "Open time log"
-      );
-    }
-
-    return;
+  if (
+    !isLeaveCategory &&
+    !isAttendanceVarianceCategory
+  ) {
+    criticalReviewReasons.add(
+      "Open time log"
+    );
   }
+
+  return;
+}
 
   const localStart =
     getEmployeeLocalTime(
@@ -12183,6 +12319,17 @@ const isApprovedLeaveLog =
     ].push(logRange);
   }
 
+  return;
+}
+
+/*
+  Attendance variance categories describe
+  scheduled time that was not worked.
+
+  They must remain available for reporting
+  without becoming worked/presence minutes.
+*/
+if (isAttendanceVarianceCategory) {
   return;
 }
 
@@ -12333,12 +12480,35 @@ const dayVtoLogMinutes =
     leaveIntervalsByType.vto
   );
 
+  const dayVtoEarlyLeaveLogMinutes =
+  getLeaveLogMinutesWithinSchedule(
+    leaveIntervalsByType[
+      "vto - early leave"
+    ]
+  );
+
+
 const daySickLogMinutes =
   getLeaveLogMinutesWithinSchedule(
     leaveIntervalsByType[
       "sick leave"
     ]
   );
+
+  const daySickEarlyLeaveLogMinutes =
+  getLeaveLogMinutesWithinSchedule(
+    leaveIntervalsByType[
+      "sick leave - early leave"
+    ]
+  );
+
+const dayPrizeEarlyLeaveLogMinutes =
+  getLeaveLogMinutesWithinSchedule(
+    leaveIntervalsByType[
+      "prize - early leave"
+    ]
+  );
+
 
 const dayPaidLeaveLogMinutes =
   getLeaveLogMinutesWithinSchedule(
@@ -12359,7 +12529,10 @@ const dayTimeLogLeaveMinutes =
     dayScheduledMinutes,
     dayPtoLogMinutes +
       dayVtoLogMinutes +
+      dayVtoEarlyLeaveLogMinutes +
       daySickLogMinutes +
+      daySickEarlyLeaveLogMinutes +
+      dayPrizeEarlyLeaveLogMinutes +
       dayPaidLeaveLogMinutes +
       dayUnpaidLeaveLogMinutes
   );
@@ -12500,10 +12673,12 @@ if (
     dayPtoLogMinutes;
 
   vtoMinutes +=
-    dayVtoLogMinutes;
+    dayVtoLogMinutes +
+    dayVtoEarlyLeaveLogMinutes;
 
   sickMinutes +=
-    daySickLogMinutes;
+    daySickLogMinutes +
+    daySickEarlyLeaveLogMinutes;
 
   paidLeaveMinutes +=
     dayPaidLeaveLogMinutes;
@@ -12511,6 +12686,13 @@ if (
   unpaidLeaveMinutes +=
     dayUnpaidLeaveLogMinutes;
 
+  /*
+    Prize - Early Leave is already included in
+    dayTimeLogLeaveMinutes.
+
+    It reconciles scheduled time without being
+    classified as VTO, Sick Leave, or Paid Leave.
+  */
   dayLeaveCredit =
     dayTimeLogLeaveMinutes;
 }
@@ -12762,8 +12944,20 @@ const timeLogLeaveTypes = [
     ? "VTO"
     : null,
 
+  dayVtoEarlyLeaveLogMinutes > 0
+    ? "VTO - Early Leave"
+    : null,
+
   daySickLogMinutes > 0
     ? "Sick Leave"
+    : null,
+
+  daySickEarlyLeaveLogMinutes > 0
+    ? "Sick Leave - Early Leave"
+    : null,
+
+  dayPrizeEarlyLeaveLogMinutes > 0
+    ? "Prize - Early Leave"
     : null,
 
   dayPaidLeaveLogMinutes > 0
@@ -12861,9 +13055,26 @@ const dayPaidLeaveMinutes =
     ? dayLeaveCredit
     : 0;
 
+/*
+  Prize - Early Leave is authorized paid release
+  time.
+
+  Keep it separate from the Paid Leave bucket for
+  reporting, but include it in payable scheduled time.
+
+  Cap scheduled payable time so overlapping records
+  can never create duplicate payable minutes.
+*/
+const dayScheduledPayableMinutes =
+  Math.min(
+    payrollDayScheduledMinutes,
+    dayTrackedWithinSchedule +
+      dayPaidLeaveMinutes +
+      dayPrizeEarlyLeaveLogMinutes
+  );
+
 const dayTotalPayableMinutes =
-  dayTrackedWithinSchedule +
-  dayPaidLeaveMinutes +
+  dayScheduledPayableMinutes +
   dayHolidayPaidNotWorkedMinutes +
   dayHolidayPremiumMinutes;
 
@@ -13036,11 +13247,24 @@ if (
             "Approved Leave";
         }
 
-        const totalPayableMinutes =
-  trackedWithinScheduleMinutes +
-  paidLeaveMinutes +
-  holidayPaidNotWorkedMinutes +
-  holidayWorkedPremiumMinutes;
+        /*
+  Build the employee-period payable total from the
+  already-reconciled daily payable values.
+
+  This keeps the period summary aligned with the
+  Daily Payroll Detail, including Prize Early Leave,
+  paid leave, and holiday credits.
+*/
+const totalPayableMinutes =
+  dailyRows.reduce(
+    (total, day) =>
+      total +
+      safeNumber(
+        day.payableMinutes,
+        0
+      ),
+    0
+  );
 
 const totalPayableHours =
   totalPayableMinutes / 60;
@@ -13176,6 +13400,7 @@ status,
   payrollLogsByEmployeeDate,
   payrollDateRange.startDate,
   payrollDateRange.endDate,
+  isPayrollDateRangeSafe,
   scheduleVersions,
   employeeBreakRows,
   scheduleExceptions,
@@ -21101,10 +21326,17 @@ formatHours(
             t.created_at
         );
 
-      return (
-        sameEmployee &&
-        entryDate === rowDate
-      );
+      const isWorkedTime =
+  !isNonWorkedTimeCategory(
+    entry.category ||
+      entry.status
+  );
+
+return (
+  sameEmployee &&
+  entryDate === rowDate &&
+  isWorkedTime
+);
     })
     .reduce(
       (total, entry) =>
@@ -22088,6 +22320,30 @@ rows={filteredRequests.map((r) => [
   }
 />
     </div>
+    {!isPayrollDateRangeSafe && (
+  <div
+    style={{
+      margin: "12px 0",
+      padding: "12px 14px",
+      border: "1px solid #e0b44c",
+      borderRadius: "10px",
+      background: "#fff8e6",
+    }}
+  >
+    <strong
+      style={{
+        display: "block",
+        marginBottom: "4px",
+      }}
+    >
+      Invalid Payroll date range
+    </strong>
+
+    <span>
+      {payrollRangeValidation.reason}
+    </span>
+  </div>
+)}
 <div className="payrollExportActions">
   <button
     type="button"
