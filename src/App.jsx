@@ -10242,7 +10242,9 @@ useEffect(() => {
   return undefined;
 }
 
-  const reloadLiveLogsOnly = async () => {
+let cancelled = false;
+
+const reloadLiveLogsOnly = async () => {
     let liveLogsQuery = supabase
   .from("time_logs")
   .select("*")
@@ -10286,7 +10288,11 @@ const {
   error,
 } = await liveLogsQuery.limit(5000);
 
-    if (!error) {
+if (cancelled) {
+  return;
+}
+
+if (!error) {
 
       console.log(
   "Filtered realtime time logs loaded:",
@@ -10534,6 +10540,7 @@ const channel = supabase
   });
 
 return () => {
+  cancelled = true;
   supabase.removeChannel(channel);
 };
 }, [
@@ -10904,18 +10911,29 @@ const displayedBalanceEmployees =
 };
   const filteredTime = visibleTime.filter((timeLog) => {
   const timeLogEmployee =
-    employees.find(
-      (employee) =>
-        String(employee.id || employee.employee_id || "") ===
-        String(timeLog.employee_id || "")
-    ) || null;
+    employees.find((employee) => {
+      const employeeIds = [
+        employee.id,
+        employee.employee_id,
+        employee.Employee_ID,
+        employee.supabase_employee_id,
+      ]
+        .map((value) =>
+          String(value || "").trim()
+        )
+        .filter(Boolean);
+
+      return employeeIds.includes(
+        String(timeLog.employee_id || "").trim()
+      );
+    }) || null;
 
   const entryDate =
     normalizeDateForFilter(
       timeLog.date ||
-      timeLog.clock_in ||
-      timeLog.category_start ||
-      timeLog.created_at
+        timeLog.clock_in ||
+        timeLog.category_start ||
+        timeLog.created_at
     );
 
   const entryLob =
@@ -10929,10 +10947,10 @@ const displayedBalanceEmployees =
     "";
 
   const entrySubDepartment = String(
-  timeLog.sub_department ||
-  timeLogEmployee?.sub_department ||
-  ""
-).trim();
+    timeLog.sub_department ||
+      timeLogEmployee?.sub_department ||
+      ""
+  ).trim();
 
   const entryCountry =
     timeLog.country ||
@@ -10944,12 +10962,21 @@ const displayedBalanceEmployees =
     timeLogEmployee?.full_name ||
     "";
 
-    const entryLeader = String(
-  timeLogEmployee?.team_leader ||
-    timeLogEmployee?.supervisor ||
-    timeLogEmployee?.manager ||
-    ""
-).trim();
+  const entryMatchesSelectedEmployee =
+    filters.employee === "All" ||
+    (
+      filteredTimeLogEmployeeId &&
+      String(timeLog.employee_id || "").trim() ===
+        String(filteredTimeLogEmployeeId).trim()
+    ) ||
+    entryEmployeeName === filters.employee;
+
+  const entryLeader = String(
+    timeLogEmployee?.team_leader ||
+      timeLogEmployee?.supervisor ||
+      timeLogEmployee?.manager ||
+      ""
+  ).trim();
 
   const entryCategory =
     timeLog.category ||
@@ -10973,20 +11000,17 @@ const displayedBalanceEmployees =
       entryDepartment === filters.department
     ) &&
     (
-  filters.subDepartment === "All" ||
-  entrySubDepartment.toLowerCase() ===
-    String(filters.subDepartment || "")
-      .trim()
-      .toLowerCase()
-) &&
-(
-  filters.teamLeader === "All" ||
-  entryLeader === filters.teamLeader
-) &&
-    (
-      filters.employee === "All" ||
-      entryEmployeeName === filters.employee
+      filters.subDepartment === "All" ||
+      entrySubDepartment.toLowerCase() ===
+        String(filters.subDepartment || "")
+          .trim()
+          .toLowerCase()
     ) &&
+    (
+      filters.teamLeader === "All" ||
+      entryLeader === filters.teamLeader
+    ) &&
+    entryMatchesSelectedEmployee &&
     (
       filters.country === "All" ||
       entryCountry === filters.country
@@ -11317,6 +11341,28 @@ useEffect(() => {
 ]);
 
 const payrollTimeEntries = useMemo(() => {
+  const selectedPayrollEmployee =
+    filters.employee !== "All"
+      ? employees.find(
+          (employee) =>
+            employee.full_name === filters.employee
+        ) || null
+      : null;
+
+  const selectedPayrollEmployeeIds =
+    selectedPayrollEmployee
+      ? [
+          selectedPayrollEmployee.id,
+          selectedPayrollEmployee.employee_id,
+          selectedPayrollEmployee.Employee_ID,
+          selectedPayrollEmployee.supabase_employee_id,
+        ]
+          .map((value) =>
+            String(value || "").trim()
+          )
+          .filter(Boolean)
+      : [];
+
   return payrollSourceTimeEntries.filter((timeLog) => {
     const entryDate =
       normalizeDateForFilter(
@@ -11328,10 +11374,8 @@ const payrollTimeEntries = useMemo(() => {
 
     if (
       !entryDate ||
-      entryDate <
-        payrollDateRange.startDate ||
-      entryDate >
-        payrollDateRange.endDate
+      entryDate < payrollDateRange.startDate ||
+      entryDate > payrollDateRange.endDate
     ) {
       return false;
     }
@@ -11341,6 +11385,7 @@ const payrollTimeEntries = useMemo(() => {
         const employeeIds = [
           employee.id,
           employee.employee_id,
+          employee.Employee_ID,
           employee.supabase_employee_id,
         ]
           .map((value) =>
@@ -11349,9 +11394,7 @@ const payrollTimeEntries = useMemo(() => {
           .filter(Boolean);
 
         return employeeIds.includes(
-          String(
-            timeLog.employee_id || ""
-          ).trim()
+          String(timeLog.employee_id || "").trim()
         );
       }) || null;
 
@@ -11380,6 +11423,13 @@ const payrollTimeEntries = useMemo(() => {
       timeLogEmployee?.full_name ||
       "";
 
+    const entryMatchesSelectedEmployee =
+      filters.employee === "All" ||
+      selectedPayrollEmployeeIds.includes(
+        String(timeLog.employee_id || "").trim()
+      ) ||
+      entryEmployeeName === filters.employee;
+
     const entryLeader = String(
       timeLogEmployee?.team_leader ||
         timeLogEmployee?.supervisor ||
@@ -11394,33 +11444,23 @@ const payrollTimeEntries = useMemo(() => {
       ) &&
       (
         filters.department === "All" ||
-        entryDepartment ===
-          filters.department
+        entryDepartment === filters.department
       ) &&
       (
         filters.subDepartment === "All" ||
-        entrySubDepartment ===
-          filters.subDepartment
+        entrySubDepartment === filters.subDepartment
       ) &&
       (
         filters.teamLeader === "All" ||
-        entryLeader ===
-          filters.teamLeader
+        entryLeader === filters.teamLeader
       ) &&
-      (
-        filters.employee === "All" ||
-        entryEmployeeName ===
-          filters.employee
-      ) &&
+      entryMatchesSelectedEmployee &&
       (
         filters.country === "All" ||
-        entryCountry ===
-          filters.country
+        entryCountry === filters.country
       )
     );
   });
-  
-
 }, [
   payrollSourceTimeEntries,
   employees,
@@ -11433,7 +11473,6 @@ const payrollTimeEntries = useMemo(() => {
   filters.employee,
   filters.country,
 ]);
-
 const payrollLogsByEmployeeDate =
   useMemo(() => {
     const index = new Map();
@@ -11721,11 +11760,11 @@ const payrollEmployeePeriodSummary = useMemo(() => {
   filteredVisibleEmployees.map(
     (employee) => {
         const employeeIds =
-          [
-            employee.id,
-            employee.employee_id,
-            employee.supabase_employee_id,
-          ]
+  [
+    employee.id,
+    employee.employee_id,
+    employee.supabase_employee_id,
+  ]
             .map((value) =>
               String(
                 value || ""
@@ -11734,12 +11773,12 @@ const payrollEmployeePeriodSummary = useMemo(() => {
             .filter(Boolean);
 
         const employeeId =
-          String(
-            employee.employee_id ||
-              employee.id ||
-              employee.supabase_employee_id ||
-              ""
-          ).trim();
+  String(
+    employee.employee_id ||
+      employee.id ||
+      employee.supabase_employee_id ||
+      ""
+  ).trim();
 
         const employeeName =
           employee.full_name ||
