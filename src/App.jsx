@@ -183,7 +183,7 @@ function isWeeklyWorkforceSyncWindow(date = new Date()) {
 const DEFAULT_LOGIN_EMAIL = "";
 const DEFAULT_LOGIN_PASSWORD = "Welcome2026!";
 const ADMIN_ACCESS_LEVELS = ["TL", "Team Lead", "Supervisor", "Manager", "Approvals", "Reporting", "HR", "Payroll", "Admin", "Executive"];
-const OT_REQUESTS_ENABLED = false;
+const OT_REQUESTS_ENABLED = true;
 const EARLY_SHIFT_START_GRACE_MINUTES = 15;
 const PAYROLL_VARIANCE_TOLERANCE_MINUTES = 5;
 const PAYROLL_STANDARD_WORK_DAYS_PER_PERIOD = 10;
@@ -814,12 +814,31 @@ function canEditTimeLogs(roleOrAccessLevel) {
 function isSystemManagedTimeCategory(category) {
   return SYSTEM_MANAGED_TIME_CATEGORIES.includes(category);
 }
-function TimeCategoryOptions() {
-  return timeCategories.map((category) => (
-    <option key={category} value={category} disabled={isSystemManagedTimeCategory(category)}>
-      {isSystemManagedTimeCategory(category) ? `${category} (Automatic only)` : category}
-    </option>
-  ));
+function TimeCategoryOptions({
+  allowManualOvertime = false,
+}) {
+  return timeCategories.map((category) => {
+    const manualOvertimeAllowed =
+      OT_REQUESTS_ENABLED &&
+      allowManualOvertime &&
+      category === "Overtime";
+
+    const disabled =
+      isSystemManagedTimeCategory(category) &&
+      !manualOvertimeAllowed;
+
+    return (
+      <option
+        key={category}
+        value={category}
+        disabled={disabled}
+      >
+        {disabled
+          ? `${category} (Automatic only)`
+          : category}
+      </option>
+    );
+  });
 }
 function AgentTimeCategoryOptions({
   accessRole,
@@ -6025,6 +6044,13 @@ function PayrollDetailModal({
 />
 
 <Info
+  label="Approved OT"
+  value={`${employee.approvedOvertimeHours.toFixed(
+    2
+  )}h`}
+/>
+
+<Info
   label="Total Payable Hours"
   value={`${employee.totalPayableHours.toFixed(
     2
@@ -6041,6 +6067,7 @@ function PayrollDetailModal({
               "Logged",
               "In Schedule",
               "Outside Schedule",
+              "OT",
               "Leave",
               "Holiday",
               "Missing",
@@ -6064,6 +6091,10 @@ function PayrollDetailModal({
                 )}h`,
 
                 `${day.outsideScheduleHours.toFixed(
+                  2
+                )}h`,
+
+                `${day.approvedOvertimeHours.toFixed(
                   2
                 )}h`,
 
@@ -11827,6 +11858,7 @@ let holidayPaidNotWorkedMinutes = 0;
 
         let missingMinutes = 0;
         let overtimeMinutes = 0;
+        let approvedOvertimeMinutes = 0;
 
         
         let noScheduleDays = 0;
@@ -12231,6 +12263,7 @@ if (dayWasManagerReviewed) {
 }
 
             const attendanceIntervals = [];
+const approvedOvertimeIntervals = [];
 
 const leaveIntervalsByType = {
   pto: [],
@@ -12275,6 +12308,19 @@ dayLogs.forEach((timeLog) => {
 )
   .trim()
   .toLowerCase();
+
+  const payableStatus = String(
+  timeLog.payable_status || ""
+)
+  .trim()
+  .toLowerCase();
+
+const isApprovedOvertime =
+  category === "overtime" &&
+  ["approved", "approve"].includes(
+    approvalStatus
+  ) &&
+  payableStatus === "approved payable";
 
 const isApprovedLeaveLog =
   isLeaveCategory &&
@@ -12335,14 +12381,18 @@ const isApprovedLeaveLog =
     );
 
   const logRange =
-    buildMinuteRange(
-      localStart,
-      localEnd
-    );
+  buildMinuteRange(
+    localStart,
+    localEnd
+  );
 
-  if (!logRange) {
-    return;
-  }
+if (!logRange) {
+  return;
+}
+
+if (isApprovedOvertime) {
+  approvedOvertimeIntervals.push(logRange);
+}
 
   if (isLeaveCategory) {
   /*
@@ -12456,6 +12506,49 @@ if (isAttendanceVarianceCategory) {
 
             trackedWithinScheduleMinutes +=
               dayTrackedWithinSchedule;
+
+              const mergedApprovedOvertime =
+  mergeIntervals(
+    approvedOvertimeIntervals
+  );
+
+const dayApprovedOvertimeMinutes =
+  intervalMinutes(
+    mergedApprovedOvertime
+  );
+
+const dayApprovedOvertimeWithinScheduleMinutes =
+  scheduleRange
+    ? intervalMinutes(
+        mergeIntervals(
+          mergedApprovedOvertime
+            .map((interval) => {
+              const start = Math.max(
+                interval.start,
+                scheduleRange.start
+              );
+
+              const end = Math.min(
+                interval.end,
+                scheduleRange.end
+              );
+
+              if (end <= start) {
+                return null;
+              }
+
+              return {
+                start,
+                end,
+              };
+            })
+            .filter(Boolean)
+        )
+      )
+    : 0;
+
+approvedOvertimeMinutes +=
+  dayApprovedOvertimeMinutes;
 
               /*
   Calculate approved leave-category time logs that
@@ -13112,8 +13205,23 @@ const dayScheduledPayableMinutes =
       dayPrizeEarlyLeaveLogMinutes
   );
 
+/*
+  Approved OT is paid separately.
+
+  If an approved OT interval overlaps scheduled time,
+  remove that overlap from regular payable time first
+  so the same minutes are not paid twice.
+*/
+const dayRegularPayableMinutes =
+  Math.max(
+    0,
+    dayScheduledPayableMinutes -
+      dayApprovedOvertimeWithinScheduleMinutes
+  );
+
 const dayTotalPayableMinutes =
-  dayScheduledPayableMinutes +
+  dayRegularPayableMinutes +
+  dayApprovedOvertimeMinutes +
   dayHolidayPaidNotWorkedMinutes +
   dayHolidayPremiumMinutes;
 
@@ -13168,6 +13276,12 @@ payableHours:
 
   outsideScheduleHours:
     dayOutsideScheduleMinutes / 60,
+
+    approvedOvertimeMinutes:
+  dayApprovedOvertimeMinutes,
+
+approvedOvertimeHours:
+  dayApprovedOvertimeMinutes / 60,
 
   leaveType,
 
@@ -13375,6 +13489,10 @@ totalPayableHours,
           overtimeMinutes,
           overtimeHours:
             overtimeMinutes / 60,
+
+            approvedOvertimeMinutes,
+            approvedOvertimeHours:
+            approvedOvertimeMinutes / 60,
 
           accountedMinutes,
           accountedHours:
@@ -16847,16 +16965,18 @@ setTimeEntries((current) => [
     return null;
   }
 
-  if (newTime.category === "Overtime") {
-    showToast(
-      "Manual overtime disabled",
-      "Overtime is created automatically after the scheduled shift end.",
-      "warning"
-    );
+  if (
+  newTime.category === "Overtime" &&
+  !OT_REQUESTS_ENABLED
+) {
+  showToast(
+    "Manual overtime disabled",
+    "Manual overtime entry is currently disabled.",
+    "warning"
+  );
 
-    return null;
-  }
-
+  return null;
+}
   const employeeDate =
   newTime.date ||
   getEmployeeDateKey(selectedEmployee);
@@ -19138,6 +19258,11 @@ function buildPayrollSummaryExportRows(
             2
           ),
 
+          approved_ot_hours:
+  summaryEmployee.approvedOvertimeHours.toFixed(
+    2
+  ),
+
         holiday_credit_hours:
           summaryEmployee.holidayCreditHours.toFixed(
             2
@@ -19210,6 +19335,7 @@ function downloadPayrollSummaryCsv(
     "swap_hours",
     "missing_hours",
     "outside_schedule_hours",
+    "approved_ot_hours",
     "holiday_credit_hours",
     "holiday_worked_hours",
     "holiday_names",
@@ -19349,6 +19475,7 @@ function exportPayrollEmployeeCsv(
     "logged_hours",
     "in_schedule_hours",
     "outside_schedule_hours",
+    "approved_ot_hours",
     "leave_type",
     "leave_hours",
     "payable_hours",
@@ -19418,6 +19545,12 @@ function exportPayrollEmployeeCsv(
         outside_schedule_hours:
           safeNumber(
             day.outsideScheduleHours,
+            0
+          ).toFixed(2),
+
+          approved_ot_hours:
+            safeNumber(
+            day.approvedOvertimeHours,
             0
           ).toFixed(2),
 
@@ -21165,7 +21298,17 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
     })
   }
 />
-                <select value={newTime.category} onChange={(e) => setNewTime({ ...newTime, category: e.target.value })}><TimeCategoryOptions /></select>
+                <select
+  value={newTime.category}
+  onChange={(e) =>
+    setNewTime({
+      ...newTime,
+      category: e.target.value,
+    })
+  }
+>
+  <TimeCategoryOptions allowManualOvertime />
+</select>
                 <input type="time" value={newTime.category_start} onChange={(e) => setNewTime({ ...newTime, category_start: e.target.value })} />
                 <input type="time" value={newTime.category_end} onChange={(e) => setNewTime({ ...newTime, category_end: e.target.value })} />
                 <input placeholder="Notes" value={newTime.notes} onChange={(e) => setNewTime({ ...newTime, notes: e.target.value })} />
@@ -21303,7 +21446,7 @@ t.id
     )
   }
 >
-  <TimeCategoryOptions />
+  <TimeCategoryOptions allowManualOvertime />
 </select>,
 
 <input
@@ -22451,6 +22594,7 @@ rows={filteredRequests.map((r) => [
     "Unpaid",
     "Missing",
     "Outside",
+    "OT",
     "Holiday",
     "Holiday Rule",
 "Status",
@@ -22499,19 +22643,23 @@ rows={filteredRequests.map((r) => [
       )}h`,
 
       `${employee.overtimeHours.toFixed(
-        2
-      )}h`,
+  2
+)}h`,
 
-      employee.holidayNames.length
-        ? `${employee.holidayNames.join(
-            ", "
-          )} · ${
-            (
-              employee.holidayCreditHours +
-              employee.holidayWorkedHours
-            ).toFixed(2)
-          }h`
-        : "—",
+`${employee.approvedOvertimeHours.toFixed(
+  2
+)}h`,
+
+employee.holidayNames.length
+  ? `${employee.holidayNames.join(
+      ", "
+    )} · ${
+      (
+        employee.holidayCreditHours +
+        employee.holidayWorkedHours
+      ).toFixed(2)
+    }h`
+  : "—",
 
       employee.holidayRules.length
         ? employee.holidayRules.join(
