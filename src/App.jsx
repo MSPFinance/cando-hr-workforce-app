@@ -345,14 +345,30 @@ function isNonTimeTrackedEmployee(employee) {
   );
 }
 
-const REQUEST_TYPE_OPTIONS = ["PTO", "VTO", "Sick Leave", "Paid Leave", "Unpaid Leave", "Day off due to Swap"];
-
-const APPROVED_ATTENDANCE_ABSENCE_TYPES = [
-  "PTO",
-  "VTO",
+const REQUEST_TYPE_OPTIONS = [
+  "PTO - Planned",
+  "PTO - Unplanned",
+  "VTO - Planned",
+  "VTO - Unplanned",
   "Sick Leave",
   "Paid Leave",
-  "Unpaid Leave", "Day off due to Swap"
+  "Unpaid Leave",
+  "Day off due to Swap",
+];
+
+const APPROVED_ATTENDANCE_ABSENCE_TYPES = [
+  // Historical protected categories
+  "PTO",
+  "VTO",
+
+  // New protected planned categories
+  "PTO - Planned",
+  "VTO - Planned",
+
+  "Sick Leave",
+  "Paid Leave",
+  "Unpaid Leave",
+  "Day off due to Swap",
 ];
 
 const ROLE_PROFILE_OPTIONS = ["Employee", "TL", "Manager", "Approvals", "Reporting", "HR", "Payroll", "Admin", "Executive"];
@@ -704,8 +720,17 @@ const timeCategories = [
   "Bathroom",
   "Coaching",
   "System Issue",
+
+  // Historical categories kept for existing records
   "PTO",
   "VTO",
+
+  // New planned / unplanned categories
+  "PTO - Planned",
+  "PTO - Unplanned",
+  "VTO - Planned",
+  "VTO - Unplanned",
+
   "Late Arrival",
   "VTO - Early Leave",
   "Prize - Early Leave",
@@ -724,6 +749,10 @@ const SYSTEM_MANAGED_TIME_CATEGORIES = ["Overtime", "Early Unscheduled", "Off-Da
 const NON_WORKED_TIME_CATEGORIES = new Set([
   "pto",
   "vto",
+  "pto - planned",
+  "pto - unplanned",
+  "vto - planned",
+  "vto - unplanned",
   "late arrival",
   "vto - early leave",
   "prize - early leave",
@@ -1316,16 +1345,58 @@ function calculateRequestHours(request, employee = null) {
 }
 
 function getBalance(employee, type) {
-  if (type === "PTO") return balanceDays(employee, "PTO");
-  if (type === "Sick Leave") return balanceDays(employee, "Sick Leave");
-  if (type === "VTO") return balanceDays(employee, "VTO");
+  if (
+    [
+      "PTO",
+      "PTO - Planned",
+      "PTO - Unplanned",
+    ].includes(type)
+  ) {
+    return balanceDays(employee, "PTO");
+  }
+
+  if (type === "Sick Leave") {
+    return balanceDays(employee, "Sick Leave");
+  }
+
+  if (
+    [
+      "VTO",
+      "VTO - Planned",
+      "VTO - Unplanned",
+    ].includes(type)
+  ) {
+    return balanceDays(employee, "VTO");
+  }
+
   return null;
 }
 
 function balanceField(type) {
-  if (type === "PTO") return "pto_balance_days";
-  if (type === "Sick Leave") return "sick_balance_days";
-  if (type === "VTO") return "vto_balance_days";
+  if (
+    [
+      "PTO",
+      "PTO - Planned",
+      "PTO - Unplanned",
+    ].includes(type)
+  ) {
+    return "pto_balance_days";
+  }
+
+  if (type === "Sick Leave") {
+    return "sick_balance_days";
+  }
+
+  if (
+    [
+      "VTO",
+      "VTO - Planned",
+      "VTO - Unplanned",
+    ].includes(type)
+  ) {
+    return "vto_balance_days";
+  }
+
   return null;
 }
 
@@ -3752,12 +3823,16 @@ function requestDaysValue(request, employee = null) {
   }
 
   const fullDayLeaveTypes = [
-    "pto",
-    "vto",
-    "sick leave",
-    "paid leave",
-    "unpaid leave",
-  ];
+  "pto",
+  "pto - planned",
+  "pto - unplanned",
+  "vto",
+  "vto - planned",
+  "vto - unplanned",
+  "sick leave",
+  "paid leave",
+  "unpaid leave",
+];
 
   if (fullDayLeaveTypes.includes(requestType)) {
     /*
@@ -3824,8 +3899,21 @@ function employeeMonthlyAttendance(employee, timeEntries = [], requests = []) {
   const entries = timeEntries.filter((entry) => entry.employee_id === employee?.id && String(entry.date || "").startsWith(monthKey));
   const approvedRequests = requests.filter((request) => request.employee_id === employee?.id && request.status === "Approved" && String(request.start_date || "").startsWith(monthKey));
   const sickApproved = approvedRequests.filter((request) => request.type === "Sick Leave");
-  const ptoApproved = approvedRequests.filter((request) => request.type === "PTO");
-  const vtoApproved = approvedRequests.filter((request) => request.type === "VTO");
+  const ptoApproved = approvedRequests.filter((request) =>
+  [
+    "PTO",
+    "PTO - Planned",
+    "PTO - Unplanned",
+  ].includes(request.type)
+);
+
+const vtoApproved = approvedRequests.filter((request) =>
+  [
+    "VTO",
+    "VTO - Planned",
+    "VTO - Unplanned",
+  ].includes(request.type)
+);
   return {
     monthLabel: new Date().toLocaleDateString("en-US", { month: "long", year: "numeric" }),
     workingHours: entries.filter((entry) => entry.category === "Working").reduce((sum, entry) => sum + minutesBetween(entry.category_start, entry.category_end), 0) / 60,
@@ -4121,16 +4209,71 @@ function getAccessProfile(employee) {
 
 function balanceDays(employee, type) {
   if (!employee) return 0;
-  if (type === "PTO") return safeNumber(employee.pto_balance_days ?? safeNumber(employee.pto_balance, 0) / 8, 0);
-  if (type === "Sick Leave") return safeNumber(employee.sick_balance_days ?? safeNumber(employee.sick_balance, 0) / 8, 0);
-  if (type === "VTO") return safeNumber(employee.vto_balance_days ?? safeNumber(employee.vto_balance, 0) / 8, 0);
+
+  if (
+    [
+      "PTO",
+      "PTO - Planned",
+      "PTO - Unplanned",
+    ].includes(type)
+  ) {
+    return safeNumber(
+      employee.pto_balance_days ??
+        safeNumber(employee.pto_balance, 0) / 8,
+      0
+    );
+  }
+
+  if (type === "Sick Leave") {
+    return safeNumber(
+      employee.sick_balance_days ??
+        safeNumber(employee.sick_balance, 0) / 8,
+      0
+    );
+  }
+
+  if (
+    [
+      "VTO",
+      "VTO - Planned",
+      "VTO - Unplanned",
+    ].includes(type)
+  ) {
+    return safeNumber(
+      employee.vto_balance_days ??
+        safeNumber(employee.vto_balance, 0) / 8,
+      0
+    );
+  }
+
   return 0;
 }
 
 function balanceFieldDays(type) {
-  if (type === "PTO") return "pto_balance_days";
-  if (type === "Sick Leave") return "sick_balance_days";
-  if (type === "VTO") return "vto_balance_days";
+  if (
+    [
+      "PTO",
+      "PTO - Planned",
+      "PTO - Unplanned",
+    ].includes(type)
+  ) {
+    return "pto_balance_days";
+  }
+
+  if (type === "Sick Leave") {
+    return "sick_balance_days";
+  }
+
+  if (
+    [
+      "VTO",
+      "VTO - Planned",
+      "VTO - Unplanned",
+    ].includes(type)
+  ) {
+    return "vto_balance_days";
+  }
+
   return null;
 }
 
@@ -6691,7 +6834,8 @@ const openProductivityDetail = async (row) => {
         is_open
       `)
       .eq("employee_id", String(row.employee_id))
-      .eq("activity_date", row.activity_date);
+.eq("activity_date", row.activity_date)
+.neq("productivity_classification", "Unclassified");
 
     if (error) throw error;
 
@@ -7316,7 +7460,13 @@ const [
   category_end: "09:00",
   notes: "",
 });
-  const [newRequest, setNewRequest] = useState({ type: "PTO", start_date: today, end_date: today, hours: 8, reason: "" });
+  const [newRequest, setNewRequest] = useState({
+  type: "PTO - Planned",
+  start_date: today,
+  end_date: today,
+  hours: 8,
+  reason: "",
+});
   const [newRule, setNewRule] = useState({
     department: "Operations",
     lob: "GoDay",
@@ -10017,10 +10167,10 @@ async function loadScheduleVersions() {
         request.id,
 
       type:
-        request.type ||
-        request.request_type ||
-        request.Request_Type ||
-        "",
+  request.request_type ||
+  request.Request_Type ||
+  request.type ||
+  "",
 
       status:
         request.status ||
@@ -11843,6 +11993,7 @@ let scheduledMinutes = 0;
         let loggedMinutes = 0;
         let trackedWithinScheduleMinutes =
           0;
+          let protectedAttendanceMinutes = 0;
 
         let ptoMinutes = 0;
         let sickMinutes = 0;
@@ -12268,6 +12419,12 @@ const approvedOvertimeIntervals = [];
 const leaveIntervalsByType = {
   pto: [],
   vto: [],
+
+  "pto - planned": [],
+  "pto - unplanned": [],
+  "vto - planned": [],
+  "vto - unplanned": [],
+
   "vto - early leave": [],
   "sick leave": [],
   "sick leave - early leave": [],
@@ -12612,6 +12769,34 @@ const dayVtoLogMinutes =
     leaveIntervalsByType.vto
   );
 
+  const dayPtoPlannedLogMinutes =
+  getLeaveLogMinutesWithinSchedule(
+    leaveIntervalsByType[
+      "pto - planned"
+    ]
+  );
+
+const dayPtoUnplannedLogMinutes =
+  getLeaveLogMinutesWithinSchedule(
+    leaveIntervalsByType[
+      "pto - unplanned"
+    ]
+  );
+
+const dayVtoPlannedLogMinutes =
+  getLeaveLogMinutesWithinSchedule(
+    leaveIntervalsByType[
+      "vto - planned"
+    ]
+  );
+
+const dayVtoUnplannedLogMinutes =
+  getLeaveLogMinutesWithinSchedule(
+    leaveIntervalsByType[
+      "vto - unplanned"
+    ]
+  );
+
   const dayVtoEarlyLeaveLogMinutes =
   getLeaveLogMinutesWithinSchedule(
     leaveIntervalsByType[
@@ -12660,7 +12845,11 @@ const dayTimeLogLeaveMinutes =
   Math.min(
     dayScheduledMinutes,
     dayPtoLogMinutes +
+      dayPtoPlannedLogMinutes +
+      dayPtoUnplannedLogMinutes +
       dayVtoLogMinutes +
+      dayVtoPlannedLogMinutes +
+      dayVtoUnplannedLogMinutes +
       dayVtoEarlyLeaveLogMinutes +
       daySickLogMinutes +
       daySickEarlyLeaveLogMinutes +
@@ -12733,8 +12922,11 @@ if (
               approvedLeave
             ) {
               if (
-                approvedLeaveType ===
-                "pto"
+                [
+  "pto",
+  "pto - planned",
+  "pto - unplanned",
+].includes(approvedLeaveType)
               ) {
                 ptoMinutes +=
                   dayScheduledMinutes;
@@ -12751,8 +12943,11 @@ if (
                 dayLeaveCredit =
                   dayScheduledMinutes;
               } else if (
-                approvedLeaveType ===
-                "vto"
+                [
+  "vto",
+  "vto - planned",
+  "vto - unplanned",
+].includes(approvedLeaveType)
               ) {
                 vtoMinutes +=
                   dayScheduledMinutes;
@@ -12802,11 +12997,15 @@ if (
   dayTimeLogLeaveMinutes > 0
 ) {
   ptoMinutes +=
-    dayPtoLogMinutes;
+  dayPtoLogMinutes +
+  dayPtoPlannedLogMinutes +
+  dayPtoUnplannedLogMinutes;
 
-  vtoMinutes +=
-    dayVtoLogMinutes +
-    dayVtoEarlyLeaveLogMinutes;
+vtoMinutes +=
+  dayVtoLogMinutes +
+  dayVtoPlannedLogMinutes +
+  dayVtoUnplannedLogMinutes +
+  dayVtoEarlyLeaveLogMinutes;
 
   sickMinutes +=
     daySickLogMinutes +
@@ -12920,15 +13119,48 @@ if (
   Preserve this individual payroll day so it can
   be displayed in the Payroll Detail modal.
 */
+const isProtectedApprovedLeave =
+  [
+    "pto",
+    "vto",
+    "pto - planned",
+    "vto - planned",
+  ].includes(approvedLeaveType);
+
+const dayProtectedAttendanceMinutes =
+  Math.min(
+    payrollDayScheduledMinutes,
+    dayPtoLogMinutes +
+      dayVtoLogMinutes +
+      dayPtoPlannedLogMinutes +
+      dayVtoPlannedLogMinutes +
+      dayPrizeEarlyLeaveLogMinutes +
+      (isProtectedApprovedLeave
+        ? dayLeaveCredit
+        : 0)
+  );
+
+const dayAttendanceEligibleMinutes =
+  Math.max(
+    0,
+    payrollDayScheduledMinutes -
+      dayProtectedAttendanceMinutes
+  );
+
+protectedAttendanceMinutes +=
+  dayProtectedAttendanceMinutes;
+
 const dayTimeAttendancePercent =
   payrollDayScheduledMinutes > 0
-    ? Math.min(
-        100,
-        (
-          dayLoggedMinutes /
-          payrollDayScheduledMinutes
-        ) * 100
-      )
+    ? dayAttendanceEligibleMinutes > 0
+      ? Math.min(
+          100,
+          (
+            dayTrackedWithinSchedule /
+            dayAttendanceEligibleMinutes
+          ) * 100
+        )
+      : 100
     : 0;
 
 const dayCriticalReasons = [];
@@ -13331,15 +13563,24 @@ approvedOvertimeHours:
           }
         );
 
-        const timeAttendancePercent =
+        const attendanceEligibleMinutes =
+  Math.max(
+    0,
+    scheduledMinutes -
+      protectedAttendanceMinutes
+  );
+
+const timeAttendancePercent =
   scheduledMinutes > 0
-    ? Math.min(
-        100,
-        (
-          loggedMinutes /
-          scheduledMinutes
-        ) * 100
-      )
+    ? attendanceEligibleMinutes > 0
+      ? Math.min(
+          100,
+          (
+            trackedWithinScheduleMinutes /
+            attendanceEligibleMinutes
+          ) * 100
+        )
+      : 100
     : 0;
 
         const approvedLeaveMinutes =
@@ -15165,10 +15406,14 @@ function requestIncludesCalendarDate(request, dateKey) {
     String(request.status || "").toLowerCase() === "approved";
 
   const isLeaveType = [
-    "PTO",
-    "VTO",
-    "Sick Leave",
-  ].includes(request.type);
+  "PTO",
+  "PTO - Planned",
+  "PTO - Unplanned",
+  "VTO",
+  "VTO - Planned",
+  "VTO - Unplanned",
+  "Sick Leave",
+].includes(request.type);
 
   return (
     isApproved &&
@@ -15178,11 +15423,21 @@ function requestIncludesCalendarDate(request, dateKey) {
 });
 
 const ptoAgents = approvedOnDate.filter(
-  (request) => request.type === "PTO"
+  (request) =>
+    [
+      "PTO",
+      "PTO - Planned",
+      "PTO - Unplanned",
+    ].includes(request.type)
 ).length;
 
 const vtoAgents = approvedOnDate.filter(
-  (request) => request.type === "VTO"
+  (request) =>
+    [
+      "VTO",
+      "VTO - Planned",
+      "VTO - Unplanned",
+    ].includes(request.type)
 ).length;
 
 const sickAgents = approvedOnDate.filter(
@@ -15196,8 +15451,29 @@ const sickAgents = approvedOnDate.filter(
         (filters.department === "All" || rule.department === filters.department);
     });
 
-    const projectedPto = ptoAgents + (newRequest.type === "PTO" ? 1 : 0);
-    const projectedVto = vtoAgents + (newRequest.type === "VTO" ? 1 : 0);
+    const projectedPto =
+  ptoAgents +
+  (
+    [
+      "PTO",
+      "PTO - Planned",
+      "PTO - Unplanned",
+    ].includes(newRequest.type)
+      ? 1
+      : 0
+  );
+
+const projectedVto =
+  vtoAgents +
+  (
+    [
+      "VTO",
+      "VTO - Planned",
+      "VTO - Unplanned",
+    ].includes(newRequest.type)
+      ? 1
+      : 0
+  );
     const projectedSick = sickAgents + (newRequest.type === "Sick Leave" ? 1 : 0);
     const projectedAvailable = scheduledAgents.length - projectedPto - projectedVto - projectedSick;
 
@@ -15228,8 +15504,23 @@ const sickAgents = approvedOnDate.filter(
       const employee = employees.find((e) => e.id === r.employee_id);
       return employee?.department === rule.department && employee?.lob === rule.lob && employee?.shift_start === rule.shift_start && employee?.shift_end === rule.shift_end && r.status === "Approved";
     });
-    const pto = matchingRequests.filter((r) => r.type === "PTO").length;
-    const vto = matchingRequests.filter((r) => r.type === "VTO").length;
+    const pto =
+  matchingRequests.filter((r) =>
+    [
+      "PTO",
+      "PTO - Planned",
+      "PTO - Unplanned",
+    ].includes(r.type)
+  ).length;
+
+const vto =
+  matchingRequests.filter((r) =>
+    [
+      "VTO",
+      "VTO - Planned",
+      "VTO - Unplanned",
+    ].includes(r.type)
+  ).length;
     const sick = matchingRequests.filter((r) => r.type === "Sick Leave").length;
     const scheduled = matchingEmployees.length;
     const out = pto + vto + sick;
@@ -15741,10 +16032,10 @@ if (supabase) {
           "",
 
         type:
-          request.type ||
-          request.request_type ||
-          request.Request_Type ||
-          "",
+  request.request_type ||
+  request.Request_Type ||
+  request.type ||
+  "",
 
         status:
           request.status ||
@@ -17558,8 +17849,29 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
     if (!rule) return null;
 
     const usage = getRuleUsage(rule);
-    const nextPto = usage.pto + (request.type === "PTO" ? 1 : 0);
-    const nextVto = usage.vto + (request.type === "VTO" ? 1 : 0);
+    const nextPto =
+  usage.pto +
+  (
+    [
+      "PTO",
+      "PTO - Planned",
+      "PTO - Unplanned",
+    ].includes(request.type)
+      ? 1
+      : 0
+  );
+
+const nextVto =
+  usage.vto +
+  (
+    [
+      "VTO",
+      "VTO - Planned",
+      "VTO - Unplanned",
+    ].includes(request.type)
+      ? 1
+      : 0
+  );
     const nextSick = usage.sick + (request.type === "Sick Leave" ? 1 : 0);
     const nextAvailable = usage.scheduled - (nextPto + nextVto + nextSick);
 
@@ -17616,7 +17928,13 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
     /*
       PTO uses entitlement, taken, and available days.
     */
-    if (latestRequest.type === "PTO") {
+    if (
+  [
+    "PTO",
+    "PTO - Planned",
+    "PTO - Unplanned",
+  ].includes(latestRequest.type)
+) {
   const currentAvailable = safeNumber(
     employee.pto_balance_days ??
     employee.available_days ??
@@ -17666,11 +17984,15 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
     );
 
     const hoursField =
-      latestRequest.type === "Sick Leave"
-        ? "sick_balance"
-        : latestRequest.type === "VTO"
-        ? "vto_balance"
-        : null;
+  latestRequest.type === "Sick Leave"
+    ? "sick_balance"
+    : [
+        "VTO",
+        "VTO - Planned",
+        "VTO - Unplanned",
+      ].includes(latestRequest.type)
+    ? "vto_balance"
+    : null;
 
     return {
       ...employee,
@@ -17700,7 +18022,13 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
 
     const balanceUpdatePayload = {};
 
-  if (latestRequest.type === "PTO") {
+  if (
+  [
+    "PTO",
+    "PTO - Planned",
+    "PTO - Unplanned",
+  ].includes(latestRequest.type)
+) {
   const nextTaken = Number(
     updatedEmployee.vacation_taken_days ??
     updatedEmployee.vacation_taken ??
@@ -17727,13 +18055,19 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
     );
   }
 
-  if (latestRequest.type === "VTO") {
-    balanceUpdatePayload.vto_balance_days = Number(
-      updatedEmployee.vto_balance_days ??
-      updatedEmployee.vto_balance ??
-      0
-    );
-  }
+  if (
+  [
+    "VTO",
+    "VTO - Planned",
+    "VTO - Unplanned",
+  ].includes(latestRequest.type)
+) {
+  balanceUpdatePayload.vto_balance_days = Number(
+    updatedEmployee.vto_balance_days ??
+    updatedEmployee.vto_balance ??
+    0
+  );
+}
 
   if (
   supabase &&
@@ -17961,62 +18295,22 @@ if (balance !== null && safeNumber(request.hours, 0) > safeNumber(balance, 0)) {
     return;
   }
 
-  if (request.type === "PTO") {
-    const currentTaken = safeNumber(
-      employee.vacation_taken_days ??
-        employee.vacation_taken ??
-        0
-    );
+  const isPtoRequest = [
+  "PTO",
+  "PTO - Planned",
+  "PTO - Unplanned",
+].includes(request.type);
 
-    const currentAvailable = safeNumber(
-      employee.pto_balance_days ??
-        employee.available_days ??
-        0
-    );
+const isVtoRequest = [
+  "VTO",
+  "VTO - Planned",
+  "VTO - Unplanned",
+].includes(request.type);
 
-    const restoredTaken = Math.max(
-      0,
-      currentTaken - requestDays
-    );
+const isSickRequest =
+  request.type === "Sick Leave";
 
-    const restoredAvailable =
-      currentAvailable + requestDays;
-
-    const balanceUpdatePayload = {
-  vacation_taken: restoredTaken,
-  available_days: restoredAvailable,
-};
-
-    const { error: balanceUpdateError } =
-      await supabase
-        .from("employee_balances")
-        .update(balanceUpdatePayload)
-        .eq(
-          "employee_id",
-          String(request.employee_id)
-        );
-
-    if (balanceUpdateError) {
-      throw new Error(
-        `Balance restoration failed: ${balanceUpdateError.message}`
-      );
-    }
-  }
-
-  const { error: requestUpdateError } =
-    await supabase
-      .from("requests")
-      .update({
-        status: "Cancelled",
-      })
-      .eq("app_request_id", requestAppId);
-
-  if (requestUpdateError) {
-    throw new Error(
-      `Request cancellation failed: ${requestUpdateError.message}`
-    );
-  }
-if (request.type === "PTO") {
+if (isPtoRequest) {
   const currentTaken = safeNumber(
     employee.vacation_taken_days ??
       employee.vacation_taken ??
@@ -18037,15 +18331,15 @@ if (request.type === "PTO") {
   const restoredAvailable =
     currentAvailable + requestDays;
 
-  const balanceUpdatePayload = {
-  vacation_taken: restoredTaken,
-  available_days: restoredAvailable,
-};
-
   const { error: balanceUpdateError } =
     await supabase
       .from("employee_balances")
-      .update(balanceUpdatePayload)
+      .update({
+        vacation_taken: restoredTaken,
+        available_days: restoredAvailable,
+        current_available_days: restoredAvailable,
+        pto_balance_days: restoredAvailable,
+      })
       .eq(
         "employee_id",
         String(request.employee_id)
@@ -18056,6 +18350,72 @@ if (request.type === "PTO") {
       `Balance restoration failed: ${balanceUpdateError.message}`
     );
   }
+}
+
+if (isVtoRequest) {
+  const restoredVto =
+    safeNumber(
+      employee.vto_balance_days ??
+        safeNumber(employee.vto_balance, 0) / 8,
+      0
+    ) + requestDays;
+
+  const { error: balanceUpdateError } =
+    await supabase
+      .from("employee_balances")
+      .update({
+        vto_balance_days: restoredVto,
+      })
+      .eq(
+        "employee_id",
+        String(request.employee_id)
+      );
+
+  if (balanceUpdateError) {
+    throw new Error(
+      `VTO balance restoration failed: ${balanceUpdateError.message}`
+    );
+  }
+}
+
+if (isSickRequest) {
+  const restoredSick =
+    safeNumber(
+      employee.sick_balance_days ??
+        safeNumber(employee.sick_balance, 0) / 8,
+      0
+    ) + requestDays;
+
+  const { error: balanceUpdateError } =
+    await supabase
+      .from("employee_balances")
+      .update({
+        sick_balance_days: restoredSick,
+      })
+      .eq(
+        "employee_id",
+        String(request.employee_id)
+      );
+
+  if (balanceUpdateError) {
+    throw new Error(
+      `Sick balance restoration failed: ${balanceUpdateError.message}`
+    );
+  }
+}
+
+const { error: requestUpdateError } =
+  await supabase
+    .from("requests")
+    .update({
+      status: "Cancelled",
+    })
+    .eq("app_request_id", requestAppId);
+
+if (requestUpdateError) {
+  throw new Error(
+    `Request cancellation failed: ${requestUpdateError.message}`
+  );
 }
   setRequests((current) =>
     current.map((item) =>
@@ -18076,33 +18436,65 @@ if (request.type === "PTO") {
 
       if (!sameEmployee) return item;
 
-      if (request.type !== "PTO") return item;
+      if (isPtoRequest) {
+  const restoredTaken = Math.max(
+    0,
+    safeNumber(
+      item.vacation_taken_days ??
+        item.vacation_taken ??
+        0
+    ) - requestDays
+  );
 
-      const restoredTaken = Math.max(
-        0,
-        safeNumber(
-          item.vacation_taken_days ??
-            item.vacation_taken ??
-            0
-        ) - requestDays
-      );
+  const restoredAvailable =
+    safeNumber(
+      item.pto_balance_days ??
+        item.available_days ??
+        0
+    ) + requestDays;
 
-      const restoredAvailable =
-        safeNumber(
-          item.pto_balance_days ??
-            item.available_days ??
-            0
-        ) + requestDays;
+  return {
+    ...item,
+    vacation_taken_days: restoredTaken,
+    vacation_taken: restoredTaken,
+    available_days: restoredAvailable,
+    current_available_days: restoredAvailable,
+    pto_balance_days: restoredAvailable,
+    pto_balance: restoredAvailable * 8,
+  };
+}
 
-      return {
-        ...item,
-        vacation_taken_days: restoredTaken,
-        vacation_taken: restoredTaken,
-        available_days: restoredAvailable,
-        current_available_days: restoredAvailable,
-        pto_balance_days: restoredAvailable,
-        pto_balance: restoredAvailable * 8,
-      };
+if (isVtoRequest) {
+  const restoredVto =
+    safeNumber(
+      item.vto_balance_days ??
+        safeNumber(item.vto_balance, 0) / 8,
+      0
+    ) + requestDays;
+
+  return {
+    ...item,
+    vto_balance_days: restoredVto,
+    vto_balance: restoredVto * 8,
+  };
+}
+
+if (isSickRequest) {
+  const restoredSick =
+    safeNumber(
+      item.sick_balance_days ??
+        safeNumber(item.sick_balance, 0) / 8,
+      0
+    ) + requestDays;
+
+  return {
+    ...item,
+    sick_balance_days: restoredSick,
+    sick_balance: restoredSick * 8,
+  };
+}
+
+return item;
     })
   );
 
@@ -20286,10 +20678,14 @@ const calendarDateApprovedRequests = calendarDetailDate
         String(request.status || "").toLowerCase() === "approved";
 
       const isLeaveType = [
-        "PTO",
-        "VTO",
-        "Sick Leave",
-      ].includes(request.type);
+  "PTO",
+  "PTO - Planned",
+  "PTO - Unplanned",
+  "VTO",
+  "VTO - Planned",
+  "VTO - Unplanned",
+  "Sick Leave",
+].includes(request.type);
 
       return (
         isApproved &&
@@ -21877,7 +22273,15 @@ rows={filteredRequests.map((r) => [
   r.projected_balance ?? "N/A",
   <Badge>{r.status}</Badge>,
   String(r.status || "").toLowerCase() === "approved" &&
-  ["PTO", "VTO", "Sick Leave"].includes(r.type) ? (
+  [
+  "PTO",
+  "PTO - Planned",
+  "PTO - Unplanned",
+  "VTO",
+  "VTO - Planned",
+  "VTO - Unplanned",
+  "Sick Leave",
+].includes(r.type)? (
     <button
       type="button"
       className="btn"
