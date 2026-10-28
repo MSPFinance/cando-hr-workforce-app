@@ -3433,24 +3433,32 @@ shift_end:
     targetScheduleDateObject
   ),
 
-    break_start:
-      formatMilitaryTime(
-        rawFirstBreakStart
+        break_start:
+      convertEasternScheduleToEmployeeLocal(
+        rawFirstBreakStart,
+        employee,
+        targetScheduleDateObject
       ),
 
     break_end:
-      formatMilitaryTime(
-        rawFirstBreakEnd
+      convertEasternScheduleToEmployeeLocal(
+        rawFirstBreakEnd,
+        employee,
+        targetScheduleDateObject
       ),
 
     second_break_start:
-      formatMilitaryTime(
-        rawSecondBreakStart
+      convertEasternScheduleToEmployeeLocal(
+        rawSecondBreakStart,
+        employee,
+        targetScheduleDateObject
       ),
 
     second_break_end:
-      formatMilitaryTime(
-        rawSecondBreakEnd
+      convertEasternScheduleToEmployeeLocal(
+        rawSecondBreakEnd,
+        employee,
+        targetScheduleDateObject
       ),
 
     off_days:
