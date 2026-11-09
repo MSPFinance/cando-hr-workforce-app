@@ -12007,6 +12007,7 @@ let scheduledMinutes = 0;
         let sickMinutes = 0;
         let vtoMinutes = 0;
         let paidLeaveMinutes = 0;
+        let prizeLeaveMinutes = 0;
         let unpaidLeaveMinutes = 0;
         let swapMinutes = 0;
         let holidayWorkedPremiumMinutes = 0;
@@ -12443,9 +12444,10 @@ const leaveIntervalsByType = {
 
 dayLogs.forEach((timeLog) => {
   const category = String(
-    timeLog.category ||
-      timeLog.status ||
-      ""
+    // Prize Leave status takes precedence over stale category values.
+    String(timeLog.status || "").trim().toLowerCase() === "prize - early leave"
+      ? timeLog.status
+      : timeLog.category || timeLog.status || ""
   )
     .trim()
     .toLowerCase();
@@ -12489,10 +12491,10 @@ const isApprovedOvertime =
 
 const isApprovedLeaveLog =
   isLeaveCategory &&
-  [
-    "approved",
-    "approve",
-  ].includes(approvalStatus);
+  ["approved", "approve"].includes(approvalStatus) &&
+  // Prize credit requires an affirmative payroll approval as well.
+  (category !== "prize - early leave" ||
+    payableStatus === "approved payable");
 
   const startValue =
     timeLog.category_start ||
@@ -12833,6 +12835,9 @@ const dayPrizeEarlyLeaveLogMinutes =
       "prize - early leave"
     ]
   );
+
+// Report paid prize release separately; do not classify it as PTO/VTO.
+prizeLeaveMinutes += dayPrizeEarlyLeaveLogMinutes;
 
 
 const dayPaidLeaveLogMinutes =
@@ -13525,6 +13530,9 @@ approvedOvertimeHours:
 
   leaveType,
 
+  prizeLeaveMinutes: dayPrizeEarlyLeaveLogMinutes,
+  prizeLeaveHours: dayPrizeEarlyLeaveLogMinutes / 60,
+
   leaveMinutes:
     dayLeaveCredit,
 
@@ -13714,6 +13722,10 @@ totalPayableHours,
           paidLeaveMinutes,
           paidLeaveHours:
             paidLeaveMinutes / 60,
+
+          prizeLeaveMinutes,
+          prizeLeaveHours:
+            prizeLeaveMinutes / 60,
 
           unpaidLeaveMinutes,
           unpaidLeaveHours:
@@ -19638,6 +19650,11 @@ function buildPayrollSummaryExportRows(
             2
           ),
 
+        prize_leave_hours:
+          summaryEmployee.prizeLeaveHours.toFixed(
+            2
+          ),
+
         unpaid_hours:
           summaryEmployee.unpaidLeaveHours.toFixed(
             2
@@ -19731,6 +19748,7 @@ function downloadPayrollSummaryCsv(
     "sick_hours",
     "vto_hours",
     "paid_leave_hours",
+    "prize_leave_hours",
     "unpaid_hours",
     "swap_hours",
     "missing_hours",
@@ -19878,6 +19896,7 @@ function exportPayrollEmployeeCsv(
     "approved_ot_hours",
     "leave_type",
     "leave_hours",
+    "prize_leave_hours",
     "payable_hours",
     "holiday",
     "holiday_rule",
@@ -19960,6 +19979,12 @@ function exportPayrollEmployeeCsv(
         leave_hours:
           safeNumber(
             day.leaveHours,
+            0
+          ).toFixed(2),
+
+        prize_leave_hours:
+          safeNumber(
+            day.prizeLeaveHours,
             0
           ).toFixed(2),
 
