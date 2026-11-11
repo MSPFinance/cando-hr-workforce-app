@@ -1019,7 +1019,10 @@ function minutesBetween(start, end) {
   const startMinutes = timeToMinutes(start);
   const endMinutes = timeToMinutes(end);
   if (startMinutes === null || endMinutes === null) return 0;
-  const diff = endMinutes - startMinutes;
+  // An approved shift ending after midnight belongs to its start date.
+  const diff = endMinutes < startMinutes
+    ? endMinutes + 24 * 60 - startMinutes
+    : endMinutes - startMinutes;
   return Number.isFinite(diff) ? Math.max(0, diff) : 0;
 }
 
@@ -11414,7 +11417,7 @@ useEffect(() => {
   "clock_in",
   addDaysToDateKey(
     payrollDateRange.endDate,
-    1
+    2
   )
 )
           .order("clock_in", {
@@ -11573,7 +11576,7 @@ const payrollTimeEntries = useMemo(() => {
     if (
       !entryDate ||
       entryDate < payrollDateRange.startDate ||
-      entryDate > payrollDateRange.endDate
+      entryDate > addDaysToDateKey(payrollDateRange.endDate, 1)
     ) {
       return false;
     }
@@ -11621,6 +11624,9 @@ const payrollTimeEntries = useMemo(() => {
       timeLogEmployee?.full_name ||
       "";
 
+    // Payroll filtering must include logs on the morning after
+    // the selected end date. A later shift-date check in the
+    // payroll index ensures these cannot leak into the next period.
     const entryMatchesSelectedEmployee =
       filters.employee === "All" ||
       selectedPayrollEmployeeIds.includes(
@@ -11675,48 +11681,83 @@ const payrollLogsByEmployeeDate =
   useMemo(() => {
     const index = new Map();
 
-    payrollTimeEntries.forEach(
-      (timeLog) => {
-        const employeeId =
-          String(
-            timeLog.employee_id || ""
-          ).trim();
+    payrollTimeEntries.forEach((timeLog) => {
+      const employeeId = String(timeLog.employee_id || "").trim();
+      const employee = employees.find((item) =>
+        [item.id, item.employee_id, item.supabase_employee_id]
+          .some((value) => String(value || "").trim() === employeeId)
+      );
 
-        const entryDate =
-          normalizeDateForFilter(
-            timeLog.date ||
-              timeLog.clock_in ||
-              timeLog.category_start ||
-              timeLog.created_at
-          );
+      const storedDate = normalizeDateForFilter(
+        timeLog.date ||
+          timeLog.clock_in ||
+          timeLog.category_start ||
+          timeLog.created_at
+      );
+      if (!employeeId || !storedDate) return;
 
+      let shiftDate = storedDate;
+      const rawStart = timeLog.category_start ||
+        timeLog.clock_in || timeLog.created_at;
+      const startTimestamp = rawStart ? new Date(rawStart) : null;
+      if (
+        employee &&
+        startTimestamp &&
+        !Number.isNaN(startTimestamp.getTime())
+      ) {
+        const localLogDate = getEmployeeDateKey(employee, startTimestamp);
+        const localStartMinutes = timeToMinutes(
+          getEmployeeTimeKey(employee, startTimestamp)
+        );
+        const previousShiftDate = addDaysToDateKey(localLogDate, -1);
+        const previousShiftDay = new Date(
+          `${previousShiftDate}T12:00:00Z`
+        );
+        const previousDayName = WEEK_DAYS[
+          previousShiftDay.getUTCDay()
+        ];
+        const previousSchedule = getStableSchedule(
+          employee,
+          scheduleVersions,
+          previousDayName,
+          employeeBreakRows,
+          scheduleExceptions,
+          previousShiftDate
+        );
+        const previousStart = timeToMinutes(previousSchedule.shift_start);
+        const previousEnd = timeToMinutes(previousSchedule.shift_end);
+
+        // Only a segment that actually begins inside the prior
+        // night shift is assigned to that shift's payroll date.
         if (
-          !employeeId ||
-          !entryDate
+          previousSchedule.is_scheduled !== false &&
+          previousStart !== null &&
+          previousEnd !== null &&
+          previousEnd < previousStart &&
+          localStartMinutes !== null &&
+          localStartMinutes < previousEnd
         ) {
-          return;
-        }
-
-        const key =
-          `${employeeId}::${entryDate}`;
-
-        const existing =
-          index.get(key);
-
-        if (existing) {
-          existing.push(timeLog);
+          shiftDate = previousShiftDate;
         } else {
-          index.set(
-            key,
-            [timeLog]
-          );
+          shiftDate = localLogDate;
         }
       }
-    );
+
+      // Exactly one payroll date owns each time-log segment.
+      // Never alter time_logs.date: it is an audit field.
+      const key = `${employeeId}::${shiftDate}`;
+      const existing = index.get(key) || [];
+      existing.push({ ...timeLog, payroll_shift_date: shiftDate });
+      index.set(key, existing);
+    });
 
     return index;
   }, [
     payrollTimeEntries,
+    employees,
+    scheduleVersions,
+    scheduleExceptions,
+    employeeBreakRows,
   ]);
 
 const payrollEmployeePeriodSummary = useMemo(() => {
@@ -12561,6 +12602,20 @@ const isApprovedLeaveLog =
     localStart,
     localEnd
   );
+
+  // A 00:00–03:00 status on Wednesday is part of
+  // Tuesday's 19:00–03:00 overnight schedule.
+  // Align the segment to the scheduled shift's minute axis.
+  if (
+    logRange &&
+    scheduleRange &&
+    scheduleRange.end > 24 * 60 &&
+    timeLog.payroll_shift_date === dateKey &&
+    logRange.start < scheduleRange.start
+  ) {
+    logRange.start += 24 * 60;
+    logRange.end += 24 * 60;
+  }
 
 if (!logRange) {
   return;
