@@ -8021,7 +8021,14 @@ const loadedSupabase = await loadSupabaseReferenceData(
   }, []);
 
   useEffect(() => {
-  if (!supabase || !employees.length) {
+  // Do not run cleanup against an incomplete schedule snapshot:
+  // otherwise a valid overnight shift could be mistaken for a day shift.
+  if (
+    !supabase ||
+    !employees.length ||
+    !scheduleVersions.length ||
+    !scheduleExceptions.length
+  ) {
     return undefined;
   }
 
@@ -8055,7 +8062,7 @@ const loadedSupabase = await loadSupabaseReferenceData(
   return () => {
     window.clearInterval(interval);
   };
-}, [employees]);
+}, [employees, scheduleVersions, scheduleExceptions, employeeBreakRows]);
  
 
   function showToast(title, message = "", type = "success") {
