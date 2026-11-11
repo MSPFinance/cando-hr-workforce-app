@@ -5304,9 +5304,9 @@ pto_balance_days: safeNumber(
   firstKnownValue(
     supabaseBalance || {},
     [
-      "available_days",
       "current_available_days",
       "pto_balance_days",
+      "available_days",
       "vacation_balance_days",
     ],
     base.pto_balance_days || 0
@@ -5318,9 +5318,9 @@ available_days: safeNumber(
   firstKnownValue(
     supabaseBalance || {},
     [
-      "available_days",
       "current_available_days",
       "pto_balance_days",
+      "available_days",
     ],
     base.available_days || 0
   ),
@@ -5356,9 +5356,9 @@ pto_balance:
     firstKnownValue(
       supabaseBalance || {},
       [
-        "available_days",
         "current_available_days",
-        "pto_balance_days",
+      "pto_balance_days",
+      "available_days",
       ],
       base.pto_balance_days || 0
     ),
@@ -8269,6 +8269,8 @@ const selectedEmployee =
       const requestEmployee =
   isAgentOnly
     ? currentUser
+    : tab === "agent"
+    ? selectedEmployee
     : employees.find(
         (employee) =>
           String(
