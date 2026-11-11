@@ -16968,23 +16968,111 @@ setTimeEntries((current) => [
       getEmployeeDateKey(employee);
 
     /*
-      A log is expired only after the employee has
-      moved into a later local calendar date.
+      Preserve approved overnight shifts across midnight.
 
-      Today's genuinely active status is untouched.
+      The normal 23:59 forgotten-shift cutoff is only for
+      schedules that end on the same local calendar day.
+      Resolve the approved effective-dated shift for the
+      start date, including logs that began after midnight
+      but still belong to the previous day's night shift.
+
+      Prefer the authoritative effective-dated versions to
+      a stale default roster entry. No hours are approved
+      for payment merely because a timer is auto-closed.
     */
-    if (
-      openLogDate >= employeeCurrentDate
-    ) {
+    let overnightScheduledEnd = null;
+    const priorLocalDate = new Date(
+      `${openLogDate}T12:00:00Z`
+    );
+    priorLocalDate.setUTCDate(
+      priorLocalDate.getUTCDate() - 1
+    );
+
+    const overnightCandidateDates = [
+      priorLocalDate.toISOString().slice(0, 10),
+      openLogDate,
+    ];
+
+    for (const shiftDate of overnightCandidateDates) {
+      const shiftDay = new Date(
+        `${shiftDate}T12:00:00Z`
+      );
+      const shiftDayName =
+        WEEK_DAYS[shiftDay.getUTCDay()];
+
+      const resolvedShift = getStableSchedule(
+        employee,
+        scheduleVersions,
+        shiftDayName,
+        employeeBreakRows,
+        scheduleExceptions,
+        shiftDate
+      );
+
+      const shiftStartMinutes = timeToMinutes(
+        resolvedShift?.shift_start
+      );
+      const shiftEndMinutes = timeToMinutes(
+        resolvedShift?.shift_end
+      );
+
+      if (
+        resolvedShift?.is_scheduled === false ||
+        shiftStartMinutes === null ||
+        shiftEndMinutes === null ||
+        shiftEndMinutes >= shiftStartMinutes
+      ) {
+        continue;
+      }
+
+      const scheduledStart = new Date(
+        localDateTimeToUtcIso(
+          shiftDate,
+          resolvedShift.shift_start,
+          employeeTimeZone
+        )
+      );
+      const followingDay = new Date(
+        `${shiftDate}T12:00:00Z`
+      );
+      followingDay.setUTCDate(
+        followingDay.getUTCDate() + 1
+      );
+      const scheduledEnd = new Date(
+        localDateTimeToUtcIso(
+          followingDay.toISOString().slice(0, 10),
+          resolvedShift.shift_end,
+          employeeTimeZone
+        )
+      );
+
+      if (
+        startTimestamp >= scheduledStart &&
+        startTimestamp < scheduledEnd
+      ) {
+        overnightScheduledEnd = scheduledEnd;
+        break;
+      }
+    }
+
+    if (overnightScheduledEnd) {
+      // Do not end an active overnight shift at midnight.
+      if (new Date() < overnightScheduledEnd) {
+        continue;
+      }
+    } else if (openLogDate >= employeeCurrentDate) {
+      // Preserve the existing same-day rule.
       continue;
     }
 
     const automaticClockOut =
-      localDateTimeToUtcIso(
-        openLogDate,
-        DAILY_TIMER_STOP_TIME,
-        employeeTimeZone
-      );
+      overnightScheduledEnd
+        ? overnightScheduledEnd.toISOString()
+        : localDateTimeToUtcIso(
+            openLogDate,
+            DAILY_TIMER_STOP_TIME,
+            employeeTimeZone
+          );
 
     const automaticClockOutDate =
       new Date(automaticClockOut);
@@ -17004,7 +17092,9 @@ setTimeEntries((current) => [
       String(openLog.notes || "").trim();
 
     const automaticNote =
-      `System automatically closed forgotten shift at ${DAILY_TIMER_STOP_TIME} employee local time.`;
+      overnightScheduledEnd
+        ? `System closed an unended overnight shift at its scheduled end; manager verification required. No automatic payroll approval.`
+        : `System automatically closed forgotten shift at ${DAILY_TIMER_STOP_TIME} employee local time.`;
 
     const updatePayload = {
       clock_out: automaticClockOut,
@@ -17072,7 +17162,9 @@ setTimeEntries((current) => [
         "Automatic Shift Closure",
 
       time:
-        DAILY_TIMER_STOP_TIME,
+        overnightScheduledEnd
+          ? getEmployeeTimeKey(employee, overnightScheduledEnd)
+          : DAILY_TIMER_STOP_TIME,
 
       status:
         openLog.status ||
