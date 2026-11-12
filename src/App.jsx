@@ -23,6 +23,11 @@ import {
   isSecondaryRequired,
   shouldShowDispositionNote,
 } from "./lib/dispositions";
+import {
+  calculateExcusedAttendance,
+  hasApprovedFullDayAttendanceRequest,
+  isApprovedExcusedAttendanceLog,
+} from "./lib/attendancePolicy";
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -357,10 +362,8 @@ const REQUEST_TYPE_OPTIONS = [
 ];
 
 const APPROVED_ATTENDANCE_ABSENCE_TYPES = [
-  // Historical protected categories
-  "PTO",
-  "VTO",
-
+  // Explicit approved Planned leave is excused; Unplanned and
+  // ambiguous legacy PTO/VTO do not receive automatic exemption.
   // New protected planned categories
   "PTO - Planned",
   "VTO - Planned",
@@ -12474,6 +12477,8 @@ if (dayWasManagerReviewed) {
 
             const attendanceIntervals = [];
 const approvedOvertimeIntervals = [];
+// Attendance exemption is separate from payroll leave/payable approval.
+const approvedAttendanceExcusalIntervals = [];
 
 const leaveIntervalsByType = {
   pto: [],
@@ -12493,14 +12498,16 @@ const leaveIntervalsByType = {
 };
 
 dayLogs.forEach((timeLog) => {
-  const category = String(
-    // Prize Leave status takes precedence over stale category values.
-    String(timeLog.status || "").trim().toLowerCase() === "prize - early leave"
-      ? timeLog.status
-      : timeLog.category || timeLog.status || ""
-  )
-    .trim()
-    .toLowerCase();
+  const statusCategory = String(timeLog.status || "").trim().toLowerCase();
+  // Approved leave status overrides stale category values so absence
+  // logs cannot be mistaken for worked/presence intervals.
+  const category = [
+    "prize - early leave", "sick leave", "sick leave - early leave",
+    "pto - planned", "pto - unplanned",
+    "vto - planned", "vto - unplanned",
+  ].includes(statusCategory)
+    ? statusCategory
+    : String(timeLog.category || timeLog.status || "").trim().toLowerCase();
 
   /*
     Keep leave time logs separate from actual
@@ -12633,6 +12640,9 @@ if (isApprovedOvertime) {
     Only approved leave logs may reconcile
     scheduled Payroll time.
   */
+  if (isApprovedExcusedAttendanceLog(category, approvalStatus)) {
+    approvedAttendanceExcusalIntervals.push(logRange);
+  }
   if (isApprovedLeaveLog) {
     leaveIntervalsByType[
       category
@@ -13196,49 +13206,32 @@ if (
   Preserve this individual payroll day so it can
   be displayed in the Payroll Detail modal.
 */
-const isProtectedApprovedLeave =
-  [
-    "pto",
-    "vto",
-    "pto - planned",
-    "vto - planned",
-  ].includes(approvedLeaveType);
-
+/*
+  Attendance policy (separate from payroll):
+  - Approved Planned PTO/VTO and Sick Leave: excused.
+  - Approved Prize Leave: excused regardless of payable status.
+  - Unplanned or pending/denied leave: not excused.
+  - Only approved leave time outside actual presence is excluded
+    from the attendance denominator (no double credit).
+*/
+const fullDayAttendanceExcused = hasApprovedFullDayAttendanceRequest(
+  requests, employeeIds, dateKey, payrollDayScheduledMinutes, requestCoversDate
+);
+const dayAttendanceCoverage = calculateExcusedAttendance({
+  scheduleRange: payrollDayScheduledMinutes > 0 ? scheduleRange : null,
+  attendanceIntervals: mergedAttendance,
+  excusedIntervals: approvedAttendanceExcusalIntervals,
+  fullDayExcused: fullDayAttendanceExcused,
+});
 const dayProtectedAttendanceMinutes =
-  Math.min(
-    payrollDayScheduledMinutes,
-    dayPtoLogMinutes +
-      dayVtoLogMinutes +
-      dayPtoPlannedLogMinutes +
-      dayVtoPlannedLogMinutes +
-      dayPrizeEarlyLeaveLogMinutes +
-      (isProtectedApprovedLeave
-        ? dayLeaveCredit
-        : 0)
-  );
-
+  dayAttendanceCoverage.excusedUncoveredMinutes;
 const dayAttendanceEligibleMinutes =
-  Math.max(
-    0,
-    payrollDayScheduledMinutes -
-      dayProtectedAttendanceMinutes
-  );
+  dayAttendanceCoverage.eligibleMinutes;
 
-protectedAttendanceMinutes +=
-  dayProtectedAttendanceMinutes;
+protectedAttendanceMinutes += dayProtectedAttendanceMinutes;
 
 const dayTimeAttendancePercent =
-  payrollDayScheduledMinutes > 0
-    ? dayAttendanceEligibleMinutes > 0
-      ? Math.min(
-          100,
-          (
-            dayTrackedWithinSchedule /
-            dayAttendanceEligibleMinutes
-          ) * 100
-        )
-      : 100
-    : 0;
+  dayAttendanceCoverage.attendancePercent;
 
 const dayCriticalReasons = [];
 const dayReviewReasons = [];
