@@ -64,3 +64,22 @@ test("request classification distinguishes approved planned from unplanned and p
   assert.equal(match([mk("Sick Leave","Pending")]),false);
   assert.equal(match([mk("Sick Leave","Approved",2)]),false);
 });
+
+test("user schedule regression: 570 scheduled minutes, 60 approved sick, 510 worked", () => {
+  const a = calculateExcusedAttendance({
+    scheduleRange:{start:0,end:570},
+    attendanceIntervals:[{start:0,end:510}],
+    excusedIntervals:[{start:510,end:570}],
+  });
+  assert.equal(a.attendancePercent,100);
+  assert.equal(a.attendedMinutes,510);
+  assert.equal(a.eligibleMinutes,510);
+});
+test("user schedule regression: denied leave never excuses missed time", () => {
+  const a = calculateExcusedAttendance({
+    scheduleRange:{start:0,end:570},
+    attendanceIntervals:[{start:0,end:510}],
+    excusedIntervals:[],
+  });
+  assert.equal(Math.round(a.attendancePercent*100)/100,89.47);
+});
