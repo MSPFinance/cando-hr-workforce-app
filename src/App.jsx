@@ -808,13 +808,11 @@ const ROLE_ACCESS = {
   Executive: ["dashboard"],
 };
 
-function canAccess(role, area) {
-  const normalizedRole =
-    normalizeAccessRole(role);
-
-  return (
-    ROLE_ACCESS[normalizedRole] || []
-  ).includes(area);
+function canAccess(role, area, employee = null) {
+  const normalizedRole = normalizeAccessRole(role);
+  // Per-user privilege. Do not elevate the user's general role to Payroll/Admin.
+  if (area === "payroll" && employee?.payroll_tab_access === true) return true;
+  return (ROLE_ACCESS[normalizedRole] || []).includes(area);
 }
 
 function canEditSchedules(role) {
@@ -5109,6 +5107,7 @@ function mapSupabaseEmployee(row = {}, balance = {}, schedule = {}, base = {}) {
     sub_department: firstKnownValue(row, ["sub_department", "subDepartment", "queue", "team"], ""),
     role,
     access_level: accessLevel,
+    payroll_tab_access: row.payroll_tab_access === true,
     supervisor: firstKnownValue(row, ["supervisor", "team_leader", "team_lead", "tl"], ""),
     manager: firstKnownValue(row, ["manager", "operations_manager"], ""),
     hire_date: formatDateOnly(firstKnownValue(row, ["hire_date", "start_date", "date_of_hire"], "")),
@@ -5388,6 +5387,7 @@ pto_balance:
   access_level:
     supabaseProfile.access_level ||
     base.access_level,
+  payroll_tab_access: supabaseProfile.payroll_tab_access === true,
 
   /*
     Supabase is the authentication source of truth.
@@ -18696,7 +18696,29 @@ return item;
         locked: false,
       };
 
-      if (supabase) await supabase.from("time_logs").update({ approval_status: approved }).eq("app_log_id", id);
+      if (!supabase) throw new Error("Supabase is required to save time-log approvals.");
+      const approvalUpdate = {
+        approved,
+        approval_status: approved,
+        payable_status: updatedTimeEntry.payable_status,
+        approved_by: currentUser.email,
+        approved_at: approved === "Approved" ? new Date().toISOString() : null,
+        edited_by: currentUser.email,
+        edited_at: new Date().toISOString(),
+      };
+      let query = supabase.from("time_logs").update(approvalUpdate);
+      if (latestTimeEntry.supabase_id) {
+        query = query.eq("id", latestTimeEntry.supabase_id);
+      } else if (latestTimeEntry.app_log_id) {
+        query = query.eq("app_log_id", latestTimeEntry.app_log_id);
+      } else {
+        query = query.eq("id", latestTimeEntry.id);
+      }
+      const { data: persistedApproval, error: approvalError } = await query.select("id,approval_status,approved,payable_status");
+      if (approvalError) throw approvalError;
+      if (persistedApproval?.length !== 1 || persistedApproval[0].approval_status !== approved) {
+        throw new Error("Time-log approval was not confirmed in Supabase. No success was recorded.");
+      }
 
       await googleUpdateRow("timeLogs", "Log_ID", id, mapTimeToSheet(updatedTimeEntry));
 
@@ -18819,6 +18841,7 @@ async function bulkApproveSelectedTimeLogs() {
         approval_status: "Approved",
         payable_status: "Approved Payable",
         approved_by: currentUser.email,
+        approved_at: approvedAt,
         edited_by: currentUser.email,
         edited_at: approvedAt,
         notes: "Bulk approved by manager",
@@ -18871,9 +18894,11 @@ async function bulkApproveSelectedTimeLogs() {
         } = await supabase
           .from("time_logs")
           .update({
+            approved: "Approved",
             approval_status: "Approved",
             payable_status: "Approved Payable",
             approved_by: currentUser.email,
+            approved_at: approvedAt,
             edited_by: currentUser.email,
             edited_at: approvedAt,
           })
@@ -18896,9 +18921,11 @@ async function bulkApproveSelectedTimeLogs() {
         } = await supabase
           .from("time_logs")
           .update({
+            approved: "Approved",
             approval_status: "Approved",
             payable_status: "Approved Payable",
             approved_by: currentUser.email,
+            approved_at: approvedAt,
             edited_by: currentUser.email,
             edited_at: approvedAt,
           })
@@ -19250,6 +19277,10 @@ status:
           timeEntry.approved ||
           timeEntry.approval_status ||
           "Pending",
+        approved:
+          timeEntry.approved ||
+          timeEntry.approval_status ||
+          "Pending",
 
         payable_status:
           timeEntry.payable_status ||
@@ -19264,8 +19295,11 @@ status:
         edited_at:
           new Date().toISOString(),
 
-        approved_by:
-          currentUser.email,
+        // Keep the existing approver when correcting time without changing approval.
+        approved_by: timeEntry.approved === "Approved" && timeEntry.approved_by
+          ? timeEntry.approved_by : currentUser.email,
+        approved_at: (timeEntry.approved || timeEntry.approval_status) === "Approved"
+          ? (timeEntry.approved_at || new Date().toISOString()) : null,
       };
 
       let savedRow = null;
@@ -21005,7 +21039,7 @@ if (startupLoading) {
           ? "approvals"
           : key;
 
-    return canAccess(userRole, accessArea);
+    return canAccess(userRole, accessArea, currentUser);
   })
   .map(([key, Icon]) => (
     <button
