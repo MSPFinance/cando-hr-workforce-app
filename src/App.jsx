@@ -3062,36 +3062,8 @@ function getStableSchedule(
     - selected date falls inside the exception
     - exception is enabled
   */
-  /*
-    Dennis Aguilar's recurring Tue/Wed exception was approved effective
-    2026-11-11 in Costa Rica local time (07:30–17:00).
-    The existing production Supabase records can still contain 07:30–17:00
-    *Eastern*, which shifts the portal an hour early. Apply the verified
-    Eastern equivalent (08:30–18:00 after US DST) as a narrowly scoped
-    schedule-resolution safeguard until the server-side importer reconciles.
-    Do not alter logs, approved leave, balances, or historical dates.
-  */
-  const dennisApprovedWeekday =
-    employeeIdentifierCandidates.includes("93003952") &&
-    (normalizedDay === "Tuesday" || normalizedDay === "Wednesday") &&
-    targetScheduleDate >= "2026-11-11";
-  const dennisApprovedException = dennisApprovedWeekday
-    ? {
-        exception_id: `REQ-93003952-${normalizedDay.slice(0, 3).toUpperCase()}-20261111`,
-        employee_id: "93003952",
-        weekday: normalizedDay,
-        start_date: "2026-11-11",
-        shift_start_est: "08:30",
-        shift_end_est: "18:00",
-        enabled: true,
-        priority: 100,
-        source: "Approved CR schedule correction 2026-11-13",
-      }
-    : null;
-
   const matchingScheduleException =
-    dennisApprovedException ||
-    (Array.isArray(scheduleExceptions)
+    Array.isArray(scheduleExceptions)
       ? scheduleExceptions.find(
           (exceptionRow) => {
             const exceptionEmployeeId =
@@ -3146,7 +3118,7 @@ function getStableSchedule(
             );
           }
         )
-      : null);
+      : null;
 
   /*
     Supabase employee_breaks remains the
@@ -10148,62 +10120,31 @@ const agentShiftSummaryForDisplay =
     "info"
   );
 }
-/*
-  Until the authorized server-side schedule-exception importer reconciles
-  Supabase, these specifically approved exceptions are read from the
-  authoritative workforce Sheet for display/attendance calculations.
-  This never writes from the browser to schedule_exceptions and does not
-  change schedule history, approvals, payroll logs or employee credentials.
-*/
-const APPROVED_SHEET_EXCEPTION_IDS = new Set([
-  "REQ-93003952-MON-20261111",
-  "EXC-99004317-SUN",
-  "EXC-99004264-SAT-20261114",
-  "REQ-93003952-TUE-20261111",
-  "REQ-93003952-WED-20261111",
-  "REQ-99004331-SUN-20261111",
-]);
-
 async function loadScheduleExceptions() {
-  const [supabaseResult, sheetResult] = await Promise.all([
-    supabase
-      ? supabase.from("schedule_exceptions").select("*").eq("enabled", true)
-      : Promise.resolve({ data: [], error: null }),
-    fetchScheduleExceptionRows().catch((error) => {
-      console.warn("Approved schedule exception source unavailable:", error?.message || error);
-      return [];
-    }),
-  ]);
-
-  if (supabaseResult.error) {
-    console.warn("Schedule exceptions load failed:", supabaseResult.error.message);
+  if (!supabase) {
+    setScheduleExceptions([]);
+    return [];
   }
 
-  const byId = new Map(
-    (Array.isArray(supabaseResult.data) ? supabaseResult.data : [])
-      .filter((row) => row && row.enabled !== false)
-      .map((row) => [String(row.exception_id || "").trim(), row])
-  );
+  const { data, error } = await supabase
+    .from("schedule_exceptions")
+    .select("*")
+    .eq("enabled", true)
+    .order("priority", { ascending: false });
 
-  (Array.isArray(sheetResult) ? sheetResult : [])
-    .filter((row) =>
-      row.enabled === true &&
-      APPROVED_SHEET_EXCEPTION_IDS.has(String(row.exception_id || "").trim())
-    )
-    .forEach((row) => {
-      byId.set(String(row.exception_id).trim(), row);
-    });
+  if (error) {
+    console.warn("Schedule exceptions load failed:", error.message);
+    return [];
+  }
 
-  const loadedExceptions = [...byId.values()].sort((a, b) => {
-    const priority = Number(b.priority || 0) - Number(a.priority || 0);
-    if (priority) return priority;
-    const effective = String(b.start_date || "").localeCompare(String(a.start_date || ""));
-    if (effective) return effective;
+  const loadedExceptions = (Array.isArray(data) ? data : []).sort((a, b) => {
+    const priorityDiff = Number(b.priority || 0) - Number(a.priority || 0);
+    if (priorityDiff) return priorityDiff;
+    const startDiff = String(b.start_date || "").localeCompare(String(a.start_date || ""));
+    if (startDiff) return startDiff;
     return String(a.exception_id || "").localeCompare(String(b.exception_id || ""));
   });
-
   setScheduleExceptions(loadedExceptions);
-  console.log("Schedule exceptions loaded:", loadedExceptions.length);
   return loadedExceptions;
 }
 
