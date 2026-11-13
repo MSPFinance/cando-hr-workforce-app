@@ -10082,44 +10082,61 @@ const agentShiftSummaryForDisplay =
     "info"
   );
 }
+/*
+  Until the authorized server-side schedule-exception importer reconciles
+  Supabase, these specifically approved exceptions are read from the
+  authoritative workforce Sheet for display/attendance calculations.
+  This never writes from the browser to schedule_exceptions and does not
+  change schedule history, approvals, payroll logs or employee credentials.
+*/
+const APPROVED_SHEET_EXCEPTION_IDS = new Set([
+  "EXC-99004317-SUN",
+  "EXC-99004264-SAT-20261114",
+  "REQ-93003952-TUE-20261111",
+  "REQ-93003952-WED-20261111",
+  "REQ-99004331-SUN-20261111",
+]);
+
 async function loadScheduleExceptions() {
-  if (!supabase) {
-    return [];
+  const [supabaseResult, sheetResult] = await Promise.all([
+    supabase
+      ? supabase.from("schedule_exceptions").select("*").eq("enabled", true)
+      : Promise.resolve({ data: [], error: null }),
+    fetchScheduleExceptionRows().catch((error) => {
+      console.warn("Approved schedule exception source unavailable:", error?.message || error);
+      return [];
+    }),
+  ]);
+
+  if (supabaseResult.error) {
+    console.warn("Schedule exceptions load failed:", supabaseResult.error.message);
   }
 
-  const {
-    data,
-    error,
-  } = await supabase
-    .from("schedule_exceptions")
-    .select("*")
-    .eq("enabled", true)
-    .order("priority", {
-      ascending: false,
+  const byId = new Map(
+    (Array.isArray(supabaseResult.data) ? supabaseResult.data : [])
+      .filter((row) => row && row.enabled !== false)
+      .map((row) => [String(row.exception_id || "").trim(), row])
+  );
+
+  (Array.isArray(sheetResult) ? sheetResult : [])
+    .filter((row) =>
+      row.enabled === true &&
+      APPROVED_SHEET_EXCEPTION_IDS.has(String(row.exception_id || "").trim())
+    )
+    .forEach((row) => {
+      byId.set(String(row.exception_id).trim(), row);
     });
 
-  if (error) {
-    console.warn(
-      "Schedule exceptions load failed:",
-      error.message
-    );
+  const loadedExceptions = [...byId.values()].sort((a, b) => {
+    const priority = Number(b.priority || 0) - Number(a.priority || 0);
+    if (priority) return priority;
+    const effective = String(b.start_date || "").localeCompare(String(a.start_date || ""));
+    if (effective) return effective;
+    return String(a.exception_id || "").localeCompare(String(b.exception_id || ""));
+  });
 
-    return [];
-  }
-
-  const loadedExceptions =
-    Array.isArray(data) ? data : [];
-
-  setScheduleExceptions(
-    loadedExceptions
-  );
-
-  console.log(
-    "Schedule exceptions loaded:",
-    loadedExceptions.length,
-    loadedExceptions
-  );
-
+  setScheduleExceptions(loadedExceptions);
+  console.log("Schedule exceptions loaded:", loadedExceptions.length);
   return loadedExceptions;
 }
 
