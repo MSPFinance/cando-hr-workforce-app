@@ -9211,6 +9211,20 @@ return (
     return getAppDateKey(todayNoon);
   };
 
+  /*
+    The Schedule Management grid represents the upcoming recurring assignment,
+    not the past days in the Agent Portal's historical current-week overview.
+    For dates earlier this week, evaluate the next occurrence instead.
+  */
+  const getNextRecurringScheduleDate = (employee, day) => {
+    const today = getEmployeeDateKey(employee);
+    const weekDate = getNextRecurringScheduleDate(employee, day);
+    if (weekDate >= today) return weekDate;
+    const next = new Date(`${weekDate}T12:00:00Z`);
+    next.setUTCDate(next.getUTCDate() + 7);
+    return next.toISOString().slice(0, 10);
+  };
+
   const getEffectiveOffDaysForEmployee = (employee) => {
   if (!employee) return "";
 
@@ -9219,14 +9233,6 @@ return (
     retrospectively including an already-past weekday before an approved
     midweek effective date. The historical day row itself retains its date.
   */
-  const effectiveRecurringDate = (day) => {
-    const today = getEmployeeDateKey(employee);
-    const weekDate = getCurrentWeekdayDate(employee, day);
-    if (weekDate >= today) return weekDate;
-    const next = new Date(`${weekDate}T12:00:00Z`);
-    next.setUTCDate(next.getUTCDate() + 7);
-    return next.toISOString().slice(0, 10);
-  };
 
   return WEEK_DAYS
     .filter((day) => {
@@ -9237,7 +9243,7 @@ return (
           day,
           employeeBreakRows,
           scheduleExceptions,
-          effectiveRecurringDate(day)
+          getNextRecurringScheduleDate(employee, day)
         );
 
       return (
