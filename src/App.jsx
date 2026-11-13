@@ -9214,6 +9214,20 @@ return (
   const getEffectiveOffDaysForEmployee = (employee) => {
   if (!employee) return "";
 
+  /*
+    Off-days field describes the current recurring assignment, rather than
+    retrospectively including an already-past weekday before an approved
+    midweek effective date. The historical day row itself retains its date.
+  */
+  const effectiveRecurringDate = (day) => {
+    const today = getEmployeeDateKey(employee);
+    const weekDate = getCurrentWeekdayDate(employee, day);
+    if (weekDate >= today) return weekDate;
+    const next = new Date(`${weekDate}T12:00:00Z`);
+    next.setUTCDate(next.getUTCDate() + 7);
+    return next.toISOString().slice(0, 10);
+  };
+
   return WEEK_DAYS
     .filter((day) => {
       const effectiveSchedule =
@@ -9223,7 +9237,7 @@ return (
           day,
           employeeBreakRows,
           scheduleExceptions,
-          getCurrentWeekdayDate(employee, day)
+          effectiveRecurringDate(day)
         );
 
       return (
@@ -10136,6 +10150,7 @@ const agentShiftSummaryForDisplay =
   change schedule history, approvals, payroll logs or employee credentials.
 */
 const APPROVED_SHEET_EXCEPTION_IDS = new Set([
+  "REQ-93003952-MON-20261111",
   "EXC-99004317-SUN",
   "EXC-99004264-SAT-20261114",
   "REQ-93003952-TUE-20261111",
