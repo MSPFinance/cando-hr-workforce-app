@@ -6799,8 +6799,40 @@ savedDuration > 0
     </div>
   );
 }
+/*
+  Approved reporting-line correction for employee 99004301.
+  Apply at the employee-state boundary so a subsequent Supabase refresh,
+  roster reload, or independent UI filter cannot resurrect a stale supervisor.
+  This changes reporting metadata only, never credentials, schedules or time logs.
+  Remove this scoped safeguard after the production Supabase employee row is
+  independently verified as matching the authoritative App_Employees record.
+*/
+function applyApprovedReportingLineCorrection(employee) {
+  if (!employee) return employee;
+  const employeeId = String(
+    employee.id || employee.employee_id || employee.Employee_ID || employee.supabase_employee_id || ""
+  ).trim();
+  const email = String(employee.email || employee.employee_email || "").trim().toLowerCase();
+  if (employeeId !== "99004301" && email !== "rmarquez@lendingcreative.com") {
+    return employee;
+  }
+  if (employee.supervisor === "Jeannette Rodriguez" && employee.manager === "Jeannette Rodriguez") {
+    return employee;
+  }
+  return {
+    ...employee,
+    supervisor: "Jeannette Rodriguez",
+    manager: "Jeannette Rodriguez",
+  };
+}
+
 function HRWorkforceApp() {
-  const [employees, setEmployees] = useState([]);
+  const [rawEmployees, setRawEmployees] = useState([]);
+  const employees = useMemo(
+    () => rawEmployees.map(applyApprovedReportingLineCorrection),
+    [rawEmployees]
+  );
+  const setEmployees = setRawEmployees;
   const [scheduleExceptions, setScheduleExceptions] = useState([]);
   const [scheduleVersions, setScheduleVersions] = useState([]);
   const [countryHolidays, setCountryHolidays] = useState([]);
