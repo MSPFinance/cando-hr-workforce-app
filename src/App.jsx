@@ -1706,6 +1706,58 @@ payload.schedule_days = dayValues;
   return { employeeId, fullName, sourceEmail, payload };
 }
 
+/*
+  Reporting-line corrections are keyed by immutable employee ID rather than
+  display name. App_Schedules intentionally contains schedule-only fields, so
+  its absence of supervisor/manager columns must not preserve a stale assignment.
+  Scope this remediation to the explicitly approved employee; a broader
+  reporting-line synchronization requires separate workforce validation.
+*/
+const APPROVED_REPORTING_LINE_CORRECTIONS = new Set(["99004301"]);
+
+async function reconcileApprovedReportingLines(workforceRows) {
+  if (!Array.isArray(workforceRows) || !workforceRows.length) return workforceRows;
+
+  const url = `https://docs.google.com/spreadsheets/d/${WORKFORCE_SYNC_SHEET_ID}/gviz/tq?tqx=out:csv&sheet=App_Employees`;
+
+  try {
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const csv = await response.text();
+    if (!csv || csv.toLowerCase().includes("<html")) {
+      throw new Error("App_Employees returned an invalid CSV response");
+    }
+
+    const approvedById = new Map(
+      parseCsvText(csv)
+        .map(mapWorkforceSyncRow)
+        .filter((row) =>
+          APPROVED_REPORTING_LINE_CORRECTIONS.has(String(row?.employeeId || "").trim())
+        )
+        .map((row) => [String(row.employeeId).trim(), row])
+    );
+
+    return workforceRows.map((row) => {
+      const employeeId = String(row?.employeeId || "").trim();
+      const source = approvedById.get(employeeId);
+      if (!source) return row;
+
+      const supervisor = String(source.payload?.supervisor || "").trim();
+      const manager = String(source.payload?.manager || "").trim();
+      if (!supervisor || !manager) return row;
+
+      return {
+        ...row,
+        payload: { ...row.payload, supervisor, manager },
+      };
+    });
+  } catch (error) {
+    console.warn("Approved reporting-line reconciliation skipped:", error?.message || error);
+    return workforceRows;
+  }
+}
+
 async function fetchWorkforceSheetRows() {
   if (!WORKFORCE_SYNC_SHEET_ID) return [];
 
@@ -1721,7 +1773,7 @@ async function fetchWorkforceSheetRows() {
 
       const rows = parseCsvText(text);
       const mappedRows = rows.map(mapWorkforceSyncRow).filter(Boolean);
-      if (mappedRows.length) return mappedRows;
+      if (mappedRows.length) return await reconcileApprovedReportingLines(mappedRows);
     } catch (error) {
       console.warn(`Workforce sync sheet ${sheetName} failed:`, error?.message || error);
     }
