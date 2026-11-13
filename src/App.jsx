@@ -9190,7 +9190,7 @@ return (
   */
   const getNextRecurringScheduleDate = (employee, day) => {
     const today = getEmployeeDateKey(employee);
-    const weekDate = getNextRecurringScheduleDate(employee, day);
+    const weekDate = getCurrentWeekdayDate(employee, day);
     if (weekDate >= today) return weekDate;
     const next = new Date(`${weekDate}T12:00:00Z`);
     next.setUTCDate(next.getUTCDate() + 7);
@@ -9251,7 +9251,7 @@ const scheduleRows =
             day,
             employeeBreakRows,
             scheduleExceptions,
-            getCurrentWeekdayDate(employee, day)
+            getNextRecurringScheduleDate(employee, day)
           ),
         }));
       })()
