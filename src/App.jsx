@@ -3062,8 +3062,36 @@ function getStableSchedule(
     - selected date falls inside the exception
     - exception is enabled
   */
+  /*
+    Dennis Aguilar's recurring Tue/Wed exception was approved effective
+    2026-11-11 in Costa Rica local time (07:30–17:00).
+    The existing production Supabase records can still contain 07:30–17:00
+    *Eastern*, which shifts the portal an hour early. Apply the verified
+    Eastern equivalent (08:30–18:00 after US DST) as a narrowly scoped
+    schedule-resolution safeguard until the server-side importer reconciles.
+    Do not alter logs, approved leave, balances, or historical dates.
+  */
+  const dennisApprovedWeekday =
+    employeeIdentifierCandidates.includes("93003952") &&
+    (normalizedDay === "Tuesday" || normalizedDay === "Wednesday") &&
+    targetScheduleDate >= "2026-11-11";
+  const dennisApprovedException = dennisApprovedWeekday
+    ? {
+        exception_id: `REQ-93003952-${normalizedDay.slice(0, 3).toUpperCase()}-20261111`,
+        employee_id: "93003952",
+        weekday: normalizedDay,
+        start_date: "2026-11-11",
+        shift_start_est: "08:30",
+        shift_end_est: "18:00",
+        enabled: true,
+        priority: 100,
+        source: "Approved CR schedule correction 2026-11-13",
+      }
+    : null;
+
   const matchingScheduleException =
-    Array.isArray(scheduleExceptions)
+    dennisApprovedException ||
+    (Array.isArray(scheduleExceptions)
       ? scheduleExceptions.find(
           (exceptionRow) => {
             const exceptionEmployeeId =
@@ -3118,7 +3146,7 @@ function getStableSchedule(
             );
           }
         )
-      : null;
+      : null);
 
   /*
     Supabase employee_breaks remains the
@@ -9167,6 +9195,22 @@ return (
 );
   });
 
+  /*
+    Each weekday schedule row represents its own date in the current local
+    week. Never evaluate all seven rows using today's date; that misapplies
+    future-effective exceptions to earlier days and gives inconsistent views.
+  */
+  const getCurrentWeekdayDate = (employee, dayName) => {
+    const localToday = getEmployeeDateKey(employee);
+    const todayNoon = new Date(`${localToday}T12:00:00Z`);
+    const todayIndex = todayNoon.getUTCDay();
+    const dayIndex = WEEK_DAYS.indexOf(dayName);
+    if (dayIndex < 0) return localToday;
+    const offset = dayIndex - todayIndex;
+    todayNoon.setUTCDate(todayNoon.getUTCDate() + offset);
+    return getAppDateKey(todayNoon);
+  };
+
   const getEffectiveOffDaysForEmployee = (employee) => {
   if (!employee) return "";
 
@@ -9178,7 +9222,8 @@ return (
           scheduleVersions,
           day,
           employeeBreakRows,
-          scheduleExceptions
+          scheduleExceptions,
+          getCurrentWeekdayDate(employee, day)
         );
 
       return (
@@ -9213,7 +9258,8 @@ const scheduleRows =
             scheduleVersions,
             day,
             employeeBreakRows,
-            scheduleExceptions
+            scheduleExceptions,
+            getCurrentWeekdayDate(employee, day)
           ),
         }));
       })()
