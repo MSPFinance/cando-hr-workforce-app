@@ -18912,16 +18912,8 @@ return item;
 }
 
 function selectAllFilteredTimeLogs() {
-  const ids = displayedTimeLogs
-    .map(
-      (entry) =>
-        entry.app_log_id ||
-        entry.supabase_id ||
-        entry.id
-    )
-    .filter(Boolean);
-
-  setSelectedTimeLogIds(ids);
+  const ids = displayedTimeLogs.map((entry) => entry.supabase_id).filter(Boolean);
+  setSelectedTimeLogIds([...new Set(ids)]);
 }
 
 function clearSelectedTimeLogs() {
@@ -18962,113 +18954,60 @@ async function bulkApproveSelectedTimeLogs() {
       */
       const selectedEntries =
         timeEntries.filter((entry) => {
-          const selectionId =
-            entry.app_log_id ||
-            entry.supabase_id ||
-            entry.id;
+          const selectionId = entry.supabase_id;
 
           return selectedTimeLogIds.includes(
             selectionId
           );
         });
 
-      const appLogIds = selectedEntries
-        .map((entry) => entry.app_log_id)
-        .filter(Boolean);
 
-      const databaseIds = selectedEntries
-  .filter(
-    (entry) =>
-      !entry.app_log_id
-  )
-  .map(
-    (entry) =>
-      entry.supabase_id ||
-      entry.id
-  )
-  .filter(Boolean);
-
-      if (!selectedEntries.length) {
-        throw new Error(
-          "The selected time logs could not be matched to the loaded records."
-        );
-      }
-
+      if (!supabase) throw new Error("Supabase connection is required.");
+      if (!canEditTimeLogs(currentUser?.access_level || currentUser?.role || "Employee"))
+        throw new Error("Approval permission is required.");
+      const ids = [...new Set(selectedTimeLogIds)];
+      const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      if (ids.some((id) => !uuid.test(String(id))) || selectedEntries.length !== ids.length)
+        throw new Error("Invalid or stale selection. Refresh Live Data and reselect.");
       const savedRows = [];
-
-      if (supabase && appLogIds.length) {
-        const {
-          data,
-          error,
-        } = await supabase
-          .from("time_logs")
+      const issues = [];
+      for (let i = 0; i < ids.length; i += 10) {
+        const batch = ids.slice(i, i + 10);
+        const { data, error } = await supabase.from("time_logs")
           .update({
-            approved: "Approved",
-            approval_status: "Approved",
-            payable_status: "Approved Payable",
-            approved_by: currentUser.email,
-            approved_at: approvedAt,
-            edited_by: currentUser.email,
-            edited_at: approvedAt,
-          })
-          .in("app_log_id", appLogIds)
-          .select();
-
-        if (error) {
-          throw new Error(
-            `Approval by app log ID failed: ${error.message}`
-          );
-        }
-
-        savedRows.push(...(data || []));
+            approved: "Approved", approval_status: "Approved", payable_status: "Approved Payable",
+            approved_by: currentUser.email, approved_at: approvedAt,
+            edited_by: currentUser.email, edited_at: approvedAt,
+          }).in("id", batch).select("id, approval_status, payable_status, approved_by");
+        if (error) { issues.push(error.message); continue; }
+        savedRows.push(...(data || []).filter((row) =>
+          batch.includes(row.id) && row.approval_status === "Approved" &&
+          row.payable_status === "Approved Payable" && row.approved_by === currentUser.email));
       }
-
-      if (supabase && databaseIds.length) {
-        const {
-          data,
-          error,
-        } = await supabase
-          .from("time_logs")
-          .update({
-            approved: "Approved",
-            approval_status: "Approved",
-            payable_status: "Approved Payable",
-            approved_by: currentUser.email,
-            approved_at: approvedAt,
-            edited_by: currentUser.email,
-            edited_at: approvedAt,
-          })
-          .in("id", databaseIds)
-          .select();
-
-        if (error) {
-          throw new Error(
-            `Approval by database ID failed: ${error.message}`
-          );
-        }
-
-        savedRows.push(...(data || []));
+      const verified = [];
+      for (let i = 0; i < savedRows.length; i += 10) {
+        const { data, error } = await supabase.from("time_logs")
+          .select("id, approval_status, payable_status, approved_by")
+          .in("id", savedRows.slice(i, i + 10).map((row) => row.id));
+        if (error) { issues.push(error.message); continue; }
+        verified.push(...(data || []).filter((row) =>
+          row.approval_status === "Approved" &&
+          row.payable_status === "Approved Payable" && row.approved_by === currentUser.email));
       }
-
-      if (
-        supabase &&
-        savedRows.length !== selectedEntries.length
-      ) {
-        throw new Error(
-          `Only ${savedRows.length} of ${selectedEntries.length} selected time logs were saved in Supabase. No local approval was applied.`
-        );
+      if (verified.length !== ids.length) {
+        setSelectedTimeLogIds(ids.filter((id) => !verified.some((row) => row.id === id)));
+        // Some writes may already be persisted even though the operation partially failed.
+        throw new Error(verified.length + " of " + ids.length +
+          " records verified in Supabase. " + (ids.length - verified.length) +
+          " remain selected; refresh to reconcile. " + issues.slice(0, 2).join("; "));
       }
-
       /*
         Update browser state only after Supabase confirms
         that the records were saved.
       */
       setTimeEntries((current) =>
         current.map((entry) => {
-          const entrySelectionId =
-            entry.app_log_id ||
-            entry.supabase_id ||
-            entry.id;
+          const entrySelectionId = entry.supabase_id;
 
           return selectedTimeLogIds.includes(
             entrySelectionId
@@ -22136,18 +22075,9 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
                 rows={displayedTimeLogs.map((t) => [
                  <input
   type="checkbox"
-  checked={selectedTimeLogIds.includes(
-    t.app_log_id ||
-t.supabase_id ||
-t.id
-  )}
-  onChange={() =>
-    toggleTimeLogSelection(
-      t.app_log_id ||
-t.supabase_id ||
-t.id
-    )
-  }
+  checked={selectedTimeLogIds.includes(t.supabase_id)}
+  disabled={!t.supabase_id}
+  onChange={() => toggleTimeLogSelection(t.supabase_id)}
 />,
                   <strong>{t.employee_name}</strong>,
                   <input
