@@ -777,7 +777,7 @@ function isNonWorkedTimeCategory(category) {
 const ROLE_ACCESS = {
   Employee: ["portal"],
   Agent: ["portal"],
-  Supervisor: ["portal", "dashboard", "schedule", "time", "requests", "approvals", "reporting"],
+  Supervisor: ["portal", "dashboard", "schedule", "time", "requests", "approvals", "payroll", "reporting"],
   TL: [
     "portal",
     "dashboard",
@@ -785,9 +785,10 @@ const ROLE_ACCESS = {
     "time",
     "requests",
     "approvals",
+    "payroll",
     "reporting",
   ],
-  "Team Lead": ["portal", "dashboard", "schedule", "time", "requests", "approvals", "reporting"],
+  "Team Lead": ["portal", "dashboard", "schedule", "time", "requests", "approvals", "payroll", "reporting"],
   Manager: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting", "rules"],
   Approvals: [
   "portal",
@@ -20011,6 +20012,10 @@ function downloadPayrollSummaryCsv(
   summaryRows,
   scopeLabel
 ) {
+  if (!["HR", "Admin"].includes(userRole)) {
+    showToast("Export restricted", "Final payroll exports are available only to HR and Admin.", "warning");
+    return;
+  }
   if (!summaryRows?.length) {
     showToast(
       "Nothing to export",
@@ -20145,6 +20150,10 @@ function exportPayrollAllCsv() {
 function exportPayrollEmployeeCsv(
   summaryEmployee
 ) {
+  if (!["HR", "Admin"].includes(userRole)) {
+    showToast("Export restricted", "Payroll detail exports are available only to HR and Admin.", "warning");
+    return;
+  }
   if (
     !summaryEmployee ||
     !summaryEmployee.dailyRows?.length
@@ -23255,7 +23264,7 @@ rows={filteredRequests.map((r) => [
     </span>
   </div>
 )}
-<div className="payrollExportActions">
+{["HR", "Admin"].includes(userRole) && <div className="payrollExportActions">
   <button
     type="button"
     className="btn"
@@ -23305,7 +23314,7 @@ rows={filteredRequests.map((r) => [
   <FileCheck size={16} />
   Send for Review
 </button>
-</div>
+</div>}
     <Card
       title={`Payroll Period · ${payrollDateRange.label}`}
     >
