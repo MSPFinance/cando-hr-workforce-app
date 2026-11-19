@@ -26,8 +26,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Lint
+        id: lint
+        continue-on-error: true
         run: npm run lint
       - name: Build
+        id: build
         run: npm run build
       - name: Check for unintentional frontend service role keys
         run: |
@@ -36,3 +39,10 @@ jobs:
             exit 1
           fi
           echo 'No service role key references found'
+      - name: Enforce lint result after build and security checks
+        if: always()
+        run: |
+          if [ '${{ steps.lint.outcome }}' != 'success' ]; then
+            echo 'Lint remains a blocking check; build and key checks ran independently.'
+            exit 1
+          fi
