@@ -25,7 +25,9 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Lint
+      - name: Lint server API routes (blocking)
+        run: npx eslint 'api/**/*.{js,jsx}'
+      - name: Full frontend lint (blocking; existing issues tracked separately)
         id: lint
         continue-on-error: true
         run: npm run lint
