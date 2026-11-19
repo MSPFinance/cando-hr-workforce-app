@@ -378,7 +378,7 @@ const ROLE_PROFILE_OPTIONS = ["Employee", "TL", "Manager", "Approvals", "Reporti
 
 const ROLE_ACCESS_PROFILES = {
   Employee: { label: "Agent", tasks: ["My Portal", "Start/End Shift", "Status Logs", "PTO/VTO/Sick Requests"], tabs: ["agent"] },
-  TL: { label: "Supervisor / Team Lead", tasks: ["Team Review", "Time Edits", "Approvals Queue", "Live Floor View", "Basic Reporting"], tabs: ["agent", "dashboard", "schedule", "time", "requests", "manager", "reporting"] },
+  TL: { label: "Supervisor / Team Lead", tasks: ["Team Review", "Time Edits", "Approvals Queue", "Live Floor View", "Basic Reporting"], tabs: ["agent", "dashboard", "schedule", "time", "requests", "manager", "payroll", "reporting"] },
   Manager: { label: "Approvals", tasks: ["Approvals Queue", "Schedule Review", "Payroll Review", "Reporting", "Rules"], tabs: ["agent", "dashboard", "employees", "schedule", "time", "requests", "manager", "payroll", "reporting", "rules"] },
   HR: { label: "HR", tasks: ["Employee Records", "Status Review", "Reporting"], tabs: ["agent", "dashboard", "employees", "reporting"] },
   Payroll: { label: "Payroll", tasks: ["Payroll Review", "Approved Time", "Country/Holiday Review"], tabs: ["agent", "dashboard", "payroll", "reporting"] },
@@ -6196,14 +6196,14 @@ function PayrollDetailModal({
           </div>
 
           <div className="payrollDetailHeaderActions">
-  <button
+  {typeof onExport === "function" && <button
     type="button"
     className="btn"
     onClick={onExport}
   >
     <Download size={16} />
     Export Employee CSV
-  </button>
+  </button>}
 
   <button
     type="button"
@@ -23503,10 +23503,10 @@ employee.holidayNames.length
   periodLabel={
     payrollDateRange.label
   }
-  onExport={() =>
+  onExport={["HR", "Admin"].includes(userRole) ? () =>
     exportPayrollEmployeeCsv(
       payrollDetailEmployee
-    )
+    ) : null
   }
   onClose={() =>
     setPayrollDetailEmployeeId("")
