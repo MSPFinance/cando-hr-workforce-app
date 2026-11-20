@@ -23032,7 +23032,7 @@ rows={filteredRequests.map((r) => [
           </section>
         )}
 
-        {!isAgentOnly && tab === "payroll" && (
+        {!isAgentOnly && canAccess(userRole, "payroll", currentUser) && tab === "payroll" && (
   <section className="reportingPage">
     <div className="reportHeader">
       <div>
