@@ -812,6 +812,7 @@ const ROLE_ACCESS = {
 function canAccess(role, area, employee = null) {
   const normalizedRole = normalizeAccessRole(role);
   // Per-user privilege. Do not elevate the user's general role to Payroll/Admin.
+  if (area === "payroll" && normalizedRole === "Employee") return false;
   if (area === "payroll" && employee?.payroll_tab_access === true) return true;
   return (ROLE_ACCESS[normalizedRole] || []).includes(area);
 }
