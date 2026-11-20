@@ -378,7 +378,7 @@ const ROLE_PROFILE_OPTIONS = ["Employee", "TL", "Manager", "Approvals", "Reporti
 
 const ROLE_ACCESS_PROFILES = {
   Employee: { label: "Agent", tasks: ["My Portal", "Start/End Shift", "Status Logs", "PTO/VTO/Sick Requests"], tabs: ["agent"] },
-  TL: { label: "Supervisor / Team Lead", tasks: ["Team Review", "Time Edits", "Approvals Queue", "Live Floor View", "Basic Reporting"], tabs: ["agent", "dashboard", "schedule", "time", "requests", "manager", "reporting"] },
+  TL: { label: "Supervisor / Team Lead", tasks: ["Team Review", "Time Edits", "Approvals Queue", "Live Floor View", "Basic Reporting"], tabs: ["agent", "dashboard", "schedule", "time", "requests", "manager", "payroll", "reporting"] },
   Manager: { label: "Approvals", tasks: ["Approvals Queue", "Schedule Review", "Payroll Review", "Reporting", "Rules"], tabs: ["agent", "dashboard", "employees", "schedule", "time", "requests", "manager", "payroll", "reporting", "rules"] },
   HR: { label: "HR", tasks: ["Employee Records", "Status Review", "Reporting"], tabs: ["agent", "dashboard", "employees", "reporting"] },
   Payroll: { label: "Payroll", tasks: ["Payroll Review", "Approved Time", "Country/Holiday Review"], tabs: ["agent", "dashboard", "payroll", "reporting"] },
@@ -777,7 +777,7 @@ function isNonWorkedTimeCategory(category) {
 const ROLE_ACCESS = {
   Employee: ["portal"],
   Agent: ["portal"],
-  Supervisor: ["portal", "dashboard", "schedule", "time", "requests", "approvals", "reporting"],
+  Supervisor: ["portal", "dashboard", "schedule", "time", "requests", "approvals", "payroll", "reporting"],
   TL: [
     "portal",
     "dashboard",
@@ -785,9 +785,10 @@ const ROLE_ACCESS = {
     "time",
     "requests",
     "approvals",
+    "payroll",
     "reporting",
   ],
-  "Team Lead": ["portal", "dashboard", "schedule", "time", "requests", "approvals", "reporting"],
+  "Team Lead": ["portal", "dashboard", "schedule", "time", "requests", "approvals", "payroll", "reporting"],
   Manager: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting", "rules"],
   Approvals: [
   "portal",
@@ -811,6 +812,7 @@ const ROLE_ACCESS = {
 function canAccess(role, area, employee = null) {
   const normalizedRole = normalizeAccessRole(role);
   // Per-user privilege. Do not elevate the user's general role to Payroll/Admin.
+  if (area === "payroll" && normalizedRole === "Employee") return false;
   if (area === "payroll" && employee?.payroll_tab_access === true) return true;
   return (ROLE_ACCESS[normalizedRole] || []).includes(area);
 }
@@ -20011,6 +20013,10 @@ function downloadPayrollSummaryCsv(
   summaryRows,
   scopeLabel
 ) {
+  if (!["HR", "Admin"].includes(userRole)) {
+    showToast("Export restricted", "Only HR and Admin can export Payroll files.", "warning");
+    return;
+  }
   if (!summaryRows?.length) {
     showToast(
       "Nothing to export",
@@ -20145,6 +20151,10 @@ function exportPayrollAllCsv() {
 function exportPayrollEmployeeCsv(
   summaryEmployee
 ) {
+  if (!["HR", "Admin"].includes(userRole)) {
+    showToast("Export restricted", "Only HR and Admin can export Payroll files.", "warning");
+    return;
+  }
   if (
     !summaryEmployee ||
     !summaryEmployee.dailyRows?.length
