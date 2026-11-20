@@ -7467,6 +7467,8 @@ const [filters, setFilters] = useState({
   startDate: "",
   endDate: "",
 });
+useEffect(() => { setTimeLogPage(0); }, [filters.employee, filters.startDate, filters.endDate, filters.lob, filters.department, filters.subDepartment, filters.teamLeader, filters.country, timeLogTableFilters.category, timeLogTableFilters.approval, timeLogTableFilters.payable]);
+
 useEffect(() => {
   /*
     The top Reporting filters are the single
@@ -17775,19 +17777,8 @@ const schedule =
                   savedTimeEntry.supabase_id
                 );
 
-            const sameApplicationRow =
-              savedTimeEntry.id &&
-              String(
-                entry.app_log_id ||
-                  entry.id ||
-                  ""
-              ) ===
-                String(savedTimeEntry.id);
-
-            return (
-              !sameSupabaseRow &&
-              !sameApplicationRow
-            );
+            // Application-generated TIME IDs are not unique; only UUID identifies a row.
+            return !sameSupabaseRow;
           });
 
         return [
