@@ -23266,6 +23266,7 @@ rows={filteredRequests.map((r) => [
   </div>
 )}
 <div className="payrollExportActions">
+  {["HR", "Admin"].includes(userRole) && (<>
   <button
     type="button"
     className="btn"
@@ -23298,6 +23299,7 @@ rows={filteredRequests.map((r) => [
     <Download size={16} />
     All Payroll CSV
   </button>
+  </>)}
 
   <button
   type="button"
