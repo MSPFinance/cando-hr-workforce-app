@@ -18917,9 +18917,7 @@ function selectAllFilteredTimeLogs() {
   const ids = displayedTimeLogs
     .map(
       (entry) =>
-        entry.app_log_id ||
-        entry.supabase_id ||
-        entry.id
+        entry.supabase_id || entry.id
     )
     .filter(Boolean);
 
@@ -18945,7 +18943,7 @@ async function bulkApproveSelectedTimeLogs() {
       }
 
       const selectedEntries = timeEntries.filter((entry) => {
-        const selectionId = entry.app_log_id || entry.supabase_id || entry.id;
+        const selectionId = entry.supabase_id || entry.id;
         return selectedTimeLogIds.includes(selectionId);
       });
 
@@ -19036,7 +19034,7 @@ async function bulkApproveSelectedTimeLogs() {
       ));
       setSelectedTimeLogIds(selectedEntries
         .filter((entry) => !confirmedIds.has(String(entry.supabase_id || entry.id)))
-        .map((entry) => entry.app_log_id || entry.supabase_id || entry.id));
+        .map((entry) => entry.supabase_id || entry.id));
 
       if (confirmedIds.size) {
         await logUserAction({
@@ -22052,15 +22050,11 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
                  <input
   type="checkbox"
   checked={selectedTimeLogIds.includes(
-    t.app_log_id ||
-t.supabase_id ||
-t.id
+    t.supabase_id || t.id
   )}
   onChange={() =>
     toggleTimeLogSelection(
-      t.app_log_id ||
-t.supabase_id ||
-t.id
+      t.supabase_id || t.id
     )
   }
 />,
