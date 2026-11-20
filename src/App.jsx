@@ -16530,11 +16530,10 @@ if (action === "Shift Ended") {
       );
     }
 
-    if (updatedRows?.length) {
-      closedRows.push(
-        ...updatedRows
-      );
+    if (!updatedRows?.length) {
+      throw new Error("Supabase did not confirm closing the active time log. Please refresh and contact your manager; do not repeatedly click End Shift.");
     }
+    closedRows.push(...updatedRows);
   }
 
   /*
@@ -16894,17 +16893,22 @@ const savedTimeEntry = {
   
 const entriesToSave = [savedTimeEntry];
 
+// Supabase RPC has already committed the status transition. Secondary
+// Google Sheets/email sync must not make a successful clock action appear
+// to have failed, or encourage agents to repeat the action.
 for (const entry of entriesToSave) {
-  await googleAddRow(
-    "timeLogs",
-    mapTimeToSheet(entry)
-  );
+  try {
+    await googleAddRow("timeLogs", mapTimeToSheet(entry));
+  } catch (syncError) {
+    console.error("Time log committed in Supabase; Google Sheets sync pending:", syncError);
+    showToast("Time log saved", "Saved in Supabase. Secondary reporting sync needs review.", "warning");
+  }
 }
-
-await queueDailyAttendanceEmail(
-  selectedEmployee,
-  entriesToSave
-);
+try {
+  await queueDailyAttendanceEmail(selectedEmployee, entriesToSave);
+} catch (emailError) {
+  console.error("Time log committed; attendance email queue failed:", emailError);
+}
 
 setActivityLog((current) => [
   activity,
