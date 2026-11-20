@@ -7467,7 +7467,6 @@ const [filters, setFilters] = useState({
   startDate: "",
   endDate: "",
 });
-useEffect(() => { setTimeLogPage(0); }, [filters.employee, filters.startDate, filters.endDate, filters.lob, filters.department, filters.subDepartment, filters.teamLeader, filters.country, timeLogTableFilters.category, timeLogTableFilters.approval, timeLogTableFilters.payable]);
 
 useEffect(() => {
   /*
@@ -7651,6 +7650,8 @@ const [attendanceDetailView, setAttendanceDetailView] =
   payable: "All",
   sortOrder: "newest",
 });
+useEffect(() => { setTimeLogPage(0); }, [filters.employee, filters.startDate, filters.endDate, filters.lob, filters.department, filters.subDepartment, filters.teamLeader, filters.country, timeLogTableFilters.category, timeLogTableFilters.approval, timeLogTableFilters.payable]);
+
 
 useEffect(() => {
   if (tab !== "reporting") {
