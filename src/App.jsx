@@ -7633,6 +7633,10 @@ const [
   const attendanceEmailQueueRef = useRef(new Set());
   const [startupLoading, setStartupLoading] = useState(true);
   const [selectedTimeLogIds, setSelectedTimeLogIds] = useState([]);
+  const [timeLogRefreshRevision, setTimeLogRefreshRevision] = useState(0);
+  const [timeLogPage, setTimeLogPage] = useState(0);
+  const [timeLogLoading, setTimeLogLoading] = useState(false);
+  const [timeLogLoadError, setTimeLogLoadError] = useState("");
   const [attendanceDetailDepartment, setAttendanceDetailDepartment] =
   useState("");
 
@@ -10560,127 +10564,58 @@ useEffect(() => {
 let cancelled = false;
 
 const reloadLiveLogsOnly = async () => {
-    let liveLogsQuery = supabase
-  .from("time_logs")
-  .select("*")
-  .order("clock_in", {
-    ascending: false,
-  });
-
-if (
-  filters.employee !== "All" &&
-  filteredTimeLogEmployeeId
-) {
-  liveLogsQuery = liveLogsQuery.eq(
-    "employee_id",
-    String(filteredTimeLogEmployeeId)
-  );
-}
-
-if (filters.startDate) {
-  liveLogsQuery =
-    liveLogsQuery.gte(
-      "clock_in",
-      filters.startDate
-    );
-}
-
-if (filters.endDate) {
-  const nextDay =
-    addDaysToDateKey(
-      filters.endDate,
-      1
-    );
-
-  liveLogsQuery =
-    liveLogsQuery.lt(
-      "clock_in",
-      nextDay
-    );
-}
-const {
-  data: latestLogs,
-  error,
-} = await liveLogsQuery.limit(5000);
-
-if (cancelled) {
-  return;
-}
-
-if (!error) {
-
-      console.log(
-  "Filtered realtime time logs loaded:",
-  {
-    employee: filters.employee,
-    employeeId: filteredTimeLogEmployeeId,
-    startDate: filters.startDate,
-    endDate: filters.endDate,
-    count: latestLogs?.length || 0,
-    sample: latestLogs?.slice(0, 3),
-  }
-);
-  setTimeEntries(
-    (latestLogs || [])
-      .map((log) => ({
-  ...log,
-
-  /*
-    Preserve both identifiers.
-
-    supabase_id is the actual database primary key.
-    id remains the application-facing identifier.
-  */
-  supabase_id: log.id,
-
-  id:
-    log.app_log_id ||
-    log.id,
-
-        date:
-          log.date ||
-          String(
-            log.clock_in ||
-            log.category_start ||
-            log.created_at ||
-            ""
-          ).slice(0, 10),
-
-        category:
-          log.category ||
-          log.status ||
-          "Working",
-
-        approved:
-          log.approval_status ||
-          "Pending",
-      }))
-      .sort((a, b) => {
-        const aDate = new Date(
-          a.category_start ||
-          a.clock_in ||
-          a.created_at ||
-          0
-        ).getTime();
-
-        const bDate = new Date(
-          b.category_start ||
-          b.clock_in ||
-          b.created_at ||
-          0
-        ).getTime();
-
-        return bDate - aDate;
-      })
-  );
-} else {
-      console.warn("Realtime time_logs reload failed:", error);
+  setTimeLogLoading(true);
+  setTimeLogLoadError("");
+  try {
+    // PostgREST may cap individual requests at 1,000 rows; fetch explicit pages.
+    const pageSize = 500;
+    const maxRows = 5000;
+    const collected = [];
+    for (let offset = 0; offset < maxRows; offset += pageSize) {
+      let query = supabase.from("time_logs").select("*")
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      if (filters.employee !== "All" && filteredTimeLogEmployeeId) {
+        query = query.eq("employee_id", String(filteredTimeLogEmployeeId));
+      }
+      if (filters.startDate) query = query.gte("date", filters.startDate);
+      if (filters.endDate) query = query.lte("date", filters.endDate);
+      const { data, error } = await query;
+      if (cancelled) return;
+      if (error) throw error;
+      collected.push(...(data || []));
+      if (!data || data.length < pageSize) break;
     }
-  };
+    if (cancelled) return;
+    const unique = [...new Map(collected.map((log) => [String(log.id), log])).values()];
+    const normalized = unique.map((log) => ({
+      ...log,
+      supabase_id: log.id,
+      id: log.app_log_id || log.id,
+      date: log.date || String(log.clock_in || log.category_start || log.created_at || "").slice(0, 10),
+      category: log.category || log.status || "Working",
+      approved: log.approval_status || log.approved || "Pending",
+    }));
+    setTimeEntries(normalized);
+    setSelectedTimeLogIds([]);
+    console.log("Manager time logs refreshed from Supabase:", normalized.length);
+    if (unique.length === maxRows) {
+      console.warn("Time log load reached 5,000 rows; narrow employee/date filters for older records.");
+    }
+  } catch (error) {
+    if (!cancelled) {
+      setTimeLogLoadError(error.message || "Unable to refresh time logs.");
+      console.error("Manager time log refresh failed:", error);
+      showToast("Time log refresh failed", error.message || "Please retry.", "danger");
+    }
+  } finally {
+    if (!cancelled) setTimeLogLoading(false);
+  }
+};
+reloadLiveLogsOnly();
 
-  reloadLiveLogsOnly();
-
-  const normalizeRealtimeLog = (log) => {
+const normalizeRealtimeLog = (log) => {
   if (!log) {
     return null;
   }
@@ -10865,6 +10800,7 @@ return () => {
   filters.startDate,
   filters.endDate,
   filteredTimeLogEmployeeId,
+  timeLogRefreshRevision,
 ]);
   
 /*
@@ -14039,7 +13975,7 @@ const sortedEditableTimeLogs = [...editableTimeLogs].sort((a, b) => {
 });
 
 const displayedTimeLogs =
-  sortedEditableTimeLogs.slice(0, 100);
+  sortedEditableTimeLogs.slice(timeLogPage * 100, (timeLogPage + 1) * 100);
 
   const filteredRequests = visibleRequests.filter((request) => {
   /*
@@ -21211,7 +21147,7 @@ if (startupLoading) {
             <Field label="Type"><select value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })}>{categoryOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Start"><input type="date" value={filters.startDate} onChange={(e) => setFilters({ ...filters, startDate: e.target.value })} /></Field>
             <Field label="End"><input type="date" value={filters.endDate} onChange={(e) => setFilters({ ...filters, endDate: e.target.value })} /></Field>
-            <div className="filterActions"><button type="button" className="primary" onClick={refreshLiveData}>Refresh Live Data</button><button type="button" onClick={resetFilters}>Reset Filters</button></div>
+            <div className="filterActions"><button type="button" className="primary" onClick={async () => { setTimeLogPage(0); setTimeLogRefreshRevision((value) => value + 1); await refreshLiveData(); }}>Refresh Live Data</button><button type="button" onClick={resetFilters}>Reset Filters</button></div>
           </section>
         )}
 
@@ -22016,11 +21952,18 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
 </div>
 
 <p className="helperText">
-  Showing the most recent{" "}
-  {displayedTimeLogs.length} of{" "}
-  {editableTimeLogs.length} matching time logs.
-  Use the filters above to locate older records.
+  Showing{" "}
+  {editableTimeLogs.length ? timeLogPage * 100 + 1 : 0}–{Math.min((timeLogPage + 1) * 100, editableTimeLogs.length)} of{" "}
+  {editableTimeLogs.length} matching time logs.{" "}
+  {timeLogLoading ? "Refreshing from Supabase..." : ""}
+  {timeLogLoadError ? `Refresh error: ${timeLogLoadError}` : ""}
+  {editableTimeLogs.length >= 5000 ? " Narrow the employee/date filters for older records." : ""}
 </p>
+<div className="filterActions">
+  <button type="button" disabled={timeLogPage === 0} onClick={() => setTimeLogPage((page) => Math.max(0, page - 1))}>Previous 100</button>
+  <span>Page {timeLogPage + 1} of {Math.max(1, Math.ceil(editableTimeLogs.length / 100))}</span>
+  <button type="button" disabled={(timeLogPage + 1) * 100 >= editableTimeLogs.length} onClick={() => setTimeLogPage((page) => page + 1)}>Next 100</button>
+</div>
 <div
   style={{
     width: "100%",
