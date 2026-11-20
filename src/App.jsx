@@ -19020,7 +19020,7 @@ async function bulkApproveSelectedTimeLogs() {
             row.approval_status === "Approved" &&
             row.payable_status === "Approved Payable" &&
             row.approved_by === currentUser.email &&
-            row.approved_at === approvedAt
+            row.approved_at && Number.isFinite(Date.parse(row.approved_at)) && Math.abs(Date.parse(row.approved_at) - Date.parse(approvedAt)) < 1000
           ) confirmedIds.add(String(row.id));
         });
       }
