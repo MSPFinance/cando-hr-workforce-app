@@ -4,6 +4,8 @@ const KEY=process.env.SUPABASE_SERVICE_ROLE_KEY;
 const TOKEN=(process.env.APPLICATION_USAGE_ACCESS_TOKEN||"").trim();
 const ALLOWED=new Set((process.env.APPLICATION_USAGE_ALLOWED_EMAILS||"").split(",").map(v=>v.trim().toLowerCase()).filter(Boolean));
 const COLUMNS=["id","changed_at","time_log_id","employee_id","operation","actor_email","actor_role","source","changed_fields","risk_flag","risk_reason"];
+const FETCH_COLUMNS=[...COLUMNS,"old_data","new_data"];
+function sanitize(row){const {old_data,new_data,...safe}=row; if(row.operation==="UPDATE"){const before=old_data||{},after=new_data||{};safe.changed_fields=[...new Set([...Object.keys(before),...Object.keys(after)])].filter(k=>JSON.stringify(before[k])!==JSON.stringify(after[k]));}return safe;}
 const DATE=/^\d{4}-\d{2}-\d{2}$/;
 function fail(res,status,error){return res.status(status).json({success:false,error});}
 function csvCell(v){const s=Array.isArray(v)?v.join("; "):String(v??"");const safe=/^[\s\uFEFF]*[=+\-@]/.test(s)?"'"+s:s;return '"'+safe.replace(/"/g,'""')+'"';}
@@ -19,7 +21,7 @@ export default async function handler(req,res){
  if(q.format&&!["csv","json"].includes(q.format))return fail(res,400,"Unsupported format");
  const csv=q.format==="csv",size=csv?500:Math.max(1,Math.min(200,Math.floor(Number(q.limit)||100))),page=Math.max(1,Math.min(10000,Math.floor(Number(q.page)||1)));
  const filters={actor_email:"actor_email",actor_role:"actor_role",employee_id:"employee_id",operation:"operation",source:"source",time_log_id:"time_log_id"};
- const paramsBase=new URLSearchParams({select:COLUMNS.join(","),order:"changed_at.desc,id.desc"});
+ const paramsBase=new URLSearchParams({select:FETCH_COLUMNS.join(","),order:"changed_at.desc,id.desc"});
  paramsBase.append("changed_at","gte."+start+"T00:00:00Z");
  const dayAfter=new Date(end+"T00:00:00Z");dayAfter.setUTCDate(dayAfter.getUTCDate()+1);
  paramsBase.append("changed_at","lt."+dayAfter.toISOString());
@@ -30,7 +32,7 @@ export default async function handler(req,res){
    const params=new URLSearchParams(paramsBase);params.set("limit",String(csv?size:size+1));params.set("offset",String(offset));
    const response=await fetch(BASE+"/rest/v1/time_log_audit?"+params.toString(),{headers:{apikey:KEY,Authorization:"Bearer "+KEY},cache:"no-store"});
    if(!response.ok)throw new Error("Audit query HTTP "+response.status);
-   const batch=await response.json();if(!Array.isArray(batch))throw new Error("Invalid audit result");
+   const raw=await response.json();if(!Array.isArray(raw))throw new Error("Invalid audit result");const batch=raw.map(sanitize);
    if(!csv)return res.status(200).json({success:true,rows:batch.slice(0,size),has_more:batch.length>size,page,note:"Database trigger history; actor attribution may be inferred or missing."});
    if(rows.length+batch.length>20000)return fail(res,413,"Export exceeds 20,000 records; narrow filters.");
    rows.push(...batch);if(batch.length<size)break;
