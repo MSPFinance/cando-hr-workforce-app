@@ -1,3 +1,4 @@
+import { verifyDeveloper } from "./_developer-auth.js";
 // Read-only, developer-restricted activity detail endpoint.
 // Uses the existing v_app_usage_activity view. It does not claim that
 // an activity entry proves a time-log mutation was committed.
@@ -18,9 +19,8 @@ export default async function handler(req,res) {
   res.setHeader("Cache-Control","no-store, max-age=0");
   if(req.method !== "GET") {res.setHeader("Allow","GET");return fail(res,405,"Method not allowed");}
   if(process.env.APPLICATION_USAGE_API_ENABLED !== "true" || !URL_BASE || !SERVICE_KEY || !ACCESS_TOKEN || !ALLOWED.size) return fail(res,503,"Developer audit API unavailable");
-  const email = String(req.headers["x-developer-email"] || "").trim().toLowerCase();
-  const token = String(req.headers["x-usage-access-token"] || "").trim();
-  if(!ALLOWED.has(email) || !token || token !== ACCESS_TOKEN) return fail(res,403,"Developer access denied");
+  const developer=await verifyDeveloper(req).catch(()=>null);
+  if(!developer)return fail(res,403,"Verified developer sign-in required");
   const q = req.query || {};
   const start = String(q.start_date || "");
   const end = String(q.end_date || "");
