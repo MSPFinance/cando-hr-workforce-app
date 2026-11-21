@@ -2,6 +2,101 @@
 import React, { useState } from "react";
 import DeveloperUsageExplorer from "./DeveloperUsageExplorer.jsx";
 
+
+function DetailedAuditPanel({ email, accessToken }) {
+  const [filters, setFilters] = useState({start_date:"",end_date:"",actor_email:"",actor_role:"",action_type:"",employee_id:"",decision:"",payable_status:"",source:""});
+  const [applied, setApplied] = useState(null);
+  const [records, setRecords] = useState([]);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const fields = [["start_date","Start date","date"],["end_date","End date","date"],["actor_email","Changed by (email)","text"],["actor_role","User role","text"],["action_type","Action type","text"],["employee_id","Employee ID","text"],["decision","Decision","text"],["payable_status","Payable status","text"],["source","Source","text"]];
+  const headers = {"x-developer-email":email.trim().toLowerCase(),"x-usage-access-token":accessToken};
+  async function retrieve(nextFilters, nextPage=1) {
+    setBusy(true);setError("");
+    try {
+      const params = new URLSearchParams({ ...Object.fromEntries(Object.entries(nextFilters).filter(([,v])=>v)),page:String(nextPage),limit:"100" });
+      const response = await fetch("/api/developer-activity-audit?"+params.toString(),{headers,cache:"no-store"});
+      const data = await response.json();
+      if(!response.ok || !data.success) throw new Error(data.error || "Unable to retrieve audit records");
+      setRecords(data.rows || []);setPage(nextPage);setHasMore(Boolean(data.has_more));setApplied(nextFilters);
+    } catch(e) {setError(e.message);} finally {setBusy(false);}
+  }
+  async function download() {
+    if(!applied) return;
+    setBusy(true);setError("");
+    try {
+      const params = new URLSearchParams({...Object.fromEntries(Object.entries(applied).filter(([,v])=>v)),format:"csv"});
+      const response = await fetch("/api/developer-activity-audit?"+params.toString(),{headers,cache:"no-store"});
+      if(!response.ok) {const data=await response.json().catch(()=>({}));throw new Error(data.error || "Export failed");}
+      const blob = await response.blob(),url=URL.createObjectURL(blob),a=document.createElement("a");
+      a.href=url;a.download="Magnemite_Developer_Audit_"+applied.start_date+"_to_"+applied.end_date+".csv";
+      document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    } catch(e) {setError(e.message);} finally {setBusy(false);}
+  }
+  return <section style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:12,padding:24,marginBottom:20}}>
+    <h2>Detailed Activity Audit</h2>
+    <p style={{color:"#64748b"}}>Read-only Supabase activity. An activity event does not prove a time-log edit was successfully saved. Before/after values are not yet available.</p>
+    <form onSubmit={e=>{e.preventDefault();retrieve({...filters},1);}} style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12}}>
+      {fields.map(([key,label,type])=><label key={key} style={{fontSize:13}}>{label}<input type={type} value={filters[key]} onChange={e=>setFilters(old=>({...old,[key]:e.target.value}))} style={{width:"100%",boxSizing:"border-box",padding:9,border:"1px solid #cbd5e1",borderRadius:6}} /></label>)}
+      <button disabled={busy || !filters.start_date || !filters.end_date || filters.start_date>filters.end_date} type="submit">Apply audit filters</button>
+      <button disabled={busy || !applied} type="button" onClick={download}>Export filtered audit CSV</button>
+    </form>
+    {error && <p role="alert" style={{color:"#b91c1c"}}>{error}</p>}
+    {applied && <><p>Showing {records.length} activity records on page {page}.</p>
+      <div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}><thead><tr>{["Date/time","User","Action","Employee","Decision","Payable","Record ID","Source"].map(h=><th key={h} style={{padding:8,textAlign:"left",borderBottom:"1px solid #ddd"}}>{h}</th>)}</tr></thead><tbody>
+        {records.map((r,i)=><tr key={r.id || i}>{[r.activity_datetime,r.actor_email,r.action_type,r.employee_name || r.employee_id,r.decision,r.payable_status,r.target_record_id,r.source].map((v,j)=><td key={j} style={{padding:8,borderBottom:"1px solid #eee"}}>{v ?? ""}</td>)}</tr>)}
+      </tbody></table></div>
+      <div style={{display:"flex",gap:12,marginTop:12}}><button disabled={busy || page===1} onClick={()=>retrieve(applied,page-1)}>Previous</button><button disabled={busy || !hasMore} onClick={()=>retrieve(applied,page+1)}>Next</button></div>
+    </>}
+  </section>;
+}
+
+
+function TimeLogAuditPanel({ email, accessToken }) {
+  const [filters,setFilters]=useState({start_date:"",end_date:"",employee_id:"",actor_email:"",operation:"",time_log_id:""});
+  const [applied,setApplied]=useState(null);
+  const [rows,setRows]=useState([]);
+  const [page,setPage]=useState(1);
+  const [hasMore,setHasMore]=useState(false);
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState("");
+  const fields=[["start_date","Start date","date"],["end_date","End date","date"],["employee_id","Employee ID","text"],["actor_email","Changed by email","text"],["operation","Operation (INSERT, UPDATE, DELETE)","text"],["time_log_id","Time log ID","text"]];
+  const headers={"x-developer-email":email.trim().toLowerCase(),"x-usage-access-token":accessToken};
+  async function load(next,pageNumber=1){
+    setBusy(true);setError("");
+    try{
+      const p=new URLSearchParams({...Object.fromEntries(Object.entries(next).filter(([,v])=>v)),page:String(pageNumber),limit:"100"});
+      const response=await fetch("/api/developer-time-log-audit?"+p,{headers,cache:"no-store"});
+      const data=await response.json();
+      if(!response.ok||!data.success)throw new Error(data.error||"Audit query failed");
+      setRows(data.rows||[]);setHasMore(Boolean(data.has_more));setPage(pageNumber);setApplied(next);
+    }catch(e){setError(e.message);}finally{setBusy(false);}
+  }
+  async function exportCsv(){
+    if(!applied)return;setBusy(true);setError("");
+    try{
+      const p=new URLSearchParams({...Object.fromEntries(Object.entries(applied).filter(([,v])=>v)),format:"csv"});
+      const response=await fetch("/api/developer-time-log-audit?"+p,{headers,cache:"no-store"});
+      if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error(data.error||"Export failed");}
+      const url=URL.createObjectURL(await response.blob()),a=document.createElement("a");
+      a.href=url;a.download="Magnemite_Time_Log_Changes.csv";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }catch(e){setError(e.message);}finally{setBusy(false);}
+  }
+  return <section style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:12,padding:24,marginBottom:20}}>
+    <h2>Persisted Time-Log Changes</h2>
+    <p style={{color:"#64748b"}}>Rows from Supabase time_log_audit, recorded by the database trigger. This is separate from application usage events. Actor email may be missing or inferred; compare the record ID and values before certifying a payroll edit.</p>
+    <form onSubmit={e=>{e.preventDefault();load({...filters});}} style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(190px,1fr))",gap:12}}>
+      {fields.map(([key,label,type])=><label key={key} style={{fontSize:13}}>{label}<input type={type} value={filters[key]} onChange={e=>setFilters(old=>({...old,[key]:e.target.value}))} style={{width:"100%",boxSizing:"border-box",padding:9,border:"1px solid #cbd5e1",borderRadius:6}} /></label>)}
+      <button type="submit" disabled={busy||!filters.start_date||!filters.end_date||filters.start_date>filters.end_date}>Search saved changes</button>
+      <button type="button" disabled={busy||!applied} onClick={exportCsv}>Download change-history CSV</button>
+    </form>
+    {error&&<p role="alert" style={{color:"#b91c1c"}}>{error}</p>}
+    {applied&&<><p>{rows.length} audit entries shown on page {page}.</p><div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:13}}><thead><tr>{["Changed at (UTC)","Operation","Employee","Actor","Role","Time log ID","Changed fields","Source"].map(v=><th key={v} style={{padding:8,textAlign:"left",borderBottom:"1px solid #ddd"}}>{v}</th>)}</tr></thead><tbody>{rows.map(r=><tr key={r.id}>{[r.changed_at,r.operation,r.employee_id,r.actor_email||"Unknown",r.actor_role,r.time_log_id,Array.isArray(r.changed_fields)?r.changed_fields.join(", "):"",r.source].map((v,i)=><td key={i} style={{padding:8,borderBottom:"1px solid #eee"}}>{v??""}</td>)}</tr>)}</tbody></table></div><div style={{display:"flex",gap:12,marginTop:12}}><button disabled={busy||page===1} onClick={()=>load(applied,page-1)}>Previous</button><button disabled={busy||!hasMore} onClick={()=>load(applied,page+1)}>Next</button></div></>}
+  </section>;
+}
+
 export default function DeveloperUsage() {
   const [email, setEmail] = useState("");
   const [accessToken, setAccessToken] = useState("");
@@ -863,6 +958,9 @@ export default function DeveloperUsage() {
 )}
             </section>
 
+
+            <DetailedAuditPanel email={email} accessToken={accessToken} />
+            <TimeLogAuditPanel email={email} accessToken={accessToken} />
 
             {/* Full payroll-period summary */}
             <section style={panelStyle}>
