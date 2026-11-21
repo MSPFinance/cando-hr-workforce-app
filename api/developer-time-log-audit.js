@@ -1,3 +1,4 @@
+import { verifyDeveloper } from "./_developer-auth.js";
 // Read-only committed time-log audit history; developer-only, no raw row snapshots.
 const BASE=(process.env.SUPABASE_URL||process.env.VITE_SUPABASE_URL||"").replace(/\/$/,"");
 const KEY=process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -13,9 +14,8 @@ export default async function handler(req,res){
  res.setHeader("Cache-Control","no-store, max-age=0");
  if(req.method!=="GET"){res.setHeader("Allow","GET");return fail(res,405,"Method not allowed");}
  if(process.env.APPLICATION_USAGE_API_ENABLED!=="true"||!BASE||!KEY||!TOKEN||!ALLOWED.size)return fail(res,503,"Audit unavailable");
- const email=String(req.headers["x-developer-email"]||"").trim().toLowerCase();
- const token=String(req.headers["x-usage-access-token"]||"").trim();
- if(!ALLOWED.has(email)||!token||token!==TOKEN)return fail(res,403,"Access denied");
+  const developer=await verifyDeveloper(req).catch(()=>null);
+  if(!developer)return fail(res,403,"Verified developer sign-in required");
  const q=req.query||{},start=String(q.start_date||""),end=String(q.end_date||"");
  if(!DATE.test(start)||!DATE.test(end)||start>end||Number.isNaN(Date.parse(start))||Number.isNaN(Date.parse(end)))return fail(res,400,"Valid dates required");
  if(q.format&&!["csv","json"].includes(q.format))return fail(res,400,"Unsupported format");
