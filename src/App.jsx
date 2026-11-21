@@ -378,7 +378,7 @@ const ROLE_PROFILE_OPTIONS = ["Employee", "TL", "Manager", "Approvals", "Reporti
 
 const ROLE_ACCESS_PROFILES = {
   Employee: { label: "Agent", tasks: ["My Portal", "Start/End Shift", "Status Logs", "PTO/VTO/Sick Requests"], tabs: ["agent"] },
-  TL: { label: "Supervisor / Team Lead", tasks: ["Team Review", "Time Edits", "Approvals Queue", "Live Floor View", "Basic Reporting"], tabs: ["agent", "dashboard", "schedule", "time", "requests", "manager", "reporting"] },
+  TL: { label: "Supervisor / Team Lead", tasks: ["Team Review", "Time Edits", "Approvals Queue", "Live Floor View", "Basic Reporting"], tabs: ["agent", "dashboard", "schedule", "time", "requests", "manager", "payroll", "reporting"] },
   Manager: { label: "Approvals", tasks: ["Approvals Queue", "Schedule Review", "Payroll Review", "Reporting", "Rules"], tabs: ["agent", "dashboard", "employees", "schedule", "time", "requests", "manager", "payroll", "reporting", "rules"] },
   HR: { label: "HR", tasks: ["Employee Records", "Status Review", "Reporting"], tabs: ["agent", "dashboard", "employees", "reporting"] },
   Payroll: { label: "Payroll", tasks: ["Payroll Review", "Approved Time", "Country/Holiday Review"], tabs: ["agent", "dashboard", "payroll", "reporting"] },
@@ -777,7 +777,7 @@ function isNonWorkedTimeCategory(category) {
 const ROLE_ACCESS = {
   Employee: ["portal"],
   Agent: ["portal"],
-  Supervisor: ["portal", "dashboard", "schedule", "time", "requests", "approvals", "reporting"],
+  Supervisor: ["portal", "dashboard", "schedule", "time", "requests", "approvals", "payroll", "reporting"],
   TL: [
     "portal",
     "dashboard",
@@ -785,9 +785,10 @@ const ROLE_ACCESS = {
     "time",
     "requests",
     "approvals",
+    "payroll",
     "reporting",
   ],
-  "Team Lead": ["portal", "dashboard", "schedule", "time", "requests", "approvals", "reporting"],
+  "Team Lead": ["portal", "dashboard", "schedule", "time", "requests", "approvals", "payroll", "reporting"],
   Manager: ["portal", "dashboard", "employees", "schedule", "time", "requests", "approvals", "payroll", "reporting", "rules"],
   Approvals: [
   "portal",
@@ -811,6 +812,7 @@ const ROLE_ACCESS = {
 function canAccess(role, area, employee = null) {
   const normalizedRole = normalizeAccessRole(role);
   // Per-user privilege. Do not elevate the user's general role to Payroll/Admin.
+  if (area === "payroll" && normalizedRole === "Employee") return false;
   if (area === "payroll" && employee?.payroll_tab_access === true) return true;
   return (ROLE_ACCESS[normalizedRole] || []).includes(area);
 }
@@ -7465,6 +7467,7 @@ const [filters, setFilters] = useState({
   startDate: "",
   endDate: "",
 });
+
 useEffect(() => {
   /*
     The top Reporting filters are the single
@@ -7631,6 +7634,10 @@ const [
   const attendanceEmailQueueRef = useRef(new Set());
   const [startupLoading, setStartupLoading] = useState(true);
   const [selectedTimeLogIds, setSelectedTimeLogIds] = useState([]);
+  const [timeLogRefreshRevision, setTimeLogRefreshRevision] = useState(0);
+  const [timeLogPage, setTimeLogPage] = useState(0);
+  const [timeLogLoading, setTimeLogLoading] = useState(false);
+  const [timeLogLoadError, setTimeLogLoadError] = useState("");
   const [attendanceDetailDepartment, setAttendanceDetailDepartment] =
   useState("");
 
@@ -7643,6 +7650,8 @@ const [attendanceDetailView, setAttendanceDetailView] =
   payable: "All",
   sortOrder: "newest",
 });
+useEffect(() => { setTimeLogPage(0); }, [filters.employee, filters.startDate, filters.endDate, filters.lob, filters.department, filters.subDepartment, filters.teamLeader, filters.country, timeLogTableFilters.category, timeLogTableFilters.approval, timeLogTableFilters.payable]);
+
 
 useEffect(() => {
   if (tab !== "reporting") {
@@ -10558,127 +10567,58 @@ useEffect(() => {
 let cancelled = false;
 
 const reloadLiveLogsOnly = async () => {
-    let liveLogsQuery = supabase
-  .from("time_logs")
-  .select("*")
-  .order("clock_in", {
-    ascending: false,
-  });
-
-if (
-  filters.employee !== "All" &&
-  filteredTimeLogEmployeeId
-) {
-  liveLogsQuery = liveLogsQuery.eq(
-    "employee_id",
-    String(filteredTimeLogEmployeeId)
-  );
-}
-
-if (filters.startDate) {
-  liveLogsQuery =
-    liveLogsQuery.gte(
-      "clock_in",
-      filters.startDate
-    );
-}
-
-if (filters.endDate) {
-  const nextDay =
-    addDaysToDateKey(
-      filters.endDate,
-      1
-    );
-
-  liveLogsQuery =
-    liveLogsQuery.lt(
-      "clock_in",
-      nextDay
-    );
-}
-const {
-  data: latestLogs,
-  error,
-} = await liveLogsQuery.limit(5000);
-
-if (cancelled) {
-  return;
-}
-
-if (!error) {
-
-      console.log(
-  "Filtered realtime time logs loaded:",
-  {
-    employee: filters.employee,
-    employeeId: filteredTimeLogEmployeeId,
-    startDate: filters.startDate,
-    endDate: filters.endDate,
-    count: latestLogs?.length || 0,
-    sample: latestLogs?.slice(0, 3),
-  }
-);
-  setTimeEntries(
-    (latestLogs || [])
-      .map((log) => ({
-  ...log,
-
-  /*
-    Preserve both identifiers.
-
-    supabase_id is the actual database primary key.
-    id remains the application-facing identifier.
-  */
-  supabase_id: log.id,
-
-  id:
-    log.app_log_id ||
-    log.id,
-
-        date:
-          log.date ||
-          String(
-            log.clock_in ||
-            log.category_start ||
-            log.created_at ||
-            ""
-          ).slice(0, 10),
-
-        category:
-          log.category ||
-          log.status ||
-          "Working",
-
-        approved:
-          log.approval_status ||
-          "Pending",
-      }))
-      .sort((a, b) => {
-        const aDate = new Date(
-          a.category_start ||
-          a.clock_in ||
-          a.created_at ||
-          0
-        ).getTime();
-
-        const bDate = new Date(
-          b.category_start ||
-          b.clock_in ||
-          b.created_at ||
-          0
-        ).getTime();
-
-        return bDate - aDate;
-      })
-  );
-} else {
-      console.warn("Realtime time_logs reload failed:", error);
+  setTimeLogLoading(true);
+  setTimeLogLoadError("");
+  try {
+    // PostgREST may cap individual requests at 1,000 rows; fetch explicit pages.
+    const pageSize = 500;
+    const maxRows = 5000;
+    const collected = [];
+    for (let offset = 0; offset < maxRows; offset += pageSize) {
+      let query = supabase.from("time_logs").select("*")
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .range(offset, offset + pageSize - 1);
+      if (filters.employee !== "All" && filteredTimeLogEmployeeId) {
+        query = query.eq("employee_id", String(filteredTimeLogEmployeeId));
+      }
+      if (filters.startDate) query = query.gte("date", filters.startDate);
+      if (filters.endDate) query = query.lte("date", filters.endDate);
+      const { data, error } = await query;
+      if (cancelled) return;
+      if (error) throw error;
+      collected.push(...(data || []));
+      if (!data || data.length < pageSize) break;
     }
-  };
+    if (cancelled) return;
+    const unique = [...new Map(collected.map((log) => [String(log.id), log])).values()];
+    const normalized = unique.map((log) => ({
+      ...log,
+      supabase_id: log.id,
+      id: log.app_log_id || log.id,
+      date: log.date || String(log.clock_in || log.category_start || log.created_at || "").slice(0, 10),
+      category: log.category || log.status || "Working",
+      approved: log.approval_status || log.approved || "Pending",
+    }));
+    setTimeEntries(normalized);
+    setSelectedTimeLogIds([]);
+    console.log("Manager time logs refreshed from Supabase:", normalized.length);
+    if (unique.length === maxRows) {
+      console.warn("Time log load reached 5,000 rows; narrow employee/date filters for older records.");
+    }
+  } catch (error) {
+    if (!cancelled) {
+      setTimeLogLoadError(error.message || "Unable to refresh time logs.");
+      console.error("Manager time log refresh failed:", error);
+      showToast("Time log refresh failed", error.message || "Please retry.", "danger");
+    }
+  } finally {
+    if (!cancelled) setTimeLogLoading(false);
+  }
+};
+reloadLiveLogsOnly();
 
-  reloadLiveLogsOnly();
-
-  const normalizeRealtimeLog = (log) => {
+const normalizeRealtimeLog = (log) => {
   if (!log) {
     return null;
   }
@@ -10863,6 +10803,7 @@ return () => {
   filters.startDate,
   filters.endDate,
   filteredTimeLogEmployeeId,
+  timeLogRefreshRevision,
 ]);
   
 /*
@@ -14037,7 +13978,7 @@ const sortedEditableTimeLogs = [...editableTimeLogs].sort((a, b) => {
 });
 
 const displayedTimeLogs =
-  sortedEditableTimeLogs.slice(0, 100);
+  sortedEditableTimeLogs.slice(timeLogPage * 100, (timeLogPage + 1) * 100);
 
   const filteredRequests = visibleRequests.filter((request) => {
   /*
@@ -16589,11 +16530,10 @@ if (action === "Shift Ended") {
       );
     }
 
-    if (updatedRows?.length) {
-      closedRows.push(
-        ...updatedRows
-      );
+    if (!updatedRows?.length) {
+      throw new Error("Supabase did not confirm closing the active time log. Please refresh and contact your manager; do not repeatedly click End Shift.");
     }
+    closedRows.push(...updatedRows);
   }
 
   /*
@@ -16953,17 +16893,22 @@ const savedTimeEntry = {
   
 const entriesToSave = [savedTimeEntry];
 
+// Supabase RPC has already committed the status transition. Secondary
+// Google Sheets/email sync must not make a successful clock action appear
+// to have failed, or encourage agents to repeat the action.
 for (const entry of entriesToSave) {
-  await googleAddRow(
-    "timeLogs",
-    mapTimeToSheet(entry)
-  );
+  try {
+    await googleAddRow("timeLogs", mapTimeToSheet(entry));
+  } catch (syncError) {
+    console.error("Time log committed in Supabase; Google Sheets sync pending:", syncError);
+    showToast("Time log saved", "Saved in Supabase. Secondary reporting sync needs review.", "warning");
+  }
 }
-
-await queueDailyAttendanceEmail(
-  selectedEmployee,
-  entriesToSave
-);
+try {
+  await queueDailyAttendanceEmail(selectedEmployee, entriesToSave);
+} catch (emailError) {
+  console.error("Time log committed; attendance email queue failed:", emailError);
+}
 
 setActivityLog((current) => [
   activity,
@@ -17837,19 +17782,8 @@ const schedule =
                   savedTimeEntry.supabase_id
                 );
 
-            const sameApplicationRow =
-              savedTimeEntry.id &&
-              String(
-                entry.app_log_id ||
-                  entry.id ||
-                  ""
-              ) ===
-                String(savedTimeEntry.id);
-
-            return (
-              !sameSupabaseRow &&
-              !sameApplicationRow
-            );
+            // Application-generated TIME IDs are not unique; only UUID identifies a row.
+            return !sameSupabaseRow;
           });
 
         return [
@@ -18915,9 +18849,7 @@ function selectAllFilteredTimeLogs() {
   const ids = displayedTimeLogs
     .map(
       (entry) =>
-        entry.app_log_id ||
-        entry.supabase_id ||
-        entry.id
+        entry.supabase_id || entry.id
     )
     .filter(Boolean);
 
@@ -18930,11 +18862,7 @@ function clearSelectedTimeLogs() {
 
 async function bulkApproveSelectedTimeLogs() {
   if (!selectedTimeLogIds.length) {
-    showToast(
-      "No rows selected",
-      "Please select at least one time log.",
-      "warning"
-    );
+    showToast("No rows selected", "Please select at least one time log.", "warning");
     return;
   }
 
@@ -18942,9 +18870,33 @@ async function bulkApproveSelectedTimeLogs() {
     "bulk-approve-time-logs",
     "Bulk time log approval",
     async () => {
-      const approvedAt =
-        new Date().toISOString();
+      if (!supabase) {
+        throw new Error("Supabase is unavailable. No bulk approval was attempted.");
+      }
 
+      const selectedEntries = timeEntries.filter((entry) => {
+        const selectionId = entry.supabase_id || entry.id;
+        return selectedTimeLogIds.includes(selectionId);
+      });
+
+      if (!selectedEntries.length) {
+        throw new Error("The selected time logs could not be matched to loaded records.");
+      }
+
+      // app_log_id is NOT unique in production. Never update by this field:
+      // it can approve records that the manager did not select.
+      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+      const ids = [...new Set(selectedEntries.map((entry) =>
+        String(entry.supabase_id || (uuidPattern.test(String(entry.id || "")) ? entry.id : "")).trim()
+      ))];
+
+      if (ids.some((id) => !uuidPattern.test(id)) || ids.length !== selectedEntries.length) {
+        throw new Error(
+          "Some selected rows do not have unique Supabase record IDs. Refresh Live Data and select again; no bulk approval was attempted."
+        );
+      }
+
+      const approvedAt = new Date().toISOString();
       const updates = {
         approved: "Approved",
         approval_status: "Approved",
@@ -18953,212 +18905,97 @@ async function bulkApproveSelectedTimeLogs() {
         approved_at: approvedAt,
         edited_by: currentUser.email,
         edited_at: approvedAt,
-        notes: "Bulk approved by manager",
       };
 
-      /*
-        Resolve the selected browser identifiers back
-        to the actual loaded rows.
-      */
-      const selectedEntries =
-        timeEntries.filter((entry) => {
-          const selectionId =
-            entry.app_log_id ||
-            entry.supabase_id ||
-            entry.id;
+      // Smaller batches avoid oversized URL queries and allow precise reconciliation.
+      const chunkSize = 40;
+      const confirmedIds = new Set();
+      const failures = [];
 
-          return selectedTimeLogIds.includes(
-            selectionId
-          );
-        });
-
-      const appLogIds = selectedEntries
-        .map((entry) => entry.app_log_id)
-        .filter(Boolean);
-
-      const databaseIds = selectedEntries
-  .filter(
-    (entry) =>
-      !entry.app_log_id
-  )
-  .map(
-    (entry) =>
-      entry.supabase_id ||
-      entry.id
-  )
-  .filter(Boolean);
-
-      if (!selectedEntries.length) {
-        throw new Error(
-          "The selected time logs could not be matched to the loaded records."
-        );
-      }
-
-      const savedRows = [];
-
-      if (supabase && appLogIds.length) {
-        const {
-          data,
-          error,
-        } = await supabase
+      for (let offset = 0; offset < ids.length; offset += chunkSize) {
+        const batchIds = ids.slice(offset, offset + chunkSize);
+        const { data, error } = await supabase
           .from("time_logs")
-          .update({
-            approved: "Approved",
-            approval_status: "Approved",
-            payable_status: "Approved Payable",
-            approved_by: currentUser.email,
-            approved_at: approvedAt,
-            edited_by: currentUser.email,
-            edited_at: approvedAt,
-          })
-          .in("app_log_id", appLogIds)
-          .select();
+          .update(updates)
+          .in("id", batchIds)
+          .select("id,approved,approval_status,payable_status,approved_by,approved_at");
 
         if (error) {
-          throw new Error(
-            `Approval by app log ID failed: ${error.message}`
-          );
+          failures.push(`Batch ${Math.floor(offset / chunkSize) + 1}: ${error.message}`);
+          continue;
         }
 
-        savedRows.push(...(data || []));
-      }
-
-      if (supabase && databaseIds.length) {
-        const {
-          data,
-          error,
-        } = await supabase
-          .from("time_logs")
-          .update({
-            approved: "Approved",
-            approval_status: "Approved",
-            payable_status: "Approved Payable",
-            approved_by: currentUser.email,
-            approved_at: approvedAt,
-            edited_by: currentUser.email,
-            edited_at: approvedAt,
-          })
-          .in("id", databaseIds)
-          .select();
-
-        if (error) {
-          throw new Error(
-            `Approval by database ID failed: ${error.message}`
-          );
-        }
-
-        savedRows.push(...(data || []));
-      }
-
-      if (
-        supabase &&
-        savedRows.length !== selectedEntries.length
-      ) {
-        throw new Error(
-          `Only ${savedRows.length} of ${selectedEntries.length} selected time logs were saved in Supabase. No local approval was applied.`
-        );
-      }
-
-      /*
-        Update browser state only after Supabase confirms
-        that the records were saved.
-      */
-      setTimeEntries((current) =>
-        current.map((entry) => {
-          const entrySelectionId =
-            entry.app_log_id ||
-            entry.supabase_id ||
-            entry.id;
-
-          return selectedTimeLogIds.includes(
-            entrySelectionId
+        const returned = new Set((data || [])
+          .filter((row) =>
+            row.approved === "Approved" &&
+            row.approval_status === "Approved" &&
+            row.payable_status === "Approved Payable" &&
+            row.approved_by === currentUser.email
           )
-            ? { ...entry, ...updates }
-            : entry;
-        })
-      );
+          .map((row) => String(row.id)));
 
-            const affectedEmployeeIds = [
-        ...new Set(
-          selectedEntries
-            .map((entry) =>
-              String(
-                entry.employee_id || ""
-              ).trim()
-            )
-            .filter(Boolean)
-        ),
-      ];
+        // Read back each batch: only database-confirmed IDs count as saved.
+        const { data: verified, error: verifyError } = await supabase
+          .from("time_logs")
+          .select("id,approved,approval_status,payable_status,approved_by,approved_at")
+          .in("id", batchIds);
 
-      const affectedEmployeeNames = [
-        ...new Set(
-          selectedEntries
-            .map((entry) =>
-              String(
-                entry.employee_name || ""
-              ).trim()
-            )
-            .filter(Boolean)
-        ),
-      ];
+        if (verifyError) {
+          failures.push(`Verification batch ${Math.floor(offset / chunkSize) + 1}: ${verifyError.message}`);
+          continue;
+        }
 
-      await logUserAction({
-        actionType:
-          "Bulk Time Logs Approved",
+        (verified || []).forEach((row) => {
+          if (
+            returned.has(String(row.id)) &&
+            row.approved === "Approved" &&
+            row.approval_status === "Approved" &&
+            row.payable_status === "Approved Payable" &&
+            row.approved_by === currentUser.email &&
+            row.approved_at && Number.isFinite(Date.parse(row.approved_at)) && Math.abs(Date.parse(row.approved_at) - Date.parse(approvedAt)) < 1000
+          ) confirmedIds.add(String(row.id));
+        });
+      }
 
-        actionCategory:
-          "Manager Approval",
+      // Keep unconfirmed rows selected for safe retry; do not overwrite local state
+      // for records the database did not confirm.
+      setTimeEntries((current) => current.map((entry) =>
+        confirmedIds.has(String(entry.supabase_id || entry.id))
+          ? { ...entry, ...updates }
+          : entry
+      ));
+      setSelectedTimeLogIds(selectedEntries
+        .filter((entry) => !confirmedIds.has(String(entry.supabase_id || entry.id)))
+        .map((entry) => entry.supabase_id || entry.id));
 
-        employeeId:
-          affectedEmployeeIds.length === 1
-            ? affectedEmployeeIds[0]
-            : null,
-
-        employeeName:
-          affectedEmployeeNames.length === 1
-            ? affectedEmployeeNames[0]
-            : null,
-
-        targetTable:
-          "time_logs",
-
-        targetRecordId:
-          null,
-
-        recordsAffected:
-          savedRows.length ||
-          selectedEntries.length,
-
-        metadata: {
-          approverEmail:
-            currentUser?.email || "",
-
-          recordsAffected:
-            savedRows.length ||
-            selectedEntries.length,
-
-          employeesAffected:
-            affectedEmployeeIds.length,
-
-          employeeNames:
-            affectedEmployeeNames,
-
-          approvalStatus:
-            "Approved",
-
-          payableStatus:
-            "Approved Payable",
-
-          approvedAt:
+      if (confirmedIds.size) {
+        await logUserAction({
+          actionType: "Bulk Time Logs Approved",
+          actionCategory: "Manager Approval",
+          targetTable: "time_logs",
+          targetRecordId: null,
+          recordsAffected: confirmedIds.size,
+          metadata: {
+            approverEmail: currentUser?.email || "",
+            recordsAffected: confirmedIds.size,
+            requestedCount: ids.length,
+            failedCount: ids.length - confirmedIds.size,
+            approvalStatus: "Approved",
+            payableStatus: "Approved Payable",
             approvedAt,
-        },
-      });
+          },
+        });
+      }
 
-      setSelectedTimeLogIds([]);
+      if (confirmedIds.size !== ids.length || failures.length) {
+        throw new Error(
+          `Bulk approval partially completed: ${confirmedIds.size} of ${ids.length} unique records verified. ${ids.length - confirmedIds.size} remain unconfirmed. ${failures.join("; ")} Refresh Live Data before retrying.`
+        );
+      }
 
       showToast(
         "Bulk approval completed",
-        `${savedRows.length || selectedEntries.length} selected time log(s) were approved and saved.`,
+        `${confirmedIds.size} unique time logs were approved and verified in Supabase.`,
         "success"
       );
     }
@@ -20011,6 +19848,10 @@ function downloadPayrollSummaryCsv(
   summaryRows,
   scopeLabel
 ) {
+  if (!["HR", "Admin"].includes(userRole)) {
+    showToast("Export restricted", "Only HR and Admin can export Payroll files.", "warning");
+    return;
+  }
   if (!summaryRows?.length) {
     showToast(
       "Nothing to export",
@@ -20145,6 +19986,10 @@ function exportPayrollAllCsv() {
 function exportPayrollEmployeeCsv(
   summaryEmployee
 ) {
+  if (!["HR", "Admin"].includes(userRole)) {
+    showToast("Export restricted", "Only HR and Admin can export Payroll files.", "warning");
+    return;
+  }
   if (
     !summaryEmployee ||
     !summaryEmployee.dailyRows?.length
@@ -21298,7 +21143,7 @@ if (startupLoading) {
             <Field label="Type"><select value={filters.category} onChange={(e) => setFilters({ ...filters, category: e.target.value })}>{categoryOptions.map((x) => <option key={x}>{x}</option>)}</select></Field>
             <Field label="Start"><input type="date" value={filters.startDate} onChange={(e) => setFilters({ ...filters, startDate: e.target.value })} /></Field>
             <Field label="End"><input type="date" value={filters.endDate} onChange={(e) => setFilters({ ...filters, endDate: e.target.value })} /></Field>
-            <div className="filterActions"><button type="button" className="primary" onClick={refreshLiveData}>Refresh Live Data</button><button type="button" onClick={resetFilters}>Reset Filters</button></div>
+            <div className="filterActions"><button type="button" className="primary" onClick={async () => { setTimeLogPage(0); setTimeLogRefreshRevision((value) => value + 1); await refreshLiveData(); }}>Refresh Live Data</button><button type="button" onClick={resetFilters}>Reset Filters</button></div>
           </section>
         )}
 
@@ -22103,11 +21948,18 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
 </div>
 
 <p className="helperText">
-  Showing the most recent{" "}
-  {displayedTimeLogs.length} of{" "}
-  {editableTimeLogs.length} matching time logs.
-  Use the filters above to locate older records.
+  Showing{" "}
+  {editableTimeLogs.length ? timeLogPage * 100 + 1 : 0}–{Math.min((timeLogPage + 1) * 100, editableTimeLogs.length)} of{" "}
+  {editableTimeLogs.length} matching time logs.{" "}
+  {timeLogLoading ? "Refreshing from Supabase..." : ""}
+  {timeLogLoadError ? `Refresh error: ${timeLogLoadError}` : ""}
+  {editableTimeLogs.length >= 5000 ? " Narrow the employee/date filters for older records." : ""}
 </p>
+<div className="filterActions">
+  <button type="button" disabled={timeLogPage === 0} onClick={() => setTimeLogPage((page) => Math.max(0, page - 1))}>Previous 100</button>
+  <span>Page {timeLogPage + 1} of {Math.max(1, Math.ceil(editableTimeLogs.length / 100))}</span>
+  <button type="button" disabled={(timeLogPage + 1) * 100 >= editableTimeLogs.length} onClick={() => setTimeLogPage((page) => page + 1)}>Next 100</button>
+</div>
 <div
   style={{
     width: "100%",
@@ -22137,15 +21989,11 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
                  <input
   type="checkbox"
   checked={selectedTimeLogIds.includes(
-    t.app_log_id ||
-t.supabase_id ||
-t.id
+    t.supabase_id || t.id
   )}
   onChange={() =>
     toggleTimeLogSelection(
-      t.app_log_id ||
-t.supabase_id ||
-t.id
+      t.supabase_id || t.id
     )
   }
 />,
@@ -23022,7 +22870,7 @@ rows={filteredRequests.map((r) => [
           </section>
         )}
 
-        {!isAgentOnly && tab === "payroll" && (
+        {!isAgentOnly && canAccess(userRole, "payroll", currentUser) && tab === "payroll" && (
   <section className="reportingPage">
     <div className="reportHeader">
       <div>
@@ -23256,6 +23104,7 @@ rows={filteredRequests.map((r) => [
   </div>
 )}
 <div className="payrollExportActions">
+  {["HR", "Admin"].includes(userRole) && (<>
   <button
     type="button"
     className="btn"
@@ -23288,6 +23137,7 @@ rows={filteredRequests.map((r) => [
     <Download size={16} />
     All Payroll CSV
   </button>
+  </>)}
 
   <button
   type="button"
