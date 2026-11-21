@@ -14016,6 +14016,45 @@ const payrollDetailEmployee =
   return categoryOk && approvalOk && payableOk;
 });
 
+// Read-only integrity screening of the currently loaded and filtered time logs.
+// The authoritative full-history audit remains private in Supabase.
+const timeLogIntegrityFindings = (() => {
+  const groups = new Map();
+  const now = Date.now();
+  for (const log of filteredTime) {
+    const day = String(log.date || "").slice(0, 10);
+    if (!/^20\\d{2}-\\d{2}-\\d{2}$/.test(day)) continue;
+    const dayMs = Date.parse(day + "T12:00:00Z");
+    if (!Number.isFinite(dayMs) || now - dayMs > 46 * 86400000 || dayMs >= now) continue;
+    const empId = String(log.employee_id || log.employeeId || "").trim();
+    if (!empId) continue;
+    const key = empId + "|" + day;
+    if (!groups.has(key)) groups.set(key, { employeeId: empId, name: log.employee_name || log.employee || empId, date: day, rows: [] });
+    groups.get(key).rows.push(log);
+  }
+  const results = [];
+  const timestamp = (value) => {
+    const ms = Date.parse(value || "");
+    return Number.isFinite(ms) ? ms : null;
+  };
+  for (const group of groups.values()) {
+    const working = group.rows.filter((r) => String(r.category || r.status || "").toLowerCase() === "working");
+    const breaks = group.rows.filter((r) => ["break","lunch","bathroom"].includes(String(r.category || r.status || "").toLowerCase()));
+    const end = (r) => timestamp(r.category_end || r.clock_out);
+    const start = (r) => timestamp(r.category_start || r.clock_in);
+    const latestBreakEnd = Math.max(0, ...breaks.map(end).filter((v) => v !== null));
+    const open = working.some((r) => start(r) !== null && end(r) === null);
+    const resumed = working.some((r) => start(r) !== null && start(r) >= latestBreakEnd - 120000);
+    const laterEdit = group.rows.some((r) => r.edited_by && timestamp(r.edited_at) !== null && timestamp(r.edited_at) > Date.parse(group.date + "T23:59:59Z"));
+    const issues = [];
+    if (latestBreakEnd && !resumed) issues.push("No Working after final break");
+    if (open) issues.push("Unclosed Working");
+    if (laterEdit) issues.push("Edited after workday (review only)");
+    if (issues.length) results.push({ ...group, issues });
+  }
+  return results.sort((a,b) => b.date.localeCompare(a.date)).slice(0, 100);
+})();
+
 const sortedEditableTimeLogs = [...editableTimeLogs].sort((a, b) => {
   const dateA = new Date(
     a.clock_in ||
@@ -22039,7 +22078,30 @@ const noActivity = liveLobEmployees.filter(({ live }) =>
 </button>
               </FormGrid>
             </Card>
-            <Card title="Editable previous time logs">
+            <Card title="Agent Time-Log Integrity Audit — Read Only">
+  <p className="helperText">Screening of currently loaded time logs matching the Time filters, up to 45 days back. This is not a complete database-wide audit: unloaded records may change the findings. Review each case before changing hours or payroll.</p>
+  <div className="filterActions">
+    <strong>{timeLogIntegrityFindings.length} flagged employee-days (up to 100 displayed)</strong>
+    <span>Missing post-break Working, unclosed Working, or later edits</span>
+  </div>
+  <div style={{overflowX:"auto"}}>
+    <table className="dataTable">
+      <thead><tr><th>Employee</th><th>Workday</th><th>Finding</th><th>Working segments</th></tr></thead>
+      <tbody>
+        {timeLogIntegrityFindings.length === 0 ? (
+          <tr><td colSpan={4}>No issues detected in the currently loaded records. This does not certify completeness.</td></tr>
+        ) : timeLogIntegrityFindings.map((item) => (
+          <tr key={item.employeeId + "|" + item.date}>
+            <td>{item.name}</td><td>{item.date}</td>
+            <td>{item.issues.join("; ")}</td>
+            <td>{item.rows.filter((r) => String(r.category || r.status || "").toLowerCase() === "working").length}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+</Card>
+<Card title="Editable previous time logs">
               <p className="helperText">Use this table to correct historical clock-in/out, category, approval, payable status, or notes. Select Save on the corrected row to persist the update.</p>
               
 <div className="filterActions">
