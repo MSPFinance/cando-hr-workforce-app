@@ -7440,6 +7440,8 @@ const [
   payrollLogsLoading,
   setPayrollLogsLoading,
 ] = useState(false);
+const [payrollSourceVerifiedRange, setPayrollSourceVerifiedRange] = useState("");
+const [payrollSourceLoadError, setPayrollSourceLoadError] = useState("");
 
 const [
   payrollDetailEmployeeId,
@@ -11435,6 +11437,8 @@ useEffect(() => {
   }
 
   let cancelled = false;
+  setPayrollSourceVerifiedRange("");
+  setPayrollSourceLoadError("");
 
   const loadPayrollPeriodLogs = async () => {
     setPayrollLogsLoading(true);
@@ -11535,9 +11539,9 @@ useEffect(() => {
         }));
 
       if (!cancelled) {
-        setPayrollSourceTimeEntries(
-          normalizedRows
-        );
+        setPayrollSourceTimeEntries(normalizedRows);
+        setPayrollSourceVerifiedRange(`${payrollDateRange.startDate}|${payrollDateRange.endDate}`);
+        setPayrollSourceLoadError("");
       }
 
       console.log(
@@ -11566,9 +11570,9 @@ useEffect(() => {
       );
 
       if (!cancelled) {
-        setPayrollSourceTimeEntries(
-          []
-        );
+        setPayrollSourceTimeEntries([]);
+        setPayrollSourceVerifiedRange("");
+        setPayrollSourceLoadError(error?.message || "Payroll source refresh failed.");
       }
     } finally {
       if (!cancelled) {
@@ -19844,7 +19848,55 @@ function buildPayrollSummaryExportRows(
   );
 }
 
-function downloadPayrollSummaryCsv(
+// Before CSV export, re-read production Supabase and reject stale or incomplete
+// browser snapshots. This is read-only; it never changes time logs or payroll.
+async function verifyPayrollSourceBeforeExport() {
+  const rangeKey = `${payrollDateRange.startDate}|${payrollDateRange.endDate}`;
+  if (!supabase || payrollLogsLoading || payrollSourceLoadError ||
+      payrollSourceVerifiedRange !== rangeKey) {
+    throw new Error("Payroll records are still loading or failed to load. Reopen Payroll and wait for the source to finish loading.");
+  }
+  const snapshot = payrollSourceTimeEntries;
+  const fields = ["id", "employee_id", "clock_in", "clock_out", "date",
+    "category", "status", "approval_status", "approved_at", "approved_by",
+    "duration_minutes", "duration", "edited_at", "updated_at", "created_at",
+    "notes", "category_start", "category_end", "app_log_id"];
+  const signature = (row) => JSON.stringify(fields.map((key) => row[key] ?? null));
+  const indexed = new Map();
+  for (const row of snapshot) {
+    const id = String(row.supabase_id || "");
+    if (!id || indexed.has(id)) throw new Error("Payroll source has missing or duplicate Supabase record IDs.");
+    indexed.set(id, signature({...row, id: row.supabase_id}));
+  }
+  let from = 0;
+  let checked = 0;
+  const pageSize = 1000;
+  while (true) {
+    const {data, error} = await supabase.from("time_logs").select("*")
+      .gte("clock_in", payrollDateRange.startDate)
+      .lt("clock_in", addDaysToDateKey(payrollDateRange.endDate, 2))
+      .order("clock_in", {ascending: true})
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    const rows = Array.isArray(data) ? data : [];
+    for (const row of rows) {
+      const id = String(row.id || "");
+      if (!indexed.has(id) || indexed.get(id) !== signature(row)) {
+        throw new Error("Supabase time logs changed after Payroll loaded. Reopen Payroll and export again.");
+      }
+      indexed.delete(id);
+      checked++;
+    }
+    if (rows.length < pageSize) break;
+    from += pageSize;
+  }
+  if (indexed.size || checked !== snapshot.length) {
+    throw new Error("Payroll record count differs from Supabase. Reload Payroll before exporting.");
+  }
+  return checked;
+}
+
+async function downloadPayrollSummaryCsv(
   summaryRows,
   scopeLabel
 ) {
@@ -19859,6 +19911,13 @@ function downloadPayrollSummaryCsv(
       "warning"
     );
 
+    return;
+  }
+
+  try {
+    await verifyPayrollSourceBeforeExport();
+  } catch (error) {
+    showToast("Payroll export blocked", error?.message || "Source verification failed.", "warning");
     return;
   }
 
