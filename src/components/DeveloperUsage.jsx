@@ -1,6 +1,7 @@
 
 import React, { useState } from "react";
 import { createClient } from "@supabase/supabase-js";
+async function developerAuthHeader(){const {data}=await developerSupabase.auth.getSession();const token=data?.session?.access_token;if(!token)throw new Error("Developer session expired. Sign in again.");return {"Authorization":"Bearer "+token};}
 const developerSupabase=import.meta.env.VITE_SUPABASE_URL&&import.meta.env.VITE_SUPABASE_ANON_KEY?createClient(import.meta.env.VITE_SUPABASE_URL,import.meta.env.VITE_SUPABASE_ANON_KEY):null;
 
 
@@ -13,12 +14,12 @@ function DetailedAuditPanel({ email, accessToken, sessionToken }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const fields = [["start_date","Start date","date"],["end_date","End date","date"],["actor_email","Changed by (email)","text"],["actor_role","User role","text"],["action_type","Action type","text"],["employee_id","Employee ID","text"],["decision","Decision","text"],["payable_status","Payable status","text"],["source","Source","text"]];
-  const headers = {"x-developer-email":email.trim().toLowerCase(),"x-usage-access-token":accessToken,"Authorization":"Bearer "+sessionToken};
+  const headers = {"x-developer-email":email.trim().toLowerCase(),"x-usage-access-token":accessToken};
   async function retrieve(nextFilters, nextPage=1) {
     setBusy(true);setError("");
     try {
       const params = new URLSearchParams({ ...Object.fromEntries(Object.entries(nextFilters).filter(([,v])=>v)),page:String(nextPage),limit:"100" });
-      const response = await fetch("/api/developer-activity-audit?"+params.toString(),{headers,cache:"no-store"});
+      const response = await fetch("/api/developer-activity-audit?"+params.toString(),{headers:{...headers,...await developerAuthHeader()},cache:"no-store"});
       const data = await response.json();
       if(!response.ok || !data.success) throw new Error(data.error || "Unable to retrieve audit records");
       setRecords(data.rows || []);setPage(nextPage);setHasMore(Boolean(data.has_more));setApplied(nextFilters);
@@ -29,7 +30,7 @@ function DetailedAuditPanel({ email, accessToken, sessionToken }) {
     setBusy(true);setError("");
     try {
       const params = new URLSearchParams({...Object.fromEntries(Object.entries(applied).filter(([,v])=>v)),format:"csv"});
-      const response = await fetch("/api/developer-activity-audit?"+params.toString(),{headers,cache:"no-store"});
+      const response = await fetch("/api/developer-activity-audit?"+params.toString(),{headers:{...headers,...await developerAuthHeader()},cache:"no-store"});
       if(!response.ok) {const data=await response.json().catch(()=>({}));throw new Error(data.error || "Export failed");}
       const blob = await response.blob(),url=URL.createObjectURL(blob),a=document.createElement("a");
       a.href=url;a.download="Magnemite_Developer_Audit_"+applied.start_date+"_to_"+applied.end_date+".csv";
@@ -64,12 +65,12 @@ function TimeLogAuditPanel({ email, accessToken, sessionToken }) {
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const fields=[["start_date","Start date","date"],["end_date","End date","date"],["employee_id","Employee ID","text"],["actor_email","Changed by email","text"],["operation","Operation (INSERT, UPDATE, DELETE)","text"],["time_log_id","Time log ID","text"]];
-  const headers={"x-developer-email":email.trim().toLowerCase(),"x-usage-access-token":accessToken,"Authorization":"Bearer "+sessionToken};
+  const headers={"x-developer-email":email.trim().toLowerCase(),"x-usage-access-token":accessToken};
   async function load(next,pageNumber=1){
     setBusy(true);setError("");
     try{
       const p=new URLSearchParams({...Object.fromEntries(Object.entries(next).filter(([,v])=>v)),page:String(pageNumber),limit:"100"});
-      const response=await fetch("/api/developer-time-log-audit?"+p,{headers,cache:"no-store"});
+      const response=await fetch("/api/developer-time-log-audit?"+p,{headers:{...headers,...await developerAuthHeader()},cache:"no-store"});
       const data=await response.json();
       if(!response.ok||!data.success)throw new Error(data.error||"Audit query failed");
       setRows(data.rows||[]);setHasMore(Boolean(data.has_more));setPage(pageNumber);setApplied(next);
@@ -79,7 +80,7 @@ function TimeLogAuditPanel({ email, accessToken, sessionToken }) {
     if(!applied)return;setBusy(true);setError("");
     try{
       const p=new URLSearchParams({...Object.fromEntries(Object.entries(applied).filter(([,v])=>v)),format:"csv"});
-      const response=await fetch("/api/developer-time-log-audit?"+p,{headers,cache:"no-store"});
+      const response=await fetch("/api/developer-time-log-audit?"+p,{headers:{...headers,...await developerAuthHeader()},cache:"no-store"});
       if(!response.ok){const data=await response.json().catch(()=>({}));throw new Error(data.error||"Export failed");}
       const url=URL.createObjectURL(await response.blob()),a=document.createElement("a");
       a.href=url;a.download="Magnemite_Time_Log_Changes.csv";document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
@@ -223,6 +224,7 @@ export default function DeveloperUsage() {
         headers: {
           "x-developer-email": developerEmail,
           "x-usage-access-token": token,
+          ...await developerAuthHeader(),
         },
       }
     );
