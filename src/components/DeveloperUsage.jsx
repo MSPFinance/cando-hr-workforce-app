@@ -595,6 +595,7 @@ export default function DeveloperUsage() {
             "x-developer-email":
               email.trim().toLowerCase(),
             "x-usage-access-token": accessToken,
+            ...await developerAuthHeader(),
           },
         }
       );
