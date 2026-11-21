@@ -153,8 +153,13 @@ function buildParams(f, offset, count) {
   if (f.actor) p.set("actor_email", "ilike.*" + f.actor + "*");
   if (f.employee) {
     if (edits) {
-      // The audit table has no indexed top-level employee_name; use employee ID.
-      p.set("employee_id", "ilike.*" + f.employee + "*");
+      // Numeric searches use employee_id; names use the saved JSON snapshot.
+      // This keeps filtering server-side before pagination and CSV exports.
+      if (/^\d+$/.test(f.employee)) {
+        p.set("employee_id", "ilike.*" + f.employee + "*");
+      } else {
+        p.set("new_data->>employee_name", "ilike.*" + f.employee + "*");
+      }
     } else {
       p.set("or", "(employee_name.ilike.*" + f.employee +
         "*,employee_id.ilike.*" + f.employee + "*)");
@@ -249,14 +254,14 @@ export default async function handler(req, res) {
       });
       const all = [];
       while (true) {
-        const batch = await queryRows(f, all.length, 251);
+        const batch = await queryRows(f, all.length, 500);
         if (all.length + batch.length > MAX_EXPORT_RECORDS)
           return res.status(413).json({
             success: false,
             error: "More than 10,000 saved records match. Narrow the date or employee filter."
           });
         all.push(...batch);
-        if (batch.length < 251) break;
+        if (batch.length < 500) break;
       }
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition",
