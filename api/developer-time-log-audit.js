@@ -4,8 +4,8 @@ const KEY=process.env.SUPABASE_SERVICE_ROLE_KEY;
 const TOKEN=(process.env.APPLICATION_USAGE_ACCESS_TOKEN||"").trim();
 const ALLOWED=new Set((process.env.APPLICATION_USAGE_ALLOWED_EMAILS||"").split(",").map(v=>v.trim().toLowerCase()).filter(Boolean));
 const COLUMNS=["id","changed_at","time_log_id","employee_id","operation","actor_email","actor_role","source","changed_fields","risk_flag","risk_reason"];
-const FETCH_COLUMNS=[...COLUMNS,"old_data","new_data"];
-function sanitize(row){const {old_data,new_data,...safe}=row; if(row.operation==="UPDATE"){const before=old_data||{},after=new_data||{};safe.changed_fields=[...new Set([...Object.keys(before),...Object.keys(after)])].filter(k=>JSON.stringify(before[k])!==JSON.stringify(after[k]));}return safe;}
+const CSV_COLUMNS=[...COLUMNS,"change_details"];\nconst FETCH_COLUMNS=[...COLUMNS,"old_data","new_data"];
+const SAFE_FIELDS=new Set(["date","status","category","category_start","category_end","clock_in","clock_out","break_start","break_end","duration_minutes","approved","approval_status","approved_by","approved_at","payable_status","locked","edited_at","edited_by","scheduled_start","scheduled_end","sub_status","auto_rule"]);\nfunction sanitize(row){const {old_data,new_data,...safe}=row; if(row.operation==="UPDATE"){const before=old_data||{},after=new_data||{};safe.changed_fields=[...new Set([...Object.keys(before),...Object.keys(after)])].filter(k=>JSON.stringify(before[k])!==JSON.stringify(after[k]));safe.change_details=safe.changed_fields.filter(k=>SAFE_FIELDS.has(k)).map(k=>({field:k,before:before[k]??null,after:after[k]??null}));}else{safe.change_details=[];}return safe;}
 const DATE=/^\d{4}-\d{2}-\d{2}$/;
 function fail(res,status,error){return res.status(status).json({success:false,error});}
 function csvCell(v){const s=Array.isArray(v)?v.join("; "):String(v??"");const safe=/^[\s\uFEFF]*[=+\-@]/.test(s)?"'"+s:s;return '"'+safe.replace(/"/g,'""')+'"';}
