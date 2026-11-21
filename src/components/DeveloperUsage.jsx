@@ -1,5 +1,6 @@
 
 import React, { useState } from "react";
+import DeveloperUsageExplorer from "./DeveloperUsageExplorer.jsx";
 
 export default function DeveloperUsage() {
   const [email, setEmail] = useState("");
@@ -716,7 +717,7 @@ export default function DeveloperUsage() {
                       background: "#047857",
                     }}
                   >
-                    {loading ? "Please wait..." : "Download CSV"}
+                    {loading ? "Please wait..." : "Download Activity CSV"}
                   </button>
 
                   <button
@@ -949,6 +950,12 @@ export default function DeveloperUsage() {
                 </p>
               )}
             </section>
+
+            <DeveloperUsageExplorer
+              email={email}
+              accessToken={accessToken}
+              appliedRange={appliedRange}
+            />
 
             <section style={panelStyle}>
               <h2>Recent Application Activity</h2>
