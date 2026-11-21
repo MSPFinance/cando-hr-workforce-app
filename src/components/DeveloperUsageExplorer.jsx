@@ -108,10 +108,10 @@ export default function DeveloperUsageExplorer({ accessToken, email, appliedRang
           <input style={input} type="search" value={draft.actor}
             onChange={e=>setDraft(f=>({...f,actor:e.target.value}))}
             placeholder="Email / domain" /></label>
-        <label>{mode==="edits"?"Affected employee ID":"Employee name or ID"}
+        <label>{mode==="edits"?"Employee name or numeric ID":"Employee name or ID"}
           <input style={input} type="search" value={draft.employee}
             onChange={e=>setDraft(f=>({...f,employee:e.target.value}))}
-            placeholder={mode==="edits"?"Employee ID":"Name or ID"} /></label>
+            placeholder={mode==="edits"?"Name or numeric ID":"Name or ID"} /></label>
         <label>{mode==="edits"?"Database operation":"Action type"}
           <select style={input} value={draft.action}
             onChange={e=>setDraft(f=>({...f,action:e.target.value}))}>
@@ -139,7 +139,7 @@ export default function DeveloperUsageExplorer({ accessToken, email, appliedRang
       </div>
       <p style={{fontSize:12,color:"#64748b"}}>
         {mode==="edits"
-          ? "These are persisted database audit records. Some have no recorded editor; automated changes are kept separate by source. Filter saved edits by employee ID."
+          ? "These are persisted database audit records. Some have no recorded editor; automated changes are kept separate by source. Saved edits support employee name or numeric ID."
           : "Activity records contain recorded action values, not necessarily the previous field values."}
         {" "}CSV includes every matching record for the selected dates (maximum 10,000 audit records).
       </p>
