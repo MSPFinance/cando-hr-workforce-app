@@ -1,8 +1,10 @@
 
 import React, { useState } from "react";
+import { createClient } from "@supabase/supabase-js";
+const developerSupabase=import.meta.env.VITE_SUPABASE_URL&&import.meta.env.VITE_SUPABASE_ANON_KEY?createClient(import.meta.env.VITE_SUPABASE_URL,import.meta.env.VITE_SUPABASE_ANON_KEY):null;
 
 
-function DetailedAuditPanel({ email, accessToken }) {
+function DetailedAuditPanel({ email, accessToken, sessionToken }) {
   const [filters, setFilters] = useState({start_date:"",end_date:"",actor_email:"",actor_role:"",action_type:"",employee_id:"",decision:"",payable_status:"",source:""});
   const [applied, setApplied] = useState(null);
   const [records, setRecords] = useState([]);
@@ -11,7 +13,7 @@ function DetailedAuditPanel({ email, accessToken }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const fields = [["start_date","Start date","date"],["end_date","End date","date"],["actor_email","Changed by (email)","text"],["actor_role","User role","text"],["action_type","Action type","text"],["employee_id","Employee ID","text"],["decision","Decision","text"],["payable_status","Payable status","text"],["source","Source","text"]];
-  const headers = {"x-developer-email":email.trim().toLowerCase(),"x-usage-access-token":accessToken};
+  const headers = {"x-developer-email":email.trim().toLowerCase(),"x-usage-access-token":accessToken,"Authorization":"Bearer "+sessionToken};
   async function retrieve(nextFilters, nextPage=1) {
     setBusy(true);setError("");
     try {
@@ -53,7 +55,7 @@ function DetailedAuditPanel({ email, accessToken }) {
 }
 
 
-function TimeLogAuditPanel({ email, accessToken }) {
+function TimeLogAuditPanel({ email, accessToken, sessionToken }) {
   const [filters,setFilters]=useState({start_date:"",end_date:"",employee_id:"",actor_email:"",operation:"",time_log_id:""});
   const [applied,setApplied]=useState(null);
   const [rows,setRows]=useState([]);
@@ -62,7 +64,7 @@ function TimeLogAuditPanel({ email, accessToken }) {
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const fields=[["start_date","Start date","date"],["end_date","End date","date"],["employee_id","Employee ID","text"],["actor_email","Changed by email","text"],["operation","Operation (INSERT, UPDATE, DELETE)","text"],["time_log_id","Time log ID","text"]];
-  const headers={"x-developer-email":email.trim().toLowerCase(),"x-usage-access-token":accessToken};
+  const headers={"x-developer-email":email.trim().toLowerCase(),"x-usage-access-token":accessToken,"Authorization":"Bearer "+sessionToken};
   async function load(next,pageNumber=1){
     setBusy(true);setError("");
     try{
@@ -99,6 +101,8 @@ function TimeLogAuditPanel({ email, accessToken }) {
 export default function DeveloperUsage() {
   const [email, setEmail] = useState("");
   const [accessToken, setAccessToken] = useState("");
+  const [developerPassword,setDeveloperPassword]=useState("");
+  const [sessionToken,setSessionToken]=useState("");
 
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -260,6 +264,10 @@ export default function DeveloperUsage() {
         );
       }
 
+      if(!developerSupabase)throw new Error("Supabase Auth is not configured.");
+      const {data:authData,error:authError}=await developerSupabase.auth.signInWithPassword({email:developerEmail,password:developerPassword});
+      if(authError||!authData?.session?.access_token)throw new Error("Supabase developer sign-in failed.");
+      setSessionToken(authData.session.access_token);
       const activity = await loadActivity(
         accessToken,
         developerEmail
@@ -716,6 +724,7 @@ export default function DeveloperUsage() {
                 />
               </div>
 
+              <div style={{ marginBottom: "18px" }}><label htmlFor="developerPassword">Supabase account password</label><input id="developerPassword" type="password" autoComplete="current-password" required value={developerPassword} onChange={event=>setDeveloperPassword(event.target.value)} style={inputStyle} /></div>
               <div style={{ marginBottom: "20px" }}>
                 <label htmlFor="developerToken">
                   Private access token
@@ -958,8 +967,8 @@ export default function DeveloperUsage() {
             </section>
 
 
-            <DetailedAuditPanel email={email} accessToken={accessToken} />
-            <TimeLogAuditPanel email={email} accessToken={accessToken} />
+            <DetailedAuditPanel email={email} accessToken={accessToken} sessionToken={sessionToken} />
+            <TimeLogAuditPanel email={email} accessToken={accessToken} sessionToken={sessionToken} />
 
             {/* Full payroll-period summary */}
             <section style={panelStyle}>
