@@ -14023,7 +14023,7 @@ const timeLogIntegrityFindings = (() => {
   const now = Date.now();
   for (const log of filteredTime) {
     const day = String(log.date || "").slice(0, 10);
-    if (!/^20\\d{2}-\\d{2}-\\d{2}$/.test(day)) continue;
+    if (!/^20\d{2}-\d{2}-\d{2}$/.test(day)) continue;
     const dayMs = Date.parse(day + "T12:00:00Z");
     if (!Number.isFinite(dayMs) || now - dayMs > 46 * 86400000 || dayMs >= now) continue;
     const empId = String(log.employee_id || log.employeeId || "").trim();
