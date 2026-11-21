@@ -158,7 +158,9 @@ function buildParams(f, offset, count) {
       if (/^\d+$/.test(f.employee)) {
         p.set("employee_id", "ilike.*" + f.employee + "*");
       } else {
-        p.set("new_data->>employee_name", "ilike.*" + f.employee + "*");
+        // DELETE rows have only old_data; include both snapshots when searching.
+        p.set("or", "(new_data->>employee_name.ilike.*" + f.employee +
+          "*,old_data->>employee_name.ilike.*" + f.employee + "*)");
       }
     } else {
       p.set("or", "(employee_name.ilike.*" + f.employee +
