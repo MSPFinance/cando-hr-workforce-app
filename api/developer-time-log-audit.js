@@ -5,7 +5,7 @@ const TOKEN=(process.env.APPLICATION_USAGE_ACCESS_TOKEN||"").trim();
 const ALLOWED=new Set((process.env.APPLICATION_USAGE_ALLOWED_EMAILS||"").split(",").map(v=>v.trim().toLowerCase()).filter(Boolean));
 const COLUMNS=["id","changed_at","time_log_id","employee_id","operation","actor_email","actor_role","source","changed_fields","risk_flag","risk_reason"];
 const CSV_COLUMNS=[...COLUMNS,"change_details"];\nconst FETCH_COLUMNS=[...COLUMNS,"old_data","new_data"];
-const SAFE_FIELDS=new Set(["date","status","category","category_start","category_end","clock_in","clock_out","break_start","break_end","duration_minutes","approved","approval_status","approved_by","approved_at","payable_status","locked","edited_at","edited_by","scheduled_start","scheduled_end","sub_status","auto_rule"]);\nfunction sanitize(row){const {old_data,new_data,...safe}=row; if(row.operation==="UPDATE"){const before=old_data||{},after=new_data||{};safe.changed_fields=[...new Set([...Object.keys(before),...Object.keys(after)])].filter(k=>JSON.stringify(before[k])!==JSON.stringify(after[k]));safe.change_details=safe.changed_fields.filter(k=>SAFE_FIELDS.has(k)).map(k=>({field:k,before:before[k]??null,after:after[k]??null}));}else{safe.change_details=[];}return safe;}
+const SAFE_FIELDS=new Set(["date","status","category","category_start","category_end","clock_in","clock_out","break_start","break_end","duration_minutes","approved","approval_status","approved_by","approved_at","payable_status","locked","edited_at","edited_by","scheduled_start","scheduled_end","sub_status","auto_rule"]);\nfunction sanitize(row){const {old_data,new_data,...safe}=row; if(row.operation==="UPDATE"){const before=old_data||{},after=new_data||{};safe.changed_fields=[...new Set([...Object.keys(before),...Object.keys(after)])].filter(k=>SAFE_FIELDS.has(k)&&JSON.stringify(before[k])!==JSON.stringify(after[k]));safe.change_details=safe.changed_fields.filter(k=>SAFE_FIELDS.has(k)).map(k=>({field:k,before:before[k]??null,after:after[k]??null}));}else{safe.change_details=[];}return safe;}
 const DATE=/^\d{4}-\d{2}-\d{2}$/;
 function fail(res,status,error){return res.status(status).json({success:false,error});}
 function csvCell(v){const s=Array.isArray(v)?v.join("; "):String(v??"");const safe=/^[\s\uFEFF]*[=+\-@]/.test(s)?"'"+s:s;return '"'+safe.replace(/"/g,'""')+'"';}
@@ -19,7 +19,7 @@ export default async function handler(req,res){
  const q=req.query||{},start=String(q.start_date||""),end=String(q.end_date||"");
  if(!DATE.test(start)||!DATE.test(end)||start>end||Number.isNaN(Date.parse(start))||Number.isNaN(Date.parse(end)))return fail(res,400,"Valid dates required");
  if(q.format&&!["csv","json"].includes(q.format))return fail(res,400,"Unsupported format");
- const csv=q.format==="csv",size=csv?500:Math.max(1,Math.min(200,Math.floor(Number(q.limit)||100))),page=Math.max(1,Math.min(10000,Math.floor(Number(q.page)||1)));
+ const spanDays=(Date.parse(end)-Date.parse(start))/86400000;if(spanDays>31)return fail(res,400,"Limit audit queries to 32 calendar days.");\n const csv=q.format==="csv",size=csv?500:Math.max(1,Math.min(200,Math.floor(Number(q.limit)||100))),page=Math.max(1,Math.min(10000,Math.floor(Number(q.page)||1)));
  const filters={actor_email:"actor_email",actor_role:"actor_role",employee_id:"employee_id",operation:"operation",source:"source",time_log_id:"time_log_id"};
  const paramsBase=new URLSearchParams({select:FETCH_COLUMNS.join(","),order:"changed_at.desc,id.desc"});
  paramsBase.append("changed_at","gte."+start+"T00:00:00Z");
