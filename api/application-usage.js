@@ -1,3 +1,4 @@
+import { verifyDeveloper } from "./_developer-auth.js";
 const SUPABASE_URL =
   process.env.SUPABASE_URL ||
   process.env.VITE_SUPABASE_URL;
@@ -412,52 +413,8 @@ export default async function handler(
     });
   }
 
-  const developerEmail =
-    normalizeEmail(
-      req.headers[
-        "x-developer-email"
-      ]
-    );
-
-  const suppliedAccessToken =
-    String(
-      req.headers[
-        "x-usage-access-token"
-      ] || ""
-    ).trim();
-
-  /*
-    Both conditions must pass:
-
-    1. Email must be explicitly allowlisted.
-    2. Developer must provide the private
-       server-configured access token.
-
-    Normal Magnemite roles do not grant access.
-  */
-  if (
-    !developerEmail ||
-    !APPLICATION_USAGE_ALLOWED_EMAILS.has(
-      developerEmail
-    )
-  ) {
-    return res.status(403).json({
-      success: false,
-      error:
-        "Developer access is not authorized.",
-    });
-  }
-
-  if (
-    suppliedAccessToken !==
-    APPLICATION_USAGE_ACCESS_TOKEN
-  ) {
-    return res.status(403).json({
-      success: false,
-      error:
-        "Developer access is not authorized.",
-    });
-  }
+  const developer=await verifyDeveloper(req).catch(()=>null);
+  if(!developer)return res.status(403).json({success:false,error:"Verified developer sign-in required."});
 
   try {
     const startDate =
