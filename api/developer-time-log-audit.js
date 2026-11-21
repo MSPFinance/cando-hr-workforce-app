@@ -37,7 +37,7 @@ export default async function handler(req,res){
    if(rows.length+batch.length>20000)return fail(res,413,"Export exceeds 20,000 records; narrow filters.");
    rows.push(...batch);if(batch.length<size)break;
   }
-  const data=[COLUMNS.map(csvCell).join(","),...rows.map(row=>COLUMNS.map(col=>csvCell(row[col])).join(","))].join("\r\n");
+  const data=[CSV_COLUMNS.map(csvCell).join(","),...rows.map(row=>CSV_COLUMNS.map(col=>csvCell(col==="change_details"?JSON.stringify(row.change_details):row[col])).join(","))].join("\r\n");
   res.setHeader("Content-Type","text/csv; charset=utf-8");
   res.setHeader("Content-Disposition",'attachment; filename="Magnemite_Time_Log_Changes_'+start+'_to_'+end+'.csv"');
   res.setHeader("X-Content-Type-Options","nosniff");
