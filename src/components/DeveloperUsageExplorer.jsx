@@ -14,7 +14,7 @@ async function checked(res) {
   throw Error(message);
 }
 
-export default function DeveloperUsageExplorer({ accessToken, email, appliedRange }) {
+export default function DeveloperUsageExplorer({ accessToken, email, appliedRange, developerSupabase }) {
   const [mode, setMode] = useState("edits");
   const [draft, setDraft] = useState(empty);
   const [applied, setApplied] = useState(empty);
@@ -36,19 +36,21 @@ export default function DeveloperUsageExplorer({ accessToken, email, appliedRang
     if (format) p.set("format",format);
     return p;
   }
-  const headers = {
-    "x-developer-email":email.trim().toLowerCase(),
-    "x-usage-access-token":accessToken
-  };
+  async function sessionHeaders() {
+    const {data,error}=await developerSupabase.auth.getSession();
+    if(error||!data?.session?.access_token) throw new Error("Developer session expired. Sign in again.");
+    return {"Authorization":"Bearer "+data.session.access_token,
+      "x-developer-email":email.trim().toLowerCase(),"x-usage-access-token":accessToken};
+  }
 
   useEffect(() => {
     if (mock) return undefined;
     let active = true;
     const controller = new AbortController();
     setLoading(true); setError(""); setExpanded(null);
-    fetch("/api/developer-audit?" + params(), {
+    sessionHeaders().then(headers=>fetch("/api/developer-audit?" + params(), {
       method:"GET",cache:"no-store",headers,signal:controller.signal
-    }).then(checked).then((r) => r.json()).then((data) => {
+    })).then(checked).then((r) => r.json()).then((data) => {
       if (!active) return;
       setRows(Array.isArray(data.rows) ? data.rows : []);
       setMore(Boolean(data.has_more));
@@ -70,7 +72,7 @@ export default function DeveloperUsageExplorer({ accessToken, email, appliedRang
     setExporting(true);setError("");
     try {
       const r = await fetch("/api/developer-audit?" + params("csv"), {
-        method:"GET",cache:"no-store",headers
+        method:"GET",cache:"no-store",headers:await sessionHeaders()
       });
       await checked(r);
       const url = URL.createObjectURL(await r.blob());
