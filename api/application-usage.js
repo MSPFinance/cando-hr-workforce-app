@@ -413,7 +413,8 @@ export default async function handler(
     });
   }
 
-  if (!(await verifyDeveloper(req))) return res.status(403).json({success:false,error:"Developer access is not authorized."});
+  const verifiedDeveloper = await verifyDeveloper(req);
+  if (!verifiedDeveloper) return res.status(403).json({success:false,error:"Developer access is not authorized."});
 
   try {
     const startDate =
@@ -617,7 +618,7 @@ export default async function handler(
         summary,
 
         requested_by:
-          developerEmail,
+          verifiedDeveloper.email,
 
         generated_at:
           new Date().toISOString(),
