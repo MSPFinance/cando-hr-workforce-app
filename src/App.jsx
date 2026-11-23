@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { recordFrontendTiming } from "./lib/frontendPerformance.js";
 import { createClient } from "@supabase/supabase-js";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
@@ -7633,6 +7634,13 @@ const [
   const liveAutoSyncRef = useRef(false);
   const attendanceEmailQueueRef = useRef(new Set());
   const [startupLoading, setStartupLoading] = useState(true);
+  const firstReadyTrackedRef = useRef(false);
+  useEffect(() => {
+    if (isAuthenticated && !startupLoading && !firstReadyTrackedRef.current) {
+      firstReadyTrackedRef.current = true;
+      recordFrontendTiming("authenticated_startup_ready", performance.now());
+    }
+  }, [isAuthenticated, startupLoading]);
   const [selectedTimeLogIds, setSelectedTimeLogIds] = useState([]);
   const [timeLogRefreshRevision, setTimeLogRefreshRevision] = useState(0);
   const [timeLogPage, setTimeLogPage] = useState(0);
@@ -18746,6 +18754,7 @@ return item;
     }
 
     return runProtectedAction(key, `Time entry ${approved}`, async () => {
+      const fullSaveStartedAt = performance.now();
       const latestTimeEntry = timeEntries.find((t) => t.id === id) || timeEntry;
       const updatedTimeEntry = {
         ...latestTimeEntry,
@@ -18773,11 +18782,13 @@ return item;
       } else {
         query = query.eq("id", latestTimeEntry.id);
       }
+      const databaseSaveStartedAt = performance.now();
       const { data: persistedApproval, error: approvalError } = await query.select("id,approval_status,approved,payable_status");
       if (approvalError) throw approvalError;
       if (persistedApproval?.length !== 1 || persistedApproval[0].approval_status !== approved) {
         throw new Error("Time-log approval was not confirmed in Supabase. No success was recorded.");
       }
+      recordFrontendTiming("manager_approval_supabase_confirm", performance.now() - databaseSaveStartedAt);
 
       await googleUpdateRow("timeLogs", "Log_ID", id, mapTimeToSheet(updatedTimeEntry));
 
@@ -18850,6 +18861,7 @@ return item;
         },
       });
       setTimeEntries((current) => current.map((t) => (t.id === id ? updatedTimeEntry : t)));
+      recordFrontendTiming("manager_approval_complete", performance.now() - fullSaveStartedAt);
     });
   }
 
