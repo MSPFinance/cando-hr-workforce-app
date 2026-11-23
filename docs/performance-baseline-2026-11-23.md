@@ -18,7 +18,7 @@ These are measured historical samples and not controlled before/after comparison
 1. Lazy-load the workforce and developer application entrypoints, so Developer-only code is not eagerly included in regular workforce startup.
 2. Run the independent activity page and period-summary reads concurrently for Developer Usage.
 3. Skip the unchanged full-period summary computation for paginated Developer Usage pages beyond the first page.
-4. Remove the redundant agent time-log fetch on realtime channel subscription; an initial fetch is still performed, and realtime events still synchronize subsequent changes.
+4. Coalesce simultaneous agent initial and realtime-subscription reconciliation reads, while retaining a second reconciliation when the first has already completed to protect against missing events.
 
 No database migrations, attendance formulas, time-log write logic, payroll calculations, or approval rules were changed.
 
