@@ -3613,6 +3613,27 @@ function getAutoWorkClassification(
     };
   }
 
+  // A status change after midnight can still belong to yesterday's
+  // approved overnight shift. Evaluate it before early-arrival rules.
+  if (schedule.overnight_shift_from_prior_day) {
+    if (nowMinutes !== null && shiftEnd !== null && nowMinutes > shiftEnd) {
+      return {
+        category: "Overtime",
+        approval: "Pending",
+        payableStatus: "Pending Manager Approval",
+        locked: false,
+        reason: "After approved overnight shift end",
+      };
+    }
+    return {
+      category: "Working",
+      approval: "Auto Logged",
+      payableStatus: "Regular",
+      locked: false,
+      reason: "Within approved overnight shift continuing from prior day",
+    };
+  }
+
   if (
     nowMinutes !== null &&
     shiftStart !== null &&
@@ -3639,28 +3660,6 @@ function getAutoWorkClassification(
     shiftEnd < shiftStart;
 
   if (isOvernightShift) {
-    // When resolved against yesterday's overnight shift, midnight through
-    // the scheduled end is regular time. Only after that is potential OT.
-    if (schedule.overnight_shift_from_prior_day) {
-      if (nowMinutes !== null && nowMinutes > shiftEnd) {
-        return {
-          category: "Overtime",
-          approval: "Pending",
-          payableStatus: "Pending Manager Approval",
-          locked: false,
-          reason: "After approved overnight shift end",
-        };
-      }
-
-      return {
-        category: "Working",
-        approval: "Auto Logged",
-        payableStatus: "Regular",
-        locked: false,
-        reason: "Within approved overnight shift continuing from prior day",
-      };
-    }
-
     // The start-day portion of an overnight shift (e.g. 19:00-23:59)
     // is regular, even though 19:00 is numerically greater than 03:00.
     if (nowMinutes !== null && nowMinutes >= shiftStart) {
@@ -16435,7 +16434,7 @@ if (
   id: `ACT-${Date.now().toString().slice(-6)}`,
   employee_id: selectedEmployee.id,
   employee_name: selectedEmployee.full_name,
-  date: employeeDate,
+  date: workDate,
   action,
   time,
   status: resolvedStatus,
@@ -16452,7 +16451,7 @@ if (
         id: `TIME-${Date.now().toString().slice(-6)}`,
         employee_id: selectedEmployeeTimeLogId,
         employee_name: selectedEmployee.full_name,
-        date: employeeDate,
+        date: workDate,
         scheduled_start: schedule.shift_start,
         scheduled_end: schedule.shift_end,
         schedule_break_1: formatTimeRange(schedule.break_start, schedule.break_end),
