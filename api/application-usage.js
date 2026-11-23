@@ -594,20 +594,15 @@ export default async function handler(
     }
 
 
-    const rows =
-      await supabaseRequest(
-        "v_developer_activity_usage",
-        params.toString()
-      );
-
-    // Calculate totals for the entire selected period.
-    const summary =
-      startDate && endDate
-        ? await loadUsageSummary(
-            startDate,
-            endDate
-          )
-        : null;
+    // Independent reads run concurrently, reducing end-to-end response time.
+    // Totals do not change when users paginate through activity records.
+    const includeSummary = String(req.query?.include_summary || "1") !== "0";
+    const [rows, summary] = await Promise.all([
+      supabaseRequest("v_developer_activity_usage", params.toString()),
+      includeSummary && startDate && endDate
+        ? loadUsageSummary(startDate, endDate)
+        : Promise.resolve(null),
+    ]);
 
     // Return the detailed records and complete summary.
     return res
