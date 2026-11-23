@@ -10607,11 +10607,15 @@ useEffect(() => {
 let cancelled = false;
 
 const reloadLiveLogsOnly = async () => {
+  const refreshStartedAt = performance.now();
   setTimeLogLoading(true);
   setTimeLogLoadError("");
   try {
-    // PostgREST may cap individual requests at 1,000 rows; fetch explicit pages.
-    const pageSize = 500;
+    // Supabase's default maximum API response is 1,000 rows.
+    // Request full supported pages to halve the number of sequential
+    // round trips for a 5,000-row manager view. Retain the same 5,000
+    // record cap and existing employee/date filters for compatibility.
+    const pageSize = 1000;
     const maxRows = 5000;
     const collected = [];
     for (let offset = 0; offset < maxRows; offset += pageSize) {
@@ -10643,6 +10647,7 @@ const reloadLiveLogsOnly = async () => {
     setTimeEntries(normalized);
     setSelectedTimeLogIds([]);
     console.log("Manager time logs refreshed from Supabase:", normalized.length);
+    recordFrontendTiming("manager_time_logs_refresh_complete", performance.now() - refreshStartedAt);
     if (unique.length === maxRows) {
       console.warn("Time log load reached 5,000 rows; narrow employee/date filters for older records.");
     }
@@ -10650,6 +10655,7 @@ const reloadLiveLogsOnly = async () => {
     if (!cancelled) {
       setTimeLogLoadError(error.message || "Unable to refresh time logs.");
       console.error("Manager time log refresh failed:", error);
+      recordFrontendTiming("manager_time_logs_refresh_failed", performance.now() - refreshStartedAt, "failed");
       showToast("Time log refresh failed", error.message || "Please retry.", "danger");
     }
   } finally {
