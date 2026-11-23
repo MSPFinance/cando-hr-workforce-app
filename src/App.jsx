@@ -8618,6 +8618,8 @@ const selectedEmployeeDate = selectedEmployee
   : getAppDateKey();
 
   const [agentTimeLogs, setAgentTimeLogs] = useState([]);
+  // Coalesce simultaneous initial and SUBSCRIBED reads without losing reconciliation.
+  const agentRefreshInFlightRef = useRef(null);
 
 /*
   Use one consistent employee ID for all agent
@@ -8650,6 +8652,11 @@ async function refreshAgentTimeLogs() {
     return [];
   }
 
+  const inFlightKey = String(agentEmployeeTimeLogId);
+  if (agentRefreshInFlightRef.current?.key === inFlightKey) {
+    return agentRefreshInFlightRef.current.promise;
+  }
+  const request = (async () => {
   const {
     data,
     error,
@@ -8732,6 +8739,16 @@ async function refreshAgentTimeLogs() {
   );
 
   return normalizedLogs;
+  })();
+  const activeRequest = { key: inFlightKey, promise: request };
+  agentRefreshInFlightRef.current = activeRequest;
+  try {
+    return await request;
+  } finally {
+    if (agentRefreshInFlightRef.current === activeRequest) {
+      agentRefreshInFlightRef.current = null;
+    }
+  }
 }
 
 const currentOpenStatusLog = useMemo(() => {
@@ -8908,10 +8925,10 @@ useEffect(() => {
         status
       );
 
-      // Initial data is fetched immediately below. Avoid a duplicate
-      // full read on SUBSCRIBED; later changes arrive via Realtime.
-      if (status === "CHANNEL_ERROR" && !cancelled) {
-        console.warn("Agent realtime connection error; manual refresh remains available.");
+      // Reconcile after subscription setup to close the gap between
+      // initial fetch and realtime subscription activation.
+      if (status === "SUBSCRIBED" && !cancelled) {
+        void refreshAgentTimeLogs();
       }
     });
 
