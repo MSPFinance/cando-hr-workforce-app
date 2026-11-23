@@ -120,6 +120,8 @@ export default function DeveloperUsage() {
     const params = new URLSearchParams({
       limit: String(PAGE_SIZE),
       page: String(requestedPage),
+      // Reuse already loaded period totals while paginating.
+      include_summary: requestedPage > 1 ? "0" : "1",
     });
 
         // Use the reporting period currently applied.
@@ -146,7 +148,9 @@ export default function DeveloperUsage() {
     }
 
     // Complete totals for the selected payroll period.
-    setSummary(result.summary ?? null);
+    if (result.summary !== null && result.summary !== undefined) {
+      setSummary(result.summary);
+    }
 
     // Current page and availability of additional records.
     setPage(result.page ?? requestedPage);
