@@ -17149,10 +17149,16 @@ setTimeEntries((current) => [
       priorLocalDate.getUTCDate() - 1
     );
 
-    const overnightCandidateDates = [
+    // The status segment may begin after midnight, or slightly before the
+    // approved shift start. Prefer its recorded work date as another anchor.
+    // This does not change the payroll date or any existing time log.
+    const overnightCandidateDates = [...new Set([
       priorLocalDate.toISOString().slice(0, 10),
       openLogDate,
-    ];
+      /^\d{4}-\d{2}-\d{2}$/.test(String(openLog.date || ""))
+        ? String(openLog.date)
+        : null,
+    ].filter(Boolean))];
 
     for (const shiftDate of overnightCandidateDates) {
       const shiftDay = new Date(
@@ -17207,8 +17213,13 @@ setTimeEntries((current) => [
         )
       );
 
+      // Allow a legitimate early clock-in to retain overnight protection.
+      // A two-hour maximum prevents unrelated earlier shifts from matching.
+      const earliestEligibleStart = new Date(
+        scheduledStart.getTime() - 2 * 60 * 60 * 1000
+      );
       if (
-        startTimestamp >= scheduledStart &&
+        startTimestamp >= earliestEligibleStart &&
         startTimestamp < scheduledEnd
       ) {
         overnightScheduledEnd = scheduledEnd;
