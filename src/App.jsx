@@ -10478,20 +10478,27 @@ useEffect(() => {
   };
 
   const loadAuthenticatedData = async () => {
-  await Promise.all([
-    loadScheduleExceptions(),
-    loadCountryHolidays(),
-    loadScheduleVersions(),
-    loadAuthenticatedScheduleData(),
-  ]);
-};
+    // Manager startup already loads exceptions, holidays, and breaks
+    // through refreshLiveData(). Keep full loading for Agent Portal,
+    // which does not enter that manager-only startup path.
+    if (isAgentOnly) {
+      await Promise.all([
+        loadScheduleExceptions(),
+        loadCountryHolidays(),
+        loadScheduleVersions(),
+        loadAuthenticatedScheduleData(),
+      ]);
+      return;
+    }
+    await loadScheduleVersions();
+  };
 
 loadAuthenticatedData();
 
 return () => {
   cancelled = true;
 };
-}, [supabase, isAuthenticated]);
+}, [supabase, isAuthenticated, isAgentOnly]);
 
 useEffect(() => {
   if (
