@@ -7634,13 +7634,7 @@ const [
   const liveAutoSyncRef = useRef(false);
   const attendanceEmailQueueRef = useRef(new Set());
   const [startupLoading, setStartupLoading] = useState(true);
-  const firstReadyTrackedRef = useRef(false);
-  useEffect(() => {
-    if (isAuthenticated && !startupLoading && !firstReadyTrackedRef.current) {
-      firstReadyTrackedRef.current = true;
-      recordFrontendTiming("authenticated_startup_ready", performance.now());
-    }
-  }, [isAuthenticated, startupLoading]);
+
   const [selectedTimeLogIds, setSelectedTimeLogIds] = useState([]);
   const [timeLogRefreshRevision, setTimeLogRefreshRevision] = useState(0);
   const [timeLogPage, setTimeLogPage] = useState(0);
@@ -8293,6 +8287,15 @@ const isAuthenticated =
       currentUser &&
       isActiveEmployee(currentUser)
   );
+
+  // Measure startup only after the authenticated state is initialized.
+  const firstReadyTrackedRef = useRef(false);
+  useEffect(() => {
+    if (isAuthenticated && !startupLoading && !firstReadyTrackedRef.current) {
+      firstReadyTrackedRef.current = true;
+      recordFrontendTiming("authenticated_startup_ready", performance.now());
+    }
+  }, [isAuthenticated, startupLoading]);
 
 const userRole = normalizeAccessRole(
   currentUser?.access_level ||
