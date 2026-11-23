@@ -3631,7 +3631,51 @@ function getAutoWorkClassification(
     };
   }
 
+  // Overnight shifts end on the following calendar day. The local clock
+  // cannot be compared directly to the next-day end as though it were today.
+  const isOvernightShift =
+    shiftStart !== null &&
+    shiftEnd !== null &&
+    shiftEnd < shiftStart;
+
+  if (isOvernightShift) {
+    // When resolved against yesterday's overnight shift, midnight through
+    // the scheduled end is regular time. Only after that is potential OT.
+    if (schedule.overnight_shift_from_prior_day) {
+      if (nowMinutes !== null && nowMinutes > shiftEnd) {
+        return {
+          category: "Overtime",
+          approval: "Pending",
+          payableStatus: "Pending Manager Approval",
+          locked: false,
+          reason: "After approved overnight shift end",
+        };
+      }
+
+      return {
+        category: "Working",
+        approval: "Auto Logged",
+        payableStatus: "Regular",
+        locked: false,
+        reason: "Within approved overnight shift continuing from prior day",
+      };
+    }
+
+    // The start-day portion of an overnight shift (e.g. 19:00-23:59)
+    // is regular, even though 19:00 is numerically greater than 03:00.
+    if (nowMinutes !== null && nowMinutes >= shiftStart) {
+      return {
+        category: "Working",
+        approval: "Auto Logged",
+        payableStatus: "Regular",
+        locked: false,
+        reason: "Within approved overnight shift",
+      };
+    }
+  }
+
   if (
+    !isOvernightShift &&
     nowMinutes !== null &&
     shiftEnd !== null &&
     nowMinutes > shiftEnd
@@ -16148,15 +16192,49 @@ const employeeDay =
     now
   );
 
-const schedule =
-  getStableSchedule(
-    selectedEmployee,
-    scheduleVersions,
-    employeeDay,
-    employeeBreakRows,
-    scheduleExceptions,
-    employeeDate
-  );
+// An overnight shift spanning midnight belongs to the previous workday.
+const previousWorkday = new Date(`${employeeDate}T12:00:00Z`);
+previousWorkday.setUTCDate(previousWorkday.getUTCDate() - 1);
+const previousWorkDateKey = previousWorkday.toISOString().slice(0, 10);
+const previousDayName = WEEK_DAYS[previousWorkday.getUTCDay()];
+const priorSchedule = getStableSchedule(
+  selectedEmployee,
+  scheduleVersions,
+  previousDayName,
+  employeeBreakRows,
+  scheduleExceptions,
+  previousWorkDateKey
+);
+const priorStartMinutes = timeToMinutes(priorSchedule?.shift_start);
+const priorEndMinutes = timeToMinutes(priorSchedule?.shift_end);
+const currentMinutes = timeToMinutes(time);
+const previousShiftIsOvernight =
+  priorSchedule?.is_scheduled !== false &&
+  priorStartMinutes !== null &&
+  priorEndMinutes !== null &&
+  priorEndMinutes < priorStartMinutes;
+
+// Keep the previous shift in scope for up to two hours after scheduled end,
+// so additional work is pending manager overtime approval rather than
+// misclassified as work on today's separate shift.
+const isContinuingPreviousOvernight =
+  previousShiftIsOvernight &&
+  currentMinutes !== null &&
+  currentMinutes <= priorEndMinutes + 120;
+
+const workDate = isContinuingPreviousOvernight
+  ? previousWorkDateKey
+  : employeeDate;
+const schedule = isContinuingPreviousOvernight
+  ? { ...priorSchedule, overnight_shift_from_prior_day: true }
+  : getStableSchedule(
+      selectedEmployee,
+      scheduleVersions,
+      employeeDay,
+      employeeBreakRows,
+      scheduleExceptions,
+      employeeDate
+    );
 
 const autoClass =
   getAutoWorkClassification(
