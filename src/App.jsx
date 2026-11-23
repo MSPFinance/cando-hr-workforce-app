@@ -5263,6 +5263,22 @@ function mergeSupabaseEmployeeData(baseEmployees = [], supabaseEmployees = [], b
   return merged;
 }
 
+// Two startup flows can request the same identity/balance snapshot at once.
+// Share only the in-flight network calls; never cache completed responses,
+// change access policy, or suppress a later authorized refresh.
+let referenceSnapshotInFlight = null;
+function readEmployeeReferenceSnapshot() {
+  if (!referenceSnapshotInFlight) {
+    referenceSnapshotInFlight = Promise.all([
+      supabase.from("employees").select("*"),
+      supabase.from("employee_balances").select("*"),
+    ]).finally(() => {
+      referenceSnapshotInFlight = null;
+    });
+  }
+  return referenceSnapshotInFlight;
+}
+
 async function loadSupabaseReferenceData(
   baseEmployees = [],
   applyEmployees,
@@ -5271,18 +5287,8 @@ async function loadSupabaseReferenceData(
   if (!supabase) return false;
 
   try {
-    const [
-  employeeResult,
-  balanceResult,
-] = await Promise.all([
-  supabase
-    .from("employees")
-    .select("*"),
-
-  supabase
-    .from("employee_balances")
-    .select("*"),
-]);
+    const [employeeResult, balanceResult] =
+      await readEmployeeReferenceSnapshot();
 
 const supabaseEmployees =
   employeeResult.data || [];
