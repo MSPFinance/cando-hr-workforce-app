@@ -13,7 +13,9 @@ async function sessionHeaders(email, token) {
 export default function DeveloperUsage() {
   const [email, setEmail] = useState("");
   const [accessToken, setAccessToken] = useState("");
-  const [password, setPassword] = useState("");
+  const [emailCode, setEmailCode] = useState("");
+  const [emailSent, setEmailSent] = useState(false);
+  const [authNotice, setAuthNotice] = useState("");
 
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -157,39 +159,46 @@ export default function DeveloperUsage() {
   }
 
 
+  async function sendDeveloperEmail(event) {
+    event.preventDefault();
+    setError(""); setAuthNotice(""); setLoading(true);
+    try {
+      if(!developerSupabase) throw new Error("Supabase authentication is not configured.");
+      const developerEmail=email.trim().toLowerCase();
+      if(!developerEmail||!accessToken) throw new Error("Enter your approved email and private access token first.");
+      // Do not create an Auth account for an unrecognized email.
+      const {error:otpError}=await developerSupabase.auth.signInWithOtp({
+        email:developerEmail,
+        options:{shouldCreateUser:false,emailRedirectTo:window.location.origin+"/developer/usage"}
+      });
+      if(otpError) throw otpError;
+      setEmailSent(true);
+      setAuthNotice("Check your email for a secure sign-in link. After opening it, return to this page and connect. If your email contains a one-time code, you can enter it below.");
+    } catch(err){setError(err.message||"Unable to send sign-in email.");}
+    finally{setLoading(false);}
+  }
+
   async function handleConnect(event) {
     event.preventDefault();
-
-    setError("");
-    setLoading(true);
-
+    setError(""); setLoading(true);
     try {
-      const developerEmail = email.trim().toLowerCase();
-
-      if (!developerEmail || !accessToken) {
-        throw new Error(
-          "Enter your approved email and access token."
-        );
+      const developerEmail=email.trim().toLowerCase();
+      if(!developerEmail||!accessToken) throw new Error("Enter your approved email and private access token.");
+      if(!developerSupabase) throw new Error("Supabase authentication is not configured.");
+      if(emailCode.trim()){
+        const {error:verifyError}=await developerSupabase.auth.verifyOtp({
+          email:developerEmail,token:emailCode.trim(),type:"email"
+        });
+        if(verifyError) throw verifyError;
       }
-
-      if (!developerSupabase) throw new Error("Supabase authentication is not configured.");
-      const {data:login,error:loginError}=await developerSupabase.auth.signInWithPassword({email:developerEmail,password});
-      if(loginError||!login?.session) throw new Error(loginError?.message||"Developer login failed.");
-      setPassword("");
-      const activity = await loadActivity(
-        accessToken,
-        developerEmail
-      );
-
-      setRows(activity);
-      setConnected(true);
-    } catch (err) {
-      setError(err.message || "Connection failed.");
-      setConnected(false);
-      setRows([]);
-    } finally {
-      setLoading(false);
-    }
+      const {data,error:sessionError}=await developerSupabase.auth.getSession();
+      if(sessionError||!data?.session) throw new Error("First click Send secure sign-in email, then open the link and return here.");
+      if(data.session.user?.email?.trim().toLowerCase()!==developerEmail)
+        throw new Error("The signed-in account does not match the approved developer email.");
+      const activity=await loadActivity(accessToken,developerEmail);
+      setRows(activity);setConnected(true);setEmailCode("");setAuthNotice("");
+    } catch(err){setError(err.message||"Connection failed.");setConnected(false);setRows([]);}
+    finally{setLoading(false);}
   }
 
     async function handleConnectWithTestData() {
@@ -648,11 +657,16 @@ export default function DeveloperUsage() {
               </div>
 
               <div style={{marginBottom:"20px"}}>
-                <label htmlFor="developerPassword">Magnemite account password</label>
-                <input id="developerPassword" type="password" autoComplete="current-password" required value={password}
-                  onChange={(event)=>setPassword(event.target.value)} style={inputStyle} />
+                <button type="button" onClick={sendDeveloperEmail} disabled={loading||!email.trim()||!accessToken}
+                  style={buttonStyle}>Send secure sign-in email</button>
               </div>
-
+              {authNotice && <p role="status" style={{color:"#166534"}}>{authNotice}</p>}
+              {emailSent && <div style={{marginBottom:"20px"}}>
+                <label htmlFor="developerEmailCode">One-time email code (only if included in your email)</label>
+                <input id="developerEmailCode" type="text" inputMode="numeric" autoComplete="one-time-code"
+                  value={emailCode} onChange={(event)=>setEmailCode(event.target.value)}
+                  style={inputStyle} placeholder="Optional — use the email link instead" />
+              </div>}
               {error && (
                 <p role="alert" style={{ color: "#b91c1c" }}>
                   {error}
