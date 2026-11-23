@@ -51,7 +51,7 @@ async function actorDirectory() {
 function matchingActorEmails(f,directory) {
   if(!f.actorName&&!f.actorAccess)return null;
   return directory.filter(r=>(!f.actorName||r.name.toLowerCase().includes(f.actorName.toLowerCase()))&&
-    (!f.actorAccess||r.access===f.actorAccess)).map(r=>r.email);
+    (!f.actorAccess||r.access===f.actorAccess)&&(!f.actor||r.email.includes(f.actor.toLowerCase()))).map(r=>r.email);
 }
 
 
