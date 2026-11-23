@@ -4,7 +4,7 @@ const panel = { background:"#fff",border:"1px solid #e2e8f0",borderRadius:12,pad
 const input = { width:"100%",padding:10,border:"1px solid #cbd5e1",borderRadius:7,marginTop:5,boxSizing:"border-box" };
 const button = { padding:"10px 12px",border:0,borderRadius:7,color:"#fff",background:"#2563eb",cursor:"pointer" };
 const cell = { textAlign:"left",padding:10,borderBottom:"1px solid #e2e8f0",verticalAlign:"top",fontSize:13 };
-const empty = () => ({ actor:"",employee:"",action:"",source:"" });
+const empty = () => ({ actor:"",actor_name:"",actor_access:"",employee:"",action:"",source:"" });
 
 async function checked(res) {
   if (res.ok) return res;
@@ -104,6 +104,16 @@ export default function DeveloperUsageExplorer({ accessToken, email, appliedRang
         )}
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12,marginBottom:16}}>
+        <label>Changed By — TL / Manager name
+          <input style={input} type="search" value={draft.actor_name}
+            onChange={e=>setDraft(f=>({...f,actor_name:e.target.value}))}
+            placeholder="Search recorded editor name" /></label>
+        <label>Changed By — current access level
+          <select style={input} value={draft.actor_access}
+            onChange={e=>setDraft(f=>({...f,actor_access:e.target.value}))}>
+            <option value="">All access levels</option>
+            {["Team Leader","Manager","Operations Manager","Q&T Manager"].map(role=><option key={role} value={role}>{role}</option>)}
+          </select></label>
         <label>User email (partial)
           <input style={input} type="search" value={draft.actor}
             onChange={e=>setDraft(f=>({...f,actor:e.target.value}))}
@@ -139,7 +149,7 @@ export default function DeveloperUsageExplorer({ accessToken, email, appliedRang
       </div>
       <p style={{fontSize:12,color:"#64748b"}}>
         {mode==="edits"
-          ? "These are persisted database audit records. Some have no recorded editor; automated changes are kept separate by source. Saved edits support employee name or numeric ID."
+          ? "These are persisted database audit records. The Changed By name and current access level are matched from the employee directory using the recorded actor email. This does not independently verify the historical editor. Some records have no recorded editor; automated changes remain separate by source. Saved edits support employee name or numeric ID."
           : "Activity records contain recorded action values, not necessarily the previous field values."}
         {" "}CSV includes every matching record for the selected dates (maximum 10,000 audit records).
       </p>
@@ -147,14 +157,16 @@ export default function DeveloperUsageExplorer({ accessToken, email, appliedRang
       {loading && <p style={{color:"#64748b"}}>Loading detailed records...</p>}
       <div style={{overflowX:"auto"}}>
         <table style={{width:"100%",borderCollapse:"collapse"}}>
-          <thead><tr>{["Date / Time (CR)","User","Action","Affected Employee","Source","Details"].map(h=>
+          <thead><tr>{["Date / Time (CR)","Changed By","Action","Affected Employee","Source","Details"].map(h=>
             <th key={h} style={cell}>{h}</th>)}</tr></thead>
           <tbody>{rows.map(row=>
             <React.Fragment key={mode+"-"+row.id}>
               <tr>
                 <td style={cell}>{row.datetime}</td>
-                <td style={cell}><strong>{row.actor||"Not recorded"}</strong>
-                  {row.role && <div style={{color:"#64748b"}}>{row.role}</div>}</td>
+                <td style={cell}><strong>{row.actor_name||row.actor||"Not recorded / System"}</strong>
+                  {row.actor_name&&row.actor_email&&<div style={{color:"#64748b"}}>{row.actor_email}</div>}
+                  {row.actor_access&&<div style={{color:"#64748b"}}>Current access: {row.actor_access}</div>}
+                  {row.actor_attribution&&<div style={{fontSize:11,color:"#64748b"}}>{row.actor_attribution}</div>}</td>
                 <td style={cell}>{row.action}
                   {row.risk_flag && <div style={{color:"#b91c1c"}}>Risk flagged</div>}</td>
                 <td style={cell}>{row.employee||"Not recorded"}
