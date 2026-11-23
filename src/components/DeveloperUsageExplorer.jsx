@@ -112,7 +112,7 @@ export default function DeveloperUsageExplorer({ accessToken, email, appliedRang
           <select style={input} value={draft.actor_access}
             onChange={e=>setDraft(f=>({...f,actor_access:e.target.value}))}>
             <option value="">All access levels</option>
-            {["Team Leader","Manager","Operations Manager","Q&T Manager"].map(role=><option key={role} value={role}>{role}</option>)}
+            {["TL / Manager","Team Leader","Manager","Operations Manager","Q&T Manager"].map(role=><option key={role} value={role}>{role}</option>)}
           </select></label>
         <label>User email (partial)
           <input style={input} type="search" value={draft.actor}
