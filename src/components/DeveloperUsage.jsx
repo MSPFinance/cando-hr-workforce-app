@@ -1,10 +1,19 @@
+import { createClient } from "@supabase/supabase-js";
 
 import React, { useState } from "react";
 import DeveloperUsageExplorer from "./DeveloperUsageExplorer.jsx";
 
+const developerSupabase = import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY
+  ? createClient(import.meta.env.VITE_SUPABASE_URL,import.meta.env.VITE_SUPABASE_ANON_KEY) : null;
+async function sessionHeaders(email, token) {
+  const {data,error}=await developerSupabase.auth.getSession();
+  if(error||!data?.session?.access_token) throw new Error("Developer login expired. Sign in again.");
+  return {"Authorization":"Bearer "+data.session.access_token,"x-developer-email":email.trim().toLowerCase(),"x-usage-access-token":token};
+}
 export default function DeveloperUsage() {
   const [email, setEmail] = useState("");
   const [accessToken, setAccessToken] = useState("");
+  const [password, setPassword] = useState("");
 
   const [connected, setConnected] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -122,10 +131,7 @@ export default function DeveloperUsage() {
       {
         method: "GET",
         cache: "no-store",
-        headers: {
-          "x-developer-email": developerEmail,
-          "x-usage-access-token": token,
-        },
+        headers: await sessionHeaders(developerEmail,token),
       }
     );
 
@@ -166,6 +172,10 @@ export default function DeveloperUsage() {
         );
       }
 
+      if (!developerSupabase) throw new Error("Supabase authentication is not configured.");
+      const {data:login,error:loginError}=await developerSupabase.auth.signInWithPassword({email:developerEmail,password});
+      if(loginError||!login?.session) throw new Error(loginError?.message||"Developer login failed.");
+      setPassword("");
       const activity = await loadActivity(
         accessToken,
         developerEmail
@@ -487,11 +497,7 @@ export default function DeveloperUsage() {
         {
           method: "GET",
           cache: "no-store",
-          headers: {
-            "x-developer-email":
-              email.trim().toLowerCase(),
-            "x-usage-access-token": accessToken,
-          },
+          headers: await sessionHeaders(email,accessToken),
         }
       );
 
@@ -639,6 +645,12 @@ export default function DeveloperUsage() {
                   style={inputStyle}
                   placeholder="Enter your private token"
                 />
+              </div>
+
+              <div style={{marginBottom:"20px"}}>
+                <label htmlFor="developerPassword">Magnemite account password</label>
+                <input id="developerPassword" type="password" autoComplete="current-password" required value={password}
+                  onChange={(event)=>setPassword(event.target.value)} style={inputStyle} />
               </div>
 
               {error && (
@@ -954,6 +966,7 @@ export default function DeveloperUsage() {
             <DeveloperUsageExplorer
               email={email}
               accessToken={accessToken}
+              developerSupabase={developerSupabase}
               appliedRange={appliedRange}
             />
 

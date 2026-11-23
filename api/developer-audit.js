@@ -1,3 +1,4 @@
+import { verifyDeveloper } from "./_developer-auth.js";
 /*
  * Developer-only, read-only explorer of saved Magnemite activity and time-log
  * audit records. The service key never leaves the server.
@@ -263,7 +264,7 @@ export default async function handler(req, res) {
     res.setHeader("Allow", "GET");
     return res.status(405).json({ success: false, error: "Method not allowed." });
   }
-  if (!authorized(req))
+  if (!(await verifyDeveloper(req)))
     return res.status(403).json({ success: false, error: "Developer access not authorized." });
   let f;
   try {
