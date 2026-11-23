@@ -196,7 +196,7 @@ function buildParams(f, offset, count, actorEmails) {
 async function queryRows(f, offset, limit, directory) {
   const emails=matchingActorEmails(f,directory);
   if(emails&&emails.length===0)return [];
-  const table = f.mode === "edits" ? "time_log_audit" : "v_app_usage_activity";
+  const table = f.mode === "edits" ? "v_developer_activity_edits" : "v_developer_activity_usage";
   const url = SUPABASE_URL + "/rest/v1/" + table + "?" + buildParams(f, offset, limit, emails);
   const result = await fetch(url, {
     headers: {

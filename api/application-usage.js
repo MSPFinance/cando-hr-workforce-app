@@ -323,7 +323,7 @@ async function loadAllUsageRows(startDate, endDate) {
     );
 
     const batch = await supabaseRequest(
-      "v_app_usage_activity",
+      "v_developer_activity_usage",
       params.toString()
     );
 
@@ -596,7 +596,7 @@ export default async function handler(
 
     const rows =
       await supabaseRequest(
-        "v_app_usage_activity",
+        "v_developer_activity_usage",
         params.toString()
       );
 
