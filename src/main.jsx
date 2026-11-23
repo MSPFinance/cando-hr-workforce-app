@@ -2,8 +2,8 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 
-import App from "./App.jsx";
-import DeveloperUsage from "./components/DeveloperUsage.jsx";
+const App = React.lazy(() => import("./App.jsx"));
+const DeveloperUsage = React.lazy(() => import("./components/DeveloperUsage.jsx"));
 
 import "./index.css";
 
@@ -21,10 +21,8 @@ const isDeveloperUsagePage =
 
 createRoot(rootElement).render(
   <React.StrictMode>
-    {isDeveloperUsagePage ? (
-      <DeveloperUsage />
-    ) : (
-      <App />
-    )}
+    <React.Suspense fallback={<div role="status" style={{ padding: 24, fontFamily: "Arial, sans-serif" }}>Loading Magnemite…</div>}>
+      {isDeveloperUsagePage ? <DeveloperUsage /> : <App />}
+    </React.Suspense>
   </React.StrictMode>
 );
