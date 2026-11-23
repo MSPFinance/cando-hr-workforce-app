@@ -32,7 +32,13 @@ import {
 
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
-const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+// Keep the workforce client separate from Developer Usage OTP sessions.
+// The latter must never change the workforce PostgREST role in this tab.
+const supabase = SUPABASE_URL && SUPABASE_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_KEY, {
+      auth: { storageKey: "magnemite-workforce-auth-v1" },
+    })
+  : null;
 
 const APP_TIME_ZONE = "America/Costa_Rica";
 

@@ -4,7 +4,10 @@ import React, { useState } from "react";
 import DeveloperUsageExplorer from "./DeveloperUsageExplorer.jsx";
 
 const developerSupabase = import.meta.env.VITE_SUPABASE_URL && import.meta.env.VITE_SUPABASE_ANON_KEY
-  ? createClient(import.meta.env.VITE_SUPABASE_URL,import.meta.env.VITE_SUPABASE_ANON_KEY) : null;
+  ? createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY, {
+      auth: { storageKey: "magnemite-developer-auth-v1" },
+    })
+  : null;
 async function sessionHeaders(email, token) {
   const {data,error}=await developerSupabase.auth.getSession();
   if(error||!data?.session?.access_token) throw new Error("Developer login expired. Sign in again.");
