@@ -8908,12 +8908,11 @@ useEffect(() => {
         status
       );
 
-      if (
-  status === "SUBSCRIBED" &&
-  !cancelled
-) {
-  void refreshAgentTimeLogs();
-}
+      // Initial data is fetched immediately below. Avoid a duplicate
+      // full read on SUBSCRIBED; later changes arrive via Realtime.
+      if (status === "CHANNEL_ERROR" && !cancelled) {
+        console.warn("Agent realtime connection error; manual refresh remains available.");
+      }
     });
 
   /*
