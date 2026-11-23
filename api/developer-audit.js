@@ -51,7 +51,7 @@ async function actorDirectory() {
 function matchingActorEmails(f,directory) {
   if(!f.actorName&&!f.actorAccess)return null;
   return directory.filter(r=>(!f.actorName||r.name.toLowerCase().includes(f.actorName.toLowerCase()))&&
-    (!f.actorAccess||r.access===f.actorAccess)&&(!f.actor||r.email.includes(f.actor.toLowerCase()))).map(r=>r.email);
+    (!f.actorAccess||(f.actorAccess==="TL / Manager"?["Team Leader","Manager","Operations Manager","Q&T Manager"].includes(r.access):r.access===f.actorAccess))&&(!f.actor||r.email.includes(f.actor.toLowerCase()))).map(r=>r.email);
 }
 
 
@@ -143,7 +143,7 @@ function filtersForRequest(req) {
   const actor = safeText(req.query?.actor, "user");
   const actorName = safeText(req.query?.actor_name, "changed by name");
   const actorAccess = String(req.query?.actor_access||"");
-  if(actorAccess&&!["Team Leader","Manager","Operations Manager","Q&T Manager"].includes(actorAccess))throw new Error("Invalid role filter.");
+  if(actorAccess&&!["TL / Manager","Team Leader","Manager","Operations Manager","Q&T Manager"].includes(actorAccess))throw new Error("Invalid role filter.");
   const employee = safeText(req.query?.employee, "employee");
   const action = safeText(req.query?.action, "action");
   const source = safeText(req.query?.source, "source");
