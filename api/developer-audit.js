@@ -38,6 +38,22 @@ const EVENT_COLUMNS = [
   "target_record_id", "target_table", "records_affected", "source", "metadata"
 ];
 const MAX_EXPORT_RECORDS = 10000;
+async function actorDirectory() {
+  const url=SUPABASE_URL+"/rest/v1/employees?select=email,full_name,access_level&limit=1000";
+  const response=await fetch(url,{headers:{apikey:SERVICE_KEY,Authorization:"Bearer "+SERVICE_KEY},cache:"no-store"});
+  if(!response.ok)throw new Error("Unable to resolve employee directory.");
+  const records=await response.json();
+  return Array.isArray(records)?records.filter(r=>r.email).map(r=>({
+    email:String(r.email).trim().toLowerCase(),name:String(r.full_name||"").trim(),
+    access:String(r.access_level||"").trim()
+  })):[];
+}
+function matchingActorEmails(f,directory) {
+  if(!f.actorName&&!f.actorAccess)return null;
+  return directory.filter(r=>(!f.actorName||r.name.toLowerCase().includes(f.actorName.toLowerCase()))&&
+    (!f.actorAccess||(f.actorAccess==="TL / Manager"?["Team Leader","Manager","Operations Manager","Q&T Manager"].includes(r.access):r.access===f.actorAccess))&&(!f.actor||r.email.includes(f.actor.toLowerCase()))).map(r=>r.email);
+}
+
 
 function authorized(req) {
   const email = String(req.headers["x-developer-email"] || "").trim().toLowerCase();
@@ -125,6 +141,9 @@ function filtersForRequest(req) {
   if ((start && !validDate(start)) || (end && !validDate(end)) ||
       (start && end && start > end)) throw new Error("Invalid date range.");
   const actor = safeText(req.query?.actor, "user");
+  const actorName = safeText(req.query?.actor_name, "changed by name");
+  const actorAccess = String(req.query?.actor_access||"");
+  if(actorAccess&&!["TL / Manager","Team Leader","Manager","Operations Manager","Q&T Manager"].includes(actorAccess))throw new Error("Invalid role filter.");
   const employee = safeText(req.query?.employee, "employee");
   const action = safeText(req.query?.action, "action");
   const source = safeText(req.query?.source, "source");
@@ -133,10 +152,10 @@ function filtersForRequest(req) {
         "Time Log Corrected", "Bulk Time Logs Approved", "Request Approved",
         "Request Denied", "PTO Historical Balance Reconciled"
       ].includes(action)))) throw new Error("Invalid action type.");
-  return { mode, start, end, actor, employee, action, source };
+  return { mode, start, end, actor, actorName, actorAccess, employee, action, source };
 }
 
-function buildParams(f, offset, count) {
+function buildParams(f, offset, count, actorEmails) {
   const p = new URLSearchParams();
   const edits = f.mode === "edits";
   p.set("select", (edits ? AUDIT_COLUMNS : EVENT_COLUMNS).join(","));
@@ -151,6 +170,7 @@ function buildParams(f, offset, count) {
     if (f.end) p.append("activity_date", "lte." + f.end);
   }
   if (f.actor) p.set("actor_email", "ilike.*" + f.actor + "*");
+  if (actorEmails) p.set("actor_email","in.("+actorEmails.map(email=>JSON.stringify(email)).join(",")+")");
   if (f.employee) {
     if (edits) {
       // Numeric searches use employee_id; names use the saved JSON snapshot.
@@ -172,9 +192,11 @@ function buildParams(f, offset, count) {
   return p;
 }
 
-async function queryRows(f, offset, limit) {
+async function queryRows(f, offset, limit, directory) {
+  const emails=matchingActorEmails(f,directory);
+  if(emails&&emails.length===0)return [];
   const table = f.mode === "edits" ? "time_log_audit" : "v_app_usage_activity";
-  const url = SUPABASE_URL + "/rest/v1/" + table + "?" + buildParams(f, offset, limit);
+  const url = SUPABASE_URL + "/rest/v1/" + table + "?" + buildParams(f, offset, limit, emails);
   const result = await fetch(url, {
     headers: {
       apikey: SERVICE_KEY,
@@ -191,7 +213,7 @@ async function queryRows(f, offset, limit) {
   }
   const data = await result.json();
   if (!Array.isArray(data)) throw new Error("Unexpected audit response.");
-  return data.map((row) => mapRow(row, f.mode));
+  return data.map((row) => {const mapped=mapRow(row,f.mode);const person=directory.find(d=>d.email===String(row.actor_email||"").toLowerCase());mapped.actor_name=person?.name||"";mapped.actor_access=person?.access||"";mapped.actor_attribution= row.actor_email ? (row.source==="row_actor_metadata"?"Recorded row metadata":"Recorded actor") : "Unattributed / system";return mapped;});
 }
 
 function csvCell(value) {
@@ -202,7 +224,7 @@ function csvCell(value) {
 
 function csvFile(rows, mode) {
   const columns = [
-    "Date / Time (Costa Rica)", "User", "User Email", "Role", "Action",
+    "Date / Time (Costa Rica)", "User", "User Email", "Current Access Level", "Attribution", "Role", "Action",
     "Affected Employee", "Employee ID", "Saved Record ID", "Source",
     "Records Affected", "Detail Type", "Field", "Before", "After / Recorded",
     "Risk Flag", "Risk Reason"
@@ -222,7 +244,7 @@ function csvFile(rows, mode) {
       "Saved audit event (no tracked fields changed)" : "Activity event",
       field: "", before: "", after: "" }]) {
       lines.push([
-        row.datetime, row.actor, row.actor_email, row.role, row.action,
+        row.datetime, row.actor_name||row.actor, row.actor_email, row.actor_access, row.actor_attribution, row.role, row.action,
         row.employee, row.employee_id, row.record_id, row.source, row.count,
         d.type, d.field, d.before, d.after, row.risk_flag || false,
         row.risk_reason || ""
@@ -250,13 +272,14 @@ export default async function handler(req, res) {
     return res.status(400).json({ success: false, error: error.message });
   }
   try {
+    const directory=await actorDirectory();
     if (req.query?.format === "csv") {
       if (!f.start || !f.end) return res.status(400).json({
         success: false, error: "Select a start and end date before exporting."
       });
       const all = [];
       while (true) {
-        const batch = await queryRows(f, all.length, 500);
+        const batch = await queryRows(f, all.length, 500, directory);
         if (all.length + batch.length > MAX_EXPORT_RECORDS)
           return res.status(413).json({
             success: false,
@@ -273,7 +296,7 @@ export default async function handler(req, res) {
     }
     const page = Math.min(5000, Math.max(1, Math.floor(Number(req.query?.page) || 1)));
     const requested = Math.min(100, Math.max(1, Math.floor(Number(req.query?.limit) || 50)));
-    const rows = await queryRows(f, (page - 1) * requested, requested + 1);
+    const rows = await queryRows(f, (page - 1) * requested, requested + 1, directory);
     return res.status(200).json({
       success: true, mode: f.mode, page, page_size: requested,
       has_more: rows.length > requested, rows: rows.slice(0, requested)
